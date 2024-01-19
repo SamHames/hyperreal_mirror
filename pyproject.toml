@@ -23,7 +23,7 @@ dependencies = [
   "networkx>=3.0.0",
   "lxml",
 ]
-dynamic = ["version"]
+version="0.5.0.post0"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "tox", "requests"]
@@ -38,10 +38,8 @@ hyperreal = "hyperreal.cli:cli"
 find = {}
 
 [build-system]
-requires = ["setuptools>=64.0", "setuptools-scm>=8.0"]
+requires = ["setuptools>=64.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 addopts = "--ignore=examples"
-
-[tool.setuptools_scm]
