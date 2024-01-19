@@ -12,9 +12,6 @@ on:
 jobs:
 
   build:
-    env:
-      # Used to skip tests that can't be run in CI
-      RUNNING_IN_CI: "1"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

@@ -32,8 +32,8 @@ use cases:
 All of hyperreal's functionality is available from the Python library, but you
 will need to write Python code to use it directly. The command line interface
 allows for quick and repeatable experimentation and automation for standard
-data types - for example if you often work with Twitter data the command line
-will allow you to rapidly work with many different Twitter data collections.
+data types - for example if you often work with StackExchange data the command line
+will allow you to rapidly work with many different StackExchange data collections.
 The web application is currently focused solely on creating and interactive
 editing of models.
 

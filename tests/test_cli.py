@@ -124,43 +124,6 @@ def test_plaintext_corpus(tmp_path):
     assert result.exit_code == 0
 
 
-@pytest.mark.skip("Not actively supported any more.")
-def test_twittersphere_corpus(tmp_path):
-    target_corpora_db = corpora_path / "twitter.db"
-    target_index_db = tmp_path / "twitter_index.db"
-
-    runner = CliRunner()
-
-    # Index
-    result = runner.invoke(
-        cli.twittersphere_corpus,
-        [
-            "index",
-            str(target_corpora_db),
-            str(target_index_db),
-        ],
-    )
-
-    if result.exit_code != 0:
-        print(result.output)
-
-    assert result.exit_code == 0
-
-    # Model
-    result = runner.invoke(
-        cli.model,
-        [
-            "--iterations",
-            "10",
-            "--clusters",
-            "10",
-            "--min-docs",
-            "10",
-            str(target_index_db),
-        ],
-    )
-
-
 def test_sx_corpus(tmp_path):
     target_corpora_db = tmp_path / "sx_corpus.db"
     target_index_db = tmp_path / "sx_corpus_index.db"
