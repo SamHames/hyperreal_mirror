@@ -239,42 +239,6 @@ stackexchange_corpus.command(name="index")(
 )
 
 
-@cli.group()
-def twittersphere_corpus():
-    pass
-
-
-twittersphere_corpus.command(name="index")(
-    make_two_file_indexer(hyperreal.corpus.TwittersphereCorpus)
-)
-
-
-@twittersphere_corpus.command(name="serve")
-@click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
-@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-def twittersphere_corpus_serve(corpus_db, index_db):
-    """
-    Serve the given StackExchange corpus and index via the webserver.
-
-    """
-
-    if not hyperreal.index.Index.is_index_db(index_db):
-        raise ValueError(f"{index_db} is not a valid index file.")
-
-    click.echo(f"Serving corpus '{corpus_db}'/ index '{index_db}'.")
-
-    mp_context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
-        index_server = hyperreal.server.SingleIndexServer(
-            index_db,
-            corpus_class=hyperreal.corpus.TwittersphereCorpus,
-            corpus_args=[corpus_db],
-            pool=pool,
-        )
-        engine = hyperreal.server.launch_web_server(index_server)
-        engine.block()
-
-
 @cli.command()
 @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
 @click.option("--iterations", default=10, type=click.INT)
