@@ -60,20 +60,37 @@ def make_two_file_indexer(CorpusType):
         "--doc-batch-size",
         type=int,
         default=DEFAULT_DOC_BATCH_SIZE,
-        help="The size of individual batches of documents sent for indexing. "
-        "Larger sizes will require more ram, but might be more efficient for "
-        "large collections.",
+        help="""
+            The size of individual batches of documents sent for indexing.
+            Larger sizes will require more ram, but might be more efficient
+            for large collections. This setting interacts with workers: each
+            worker handles doc-batch-size documents, so more workers will
+            consume more memory.
+        """,
     )
     @click.option(
         "--index-positions",
-        default=True,
+        default=False,
         type=bool,
+        is_flag=True,
         help="""
         Turn on to enable indexing of positional information of features in
         sequence fields.
         """,
     )
-    def corpus_indexer(corpus_db, index_db, doc_batch_size, index_positions):
+    @click.option(
+        "--workers",
+        default=8,
+        type=int,
+        help="""
+            The number of background workers to use during indexing. Each
+            worker handles handles a batch of documents, so doubling workers
+            will consume double the memory. You shouldn't use more workers
+            than you have CPU cores available and there will be diminishing
+            returns for more workers.
+        """,
+    )
+    def corpus_indexer(corpus_db, index_db, doc_batch_size, index_positions, workers):
         """
         Creates the index database representing the given corpus.
 
@@ -85,7 +102,7 @@ def make_two_file_indexer(CorpusType):
         doc_corpus = CorpusType(corpus_db)
 
         mp_context = mp.get_context("spawn")
-        with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
+        with cf.ProcessPoolExecutor(workers, mp_context=mp_context) as pool:
             doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus, pool=pool)
 
             doc_index.index(
