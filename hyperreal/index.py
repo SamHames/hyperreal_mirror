@@ -456,13 +456,15 @@ class Index:
                             select feature_id
                             from inverted_index ii
                             where (ii.field, ii.value) = (iis.field, iis.value)
-                        ),
+                        ) as feature_id,
                         field,
                         value,
                         sum(docs_count) as docs_count,
                         roaring_union(doc_ids) as doc_ids
                     from inverted_index_segment iis
                     group by field, value
+                    -- Order is an insert optimisation and not strictly necessary
+                    order by feature_id, field, value
                 """
             )
 
@@ -475,12 +477,14 @@ class Index:
                             select feature_id
                             from inverted_index ii
                             where (ii.field, ii.value) = (iis.field, iis.value)
-                        ),
+                        ) as feature_id,
                         first_doc_id,
                         position_count,
                         positions
                     from inverted_index_segment iis
                     where position_count > 0
+                    -- Order is an insert optimisation and not strictly necessary
+                    order by feature_id, first_doc_id
                 """
             )
 
