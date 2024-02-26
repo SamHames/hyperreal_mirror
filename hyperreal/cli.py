@@ -3,8 +3,8 @@ This module provides all of the CLI functionality for hyperreal.
 
 """
 
-import csv
 import concurrent.futures as cf
+import csv
 import json
 import logging
 import multiprocessing as mp
@@ -16,7 +16,6 @@ import networkx as nx
 import hyperreal.corpus
 import hyperreal.index
 import hyperreal.server
-
 
 logging.basicConfig(level=logging.INFO)
 

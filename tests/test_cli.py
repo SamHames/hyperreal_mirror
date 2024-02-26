@@ -10,8 +10,8 @@ import os
 import pathlib
 import sqlite3
 
-from click.testing import CliRunner
 import pytest
+from click.testing import CliRunner
 
 from hyperreal import cli
 

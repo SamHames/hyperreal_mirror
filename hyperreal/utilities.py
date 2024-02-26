@@ -1,13 +1,12 @@
 import heapq
-from html.parser import HTMLParser
-from io import StringIO
 import itertools
 import math
 import operator
+from html.parser import HTMLParser
+from io import StringIO
 
-from pyroaring import BitMap
 import regex
-
+from pyroaring import BitMap
 
 # Used to transform left/right sided curly quotes into their straight quote
 # equivalents. This is particularly important on social media as the IOS

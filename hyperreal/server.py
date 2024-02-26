@@ -9,10 +9,9 @@ import os
 from urllib.parse import parse_qsl
 
 import cherrypy
-from jinja2 import PackageLoader, Environment, select_autoescape
+from jinja2 import Environment, PackageLoader, select_autoescape
 
 import hyperreal.index
-
 
 templates = Environment(
     loader=PackageLoader("hyperreal"), autoescape=select_autoescape()

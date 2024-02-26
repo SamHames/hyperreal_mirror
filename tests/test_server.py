@@ -5,19 +5,18 @@ real server spawned in a subprocess.
 """
 
 import concurrent.futures as cf
-import cherrypy
 import multiprocessing as mp
 import pathlib
 import shutil
 import subprocess
 import uuid
 
-from lxml import html
+import cherrypy
 import pytest
 import requests
+from lxml import html
 
 import hyperreal
-
 
 servers = [
     # Index server with no associated corpus.

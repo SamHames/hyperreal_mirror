@@ -7,10 +7,8 @@ to document keys.
 import array
 import atexit
 import collections
-from collections.abc import Sequence, Iterable
 import concurrent.futures as cf
 import csv
-from functools import wraps
 import heapq
 import itertools
 import logging
@@ -20,13 +18,14 @@ import os
 import random
 import sqlite3
 import tempfile
-from typing import Any, Union, Hashable, Optional
+from collections.abc import Iterable, Sequence
+from functools import wraps
+from typing import Any, Hashable, Optional, Union
 
 import networkx as nx
-from pyroaring import BitMap, FrozenBitMap, AbstractBitMap
+from pyroaring import AbstractBitMap, BitMap, FrozenBitMap
 
-from hyperreal import db_utilities, corpus, _index_schema, utilities
-
+from hyperreal import _index_schema, corpus, db_utilities, utilities
 
 logger = logging.getLogger(__name__)
 

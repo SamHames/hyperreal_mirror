@@ -10,20 +10,20 @@ shows concrete implementation examples.
 """
 
 import abc
-from collections import defaultdict
 import datetime as dt
 import gzip
 import html
-from html.parser import HTMLParser
 import json
 import re
-from typing import Protocol, Sequence, runtime_checkable, Any
+from collections import defaultdict
+from html.parser import HTMLParser
+from typing import Any, Protocol, Sequence, runtime_checkable
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 
-from lxml.html import fragment_fromstring
 from dateutil.parser import isoparse
 from jinja2 import Template
+from lxml.html import fragment_fromstring
 from markupsafe import Markup
 
 from hyperreal import utilities

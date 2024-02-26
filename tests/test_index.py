@@ -14,8 +14,8 @@ import random
 import shutil
 import uuid
 
-from pyroaring import BitMap
 import pytest
+from pyroaring import BitMap
 
 import hyperreal
 
