@@ -43,3 +43,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 addopts = "--ignore=examples"
+
+[tool.isort]
+profile = "black"
