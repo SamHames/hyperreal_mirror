@@ -4,14 +4,24 @@ Cherrypy based webserver for serving an index (or in future) a set of indexes.
 """
 import csv
 import io
-import math
-import os
-from urllib.parse import parse_qsl
 
 import cherrypy
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 import hyperreal.index
+
+# Cherrypy uses raise HTTPRedirect often, so this lint is just noise.
+# pylint: disable=raise-missing-from
+
+# Cherrypy tools are dynamically generated, so there's a lot of noise from here.
+# pylint: disable=no-member
+
+# The cherrypy ensure_list tool caused unused argument confusion, as the argument
+# needs to be present in the url for the method to process it.
+# pylint: disable=unused-argument
+
+# Some of the classes are small but necessary stubs for future expansion.
+# pylint: disable=too-few-public-methods
 
 templates = Environment(
     loader=PackageLoader("hyperreal"), autoescape=select_autoescape()
@@ -48,6 +58,8 @@ def ensure_list(**kwargs):
 
 
 class Cluster:
+    """Endpoints for handling functionality related to a specific cluster of features."""
+
     @cherrypy.expose
     def index(
         self,
@@ -59,10 +71,10 @@ class Cluster:
         scoring="jaccard",
         result_type=None,
     ):
-        result_type = (
-            result_type or cherrypy.request.index.settings["display_query_results"]
-        )
+        """
+        Render a view of a cluster as a set of ranked features and matching results.
 
+        """
         template = templates.get_template("cluster.html")
 
         cluster_id = int(cluster_id)
@@ -85,7 +97,6 @@ class Cluster:
         n_features = len(features)
         search_results = []
         query = cherrypy.request.index.cluster_docs(cluster_id)
-        concordances = False
 
         # Default concordance features is everything in the cluster, unless other things
         # are set?
@@ -185,14 +196,13 @@ class Cluster:
 
 @cherrypy.popargs("cluster_id", handler=Cluster())
 class ClusterOverview:
-    @cherrypy.expose
-    def index(self, index_id, cluster_id=None, feature_id=None):
-        pass
+    """Endpoints for manipulating clusters, including all or multiple selected clusters."""
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(cluster_id=int)
     def delete(self, index_id, cluster_id=None, return_cluster_id=None, **params):
+        """Delete the specified clusters, if they exist."""
         cherrypy.request.index.delete_clusters(cherrypy.request.params["cluster_id"])
 
         if return_cluster_id:
@@ -205,6 +215,7 @@ class ClusterOverview:
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(feature_id=int)
     def create(self, index_id, feature_id=None, **params):
+        """Create a cluster from the listed features."""
         new_cluster_id = cherrypy.request.index.create_cluster_from_features(
             cherrypy.request.params["feature_id"]
         )
@@ -214,6 +225,12 @@ class ClusterOverview:
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(cluster_id=int)
     def merge(self, index_id, cluster_id=None, **params):
+        """
+        Merge the specified clusters into one.
+
+        The first cluster_id provided is the merged cluster.
+
+        """
         merge_cluster_id = cherrypy.request.index.merge_clusters(
             cherrypy.request.params["cluster_id"]
         )
@@ -231,6 +248,13 @@ class ClusterOverview:
         return_to="cluster",
         minimum_cluster_features="1",
     ):
+        """
+        Refine the clustering on this index.
+
+        Optionally provide a list of specific clusters, a number of target clusters
+        to expand/contract to, and a minimum number of features in each cluster.
+
+        """
         if target_clusters:
             target_clusters = int(target_clusters)
         else:
@@ -244,10 +268,8 @@ class ClusterOverview:
         )
         if return_to == "cluster":
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id[0]}")
-        else:
-            raise cherrypy.HTTPRedirect(
-                f"/index/{index_id}/?cluster_id={cluster_id[0]}"
-            )
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id[0]}")
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
@@ -264,26 +286,23 @@ class ClusterOverview:
         )
         if return_to == "cluster":
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id[0]}")
-        else:
-            raise cherrypy.HTTPRedirect(
-                f"/index/{index_id}/?cluster_id={cluster_id[0]}"
-            )
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id[0]}")
 
 
 class FeatureOverview:
-    @cherrypy.expose
-    def index(self, index_id, feature_id=None):
-        return "feature"
+    """Endpoints for specific feature related functionality."""
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(feature_id=int)
     def remove_from_model(self, index_id, feature_id=None, cluster_id=None):
+        """Removed the specified features from the model."""
         cherrypy.request.index.delete_features(cherrypy.request.params["feature_id"])
         if cluster_id is not None:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id}")
-        else:
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
@@ -301,14 +320,22 @@ class FeatureOverview:
         )
         if cluster_id is not None:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id}")
-        else:
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
 
 
 @cherrypy.popargs("index_id")
 @cherrypy.tools.cleanup_index()
 @cherrypy.tools.lookup_index()
 class Index:
+    """
+    Endpoints for functionality across an entire index.
+
+    This includes index summary details, viewing of clustering results and
+    searching.
+
+    """
+
     cluster = ClusterOverview()
     feature = FeatureOverview()
 
@@ -324,6 +351,7 @@ class Index:
         scoring="jaccard",
         result_type=None,
     ):
+        """Display an entire feature clustering defined on an index."""
         template = templates.get_template("index.html")
 
         search_results = []
@@ -332,13 +360,6 @@ class Index:
         highlight_cluster_id = None
         highlight_feature_id = None
         concordances = False
-
-        # Get the default result type from the index.
-        # TODO: this should come from the corpus as a suggestion?
-        # Or otherwise sniff the supported types to work it out?
-        result_type = (
-            result_type or cherrypy.request.index.settings["display_query_results"]
-        )
 
         # Redirect to the index overview page to create a new model if no
         # index has been created.
@@ -440,8 +461,8 @@ class Index:
             raise cherrypy.HTTPRedirect(
                 f"/index/{index_id}/cluster/{cluster_id}?feature_id={feature_id}"
             )
-        else:
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/?feature_id={feature_id}")
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/?feature_id={feature_id}")
 
     @cherrypy.expose
     def details(self, index_id):
@@ -544,8 +565,16 @@ class Index:
 
 @cherrypy.popargs("index_id", handler=Index())
 class IndexOverview:
+    """
+    Endpoints for functionality relating to all indexes managed by a server.
+
+    Currently this does not do much except link to the single served index.
+
+    """
+
     @cherrypy.expose
     def index(self):
+        "List all indexes known to this server"
         template = templates.get_template("index_listing.html")
         indices = cherrypy.request.config["index_server"].list_indices()
         return template.render(indices=indices)
@@ -561,10 +590,18 @@ class Root:
 
     @cherrypy.expose
     def index(self):
+        "Stub for future expansion."
         raise cherrypy.HTTPRedirect("/index/")
 
 
 class SingleIndexServer:
+    """
+    An adapter for serving a single specified index and corpus through the web interface.
+
+    The chosen index always has an index_id of 0.
+
+    """
+
     def __init__(
         self,
         index_path,
@@ -590,6 +627,7 @@ class SingleIndexServer:
         self.pool = pool
 
     def index(self, index_id):
+        """Return the hosted index at index_id=0, otherwise raise 404"""
         if index_id != 0:
             raise cherrypy.HTTPError(404)
 
@@ -603,6 +641,7 @@ class SingleIndexServer:
         return hyperreal.index.Index(self.index_path, corpus=corpus, pool=self.pool)
 
     def list_indices(self):
+        """List the only index defined on this server."""
         return {
             0: (
                 self.index_path,

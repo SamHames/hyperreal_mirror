@@ -28,8 +28,8 @@ servers = [
 ]
 
 
-@pytest.fixture(params=servers)
-def server(tmp_path, request):
+@pytest.fixture(params=servers, name="server_url")
+def fixture_server(tmp_path, request):
     """Server fixture that handles single file corpora."""
     source_corpus_path, source_corpus_class, source_index = request.param
 

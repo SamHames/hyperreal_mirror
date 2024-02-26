@@ -5,10 +5,8 @@ This module provides all of the CLI functionality for hyperreal.
 
 import concurrent.futures as cf
 import csv
-import json
 import logging
 import multiprocessing as mp
-import os
 
 import click
 import networkx as nx
@@ -20,9 +18,18 @@ import hyperreal.server
 logging.basicConfig(level=logging.INFO)
 
 
-# Utility for making exporters that take three arguments, just with a
-# different corpus type.
-def make_csv_exporter(CorpusType):
+def make_csv_exporter(corpus_type):
+    """
+    Return a click annotated function for an exporter that takes three arguments.
+
+    The expected arguments are (in order):
+
+    1. The path to the file representing the corpus.
+    2. The path to the index database.
+    3. The path to the output file of the CSV export.
+
+    """
+
     @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
     @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
     @click.argument("output_file", type=click.Path(dir_okay=False))
@@ -33,7 +40,7 @@ def make_csv_exporter(CorpusType):
         help="The maximum number of documents to sample from each cluster. "
         "If set to 0, all documents in clusters will be returned.",
     )
-    def export_graph(corpus_db, index_db, output_file, docs_per_cluster):
+    def export_csv(corpus_db, index_db, output_file, docs_per_cluster):
         """
         Export a sample of documents from each cluster in the model.
 
@@ -41,7 +48,7 @@ def make_csv_exporter(CorpusType):
         if not hyperreal.index.Index.is_index_db(index_db):
             raise ValueError(f"{index_db} is not a valid index file.")
 
-        corpus = CorpusType(corpus_db)
+        corpus = corpus_type(corpus_db)
         idx = hyperreal.index.Index(index_db, corpus=corpus)
 
         cluster_samples, sample_clusters = idx.structured_doc_sample(
@@ -49,10 +56,20 @@ def make_csv_exporter(CorpusType):
         )
         idx.export_document_sample(cluster_samples, sample_clusters, output_file)
 
-    return export_graph
+    return export_csv
 
 
-def make_two_file_indexer(CorpusType):
+def make_two_file_indexer(corpus_type):
+    """
+    Return a click annotated function for an indexer that takes two arguments.
+
+    The expected arguments are (in order):
+
+    1. The path to the file representing the corpus.
+    2. The path to the index database.
+
+    """
+
     @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
     @click.argument("index_db", type=click.Path(dir_okay=False))
     @click.option(
@@ -98,7 +115,7 @@ def make_two_file_indexer(CorpusType):
         """
         click.echo(f"Indexing {corpus_db} into {index_db}.")
 
-        doc_corpus = CorpusType(corpus_db)
+        doc_corpus = corpus_type(corpus_db)
 
         mp_context = mp.get_context("spawn")
         with cf.ProcessPoolExecutor(workers, mp_context=mp_context) as pool:
@@ -111,15 +128,14 @@ def make_two_file_indexer(CorpusType):
     return corpus_indexer
 
 
-# The main entry command is always hyperreal
 @click.group(name="hyperreal")
 def cli():
-    pass
+    """The main entry command for the whole CLI."""
 
 
 @cli.group()
 def plaintext_corpus():
-    pass
+    """Entry command for all functionality related to a plaintext corpus."""
 
 
 DEFAULT_DOC_BATCH_SIZE = 5000
@@ -188,7 +204,7 @@ plaintext_corpus.command(name="sample")(
 
 @cli.group()
 def stackexchange_corpus():
-    pass
+    """Entrypoint for all StackExchange related functionality."""
 
 
 @stackexchange_corpus.command(name="add-site")
@@ -270,9 +286,10 @@ stackexchange_corpus.command(name="index")(
 @click.option(
     "--include-field",
     default=[],
-    help="A field to include in the model initialisation. "
-    "Multiple fields can be specified - if no fields are provided all available fields will be included."
-    "Ignored unless this is the first run, or --restart is passed.",
+    help="""A field to include in the model initialisation. Multiple fields
+    can be specified - if no fields are provided all available fields will be
+    included. Ignored unless this is the first run, or --restart is
+    passed.""",
     multiple=True,
 )
 @click.option(
@@ -390,7 +407,7 @@ def model(
 
 @cli.group()
 def export():
-    pass
+    """Entry point for export functionality relating to an index."""
 
 
 @export.command(name="graph")

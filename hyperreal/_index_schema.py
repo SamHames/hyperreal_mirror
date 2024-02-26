@@ -11,6 +11,10 @@ database, associated with CURRENT_SCHEMA_VERSION.
 
 """
 
+# Some parts of this need to be rerun during normal indexing, so no
+# point checking for duplication.
+# pylint: disable=duplicate-code
+
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
@@ -221,11 +225,7 @@ migrations = {
 
 
 class MigrationError(ValueError):
-    pass
-
-
-class IndexVersionMismatch(ValueError):
-    pass
+    """Raised when a migration step fails."""
 
 
 def migrate(db):
@@ -238,6 +238,7 @@ def migrate(db):
 
     db_version = list(db.execute("pragma user_version"))[0][0]
 
+    # Special case: initialisation of an empty database.
     if db_version == 0:
         # Check that this is a database with no tables, and error if not - don't
         # want to create these tables on top of an unrelated database.
@@ -245,47 +246,47 @@ def migrate(db):
 
         if table_count > 0:
             raise MigrationError(
-                f"Database at '{db_path}' is not empty, and cannot be used as an index."
+                "Database is not empty, and cannot be used as an index."
             )
-        else:
-            db.execute("begin")
 
-            for statement in CURRENT_SCHEMA.split("--------"):
-                db.execute(statement)
+        db.execute("begin")
 
-            db.execute("commit")
+        for statement in CURRENT_SCHEMA.split("--------"):
+            db.execute(statement)
+
+        db.execute("commit")
 
         # Note that an initialisation is treated as if the index already existed
         # as in this case there won't be any further action to take.
         return False
 
-    elif db_version == CURRENT_SCHEMA_VERSION:
+    if db_version == CURRENT_SCHEMA_VERSION:
         return False
 
-    elif db_version in migrations:
-        db.execute("begin")
-
-        m = sorted(migrations.items())
-
-        # Run premigration steps
-        for version, migration in m:
-            if version >= db_version:
-                for statement in migration[0]:
-                    db.execute(statement)
-
-        # Run the schema script
-        for statement in CURRENT_SCHEMA.split("--------"):
-            db.execute(statement)
-
-        # Run postmigration steps
-        for version, migration in m:
-            if version >= db_version:
-                for statement in migration[1]:
-                    db.execute(statement)
-
-        db.execute("commit")
-
-        return True
-
-    else:
+    if db_version not in migrations:
         raise MigrationError(f"Unknown database schema version '{db_version}'")
+
+    # Actual migration case.
+    db.execute("begin")
+
+    m = sorted(migrations.items())
+
+    # Run premigration steps
+    for version, migration in m:
+        if version >= db_version:
+            for statement in migration[0]:
+                db.execute(statement)
+
+    # Run the schema script
+    for statement in CURRENT_SCHEMA.split("--------"):
+        db.execute(statement)
+
+    # Run postmigration steps
+    for version, migration in m:
+        if version >= db_version:
+            for statement in migration[1]:
+                db.execute(statement)
+
+    db.execute("commit")
+
+    return True

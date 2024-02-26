@@ -10,15 +10,10 @@ shows concrete implementation examples.
 """
 
 import abc
-import datetime as dt
-import gzip
-import html
 import json
 import re
 from collections import defaultdict
-from html.parser import HTMLParser
 from typing import Any, Protocol, Sequence, runtime_checkable
-from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 from dateutil.parser import isoparse
@@ -51,12 +46,10 @@ class BaseCorpus(Protocol):
         If doc_keys is None, all documents will be iterated over.
 
         """
-        pass
 
     @abc.abstractmethod
     def keys(self):
         """An iterator of all document keys present."""
-        pass
 
     @abc.abstractmethod
     def index(self, doc):
@@ -74,10 +67,9 @@ class BaseCorpus(Protocol):
         things like Bag of Feature counts.
 
         """
-        pass
 
     def close(self):
-        pass
+        """Close any open resources associated with this corpus."""
 
     def __getitem__(self, doc_key):
         return self.docs([doc_key])
@@ -88,17 +80,20 @@ class BaseCorpus(Protocol):
 
 @runtime_checkable
 class WebRenderableCorpus(BaseCorpus, Protocol):
+    """A corpus that supports rendering of documents through the server interface."""
+
     @abc.abstractmethod
     def render_docs_html(self, doc_keys):
         """Render documents into a list of HTML strings."""
-        pass
 
 
 @runtime_checkable
 class TableRenderableCorpus(BaseCorpus, Protocol):
+    """A corpus that supports rendering of documents in tabular contexts."""
+
     @property
     def table_fields(self) -> Sequence[str]:
-        pass
+        """The sequence of field names to be rendered in the tabular context."""
 
     @abc.abstractmethod
     def render_docs_table(self, doc_keys) -> Sequence[tuple[Any, dict[str, Any]]]:
@@ -108,13 +103,21 @@ class TableRenderableCorpus(BaseCorpus, Protocol):
         This enables spreadsheet export and sampling of documents.
 
         """
-        pass
 
 
 class SqliteBackedCorpus(BaseCorpus):
+    """A helper class for creating corpuses backed by SQLite databases."""
+
+    # pylint: disable=abstract-method
+
     def __init__(self, db_path):
         """
-        A helper class for creating corpuses backed by SQLite databases.
+        At a minimum you will need to pass in a path to a database.
+
+        If you are implementing something based on this, you will need to
+        either ensure that the db_path attribute is set in your `__init__`,
+        or you can call `super().__init__(db_path)` inside your custom class
+        definition.
 
         This handles some basic things like saving the database path and ensuring
         that the corpus object is picklable for multiprocessing.
@@ -131,6 +134,12 @@ class SqliteBackedCorpus(BaseCorpus):
 
     @property
     def db(self):
+        """
+        The connection to the SQLite database.
+
+        This is initialised the first time it is needed.
+        """
+
         if self._db is None:
             self._db = connect_sqlite(self.db_path, row_factory=dict_factory)
 
@@ -148,6 +157,13 @@ class SqliteBackedCorpus(BaseCorpus):
 
 
 class PlainTextSqliteCorpus(SqliteBackedCorpus):
+    """
+    A corpus for handling lines in a plaintext file as individual documents.
+
+    This corpus identifies lines in the file according the processing order.
+
+    """
+
     CORPUS_TYPE = "PlainTextSqliteCorpus"
     table_fields = ["text"]
 
@@ -185,6 +201,7 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
         except Exception:
             self.db.execute("rollback to add_texts")
+            raise
 
         finally:
             self.db.execute("release add_texts")
@@ -232,7 +249,71 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         ]
 
 
+STACKEXCHANGE_HTML = """
+<details>
+    <summary>
+        <em>{{ base_fields["QuestionTitle"] | e }}</em> - 
+        {{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}
+    </summary>
+    
+    <p>
+        <small>
+            <a href="{{ base_fields["LiveLink"] }}">Live Link</a>
+            Copyright {{ base_fields["ContentLicense"]}} by
+            {% if base_fields["OwnerUserId"] %}
+            <a href="{{ '{}/users/{}'.format(base_fields["site_url"], base_fields["OwnerUserId"]) }}">
+                {{ base_fields["DisplayName"] }}
+            </a>
+            {% else %}
+            <Deleted User>
+            {% endif %}
+        </small>
+    </p>
+
+    {{ base_fields["Body"] }}
+
+    <details>
+        <summary>Tags:</summary>
+        <ul>
+            {% for tag in tags %}
+            <li>{{ tag }}
+            {% endfor %}
+        </ul>
+    </details>
+
+    <details>
+        <summary>Comments:</summary>
+        <ul>
+            {% for comment in user_comments %}
+                <li>{{ comment["Text"] | e}}
+                    <small>
+                        Copyright {{ comment["ContentLicense"]}} by
+                        {% if comment["UserId"] %}
+                        <a href="{{ '{}/users/{}'.format(comment["site_url"], comment["UserId"]) }}">
+                            {{ comment["DisplayName"] }}
+                        </a>
+                        {% else %}
+                        <Deleted User>
+                        {% endif %}
+                    </small>
+                </li>
+            {% endfor %}
+        </ul>
+    </details>
+</details>
+"""
+
+
 class StackExchangeCorpus(SqliteBackedCorpus):
+    """
+    A corpus for data dumped from StackExchange.
+
+    All data from Stackexchange sites is available in a standard format at:
+
+    https://archive.org/download/stackexchange/
+
+    """
+
     CORPUS_TYPE = "StackExchangeCorpus"
     table_fields = [
         "site_url",
@@ -357,7 +438,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             tree = ElementTree.iterparse(posts_file, events=("end",))
             post_types = {"1": "Question", "2": "Answer"}
 
-            for event, elem in tree:
+            for _, elem in tree:
                 # We only consider questions and answers - SX uses other post types
                 # to describe wiki's, tags, moderator nominations and more.
                 if elem.attrib.get("PostTypeId") not in ("1", "2"):
@@ -407,7 +488,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
             tree = ElementTree.iterparse(comments_file, events=("end",))
 
-            for event, elem in tree:
+            for _, elem in tree:
                 doc = defaultdict(lambda: None)
                 doc.update(elem.attrib)
                 doc["site_id"] = site_id
@@ -431,7 +512,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
             tree = ElementTree.iterparse(users_file, events=("end",))
 
-            for event, elem in tree:
+            for _, elem in tree:
                 doc = defaultdict(lambda: None)
                 doc.update(elem.attrib)
                 doc["site_id"] = site_id
@@ -461,7 +542,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
             self.db.execute("commit")
 
-        except Exception as e:
+        except Exception:
             self.db.execute("rollback")
             raise
 
@@ -545,58 +626,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
-    TEMPLATE = Template(
-        """
-        <details>
-            <summary><em>{{ base_fields["QuestionTitle"] | e }}</em> - {{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}</summary>
-            
-            <p>
-                <small>
-                    <a href="{{ base_fields["LiveLink"] }}">Live Link</a>
-                    Copyright {{ base_fields["ContentLicense"]}} by
-                    {% if base_fields["OwnerUserId"] %}
-                    <a href="{{ '{}/users/{}'.format(base_fields["site_url"], base_fields["OwnerUserId"]) }}">
-                        {{ base_fields["DisplayName"] }}
-                    </a>
-                    {% else %}
-                    <Deleted User>
-                    {% endif %}
-                </small>
-            </p>
-
-            {{ base_fields["Body"] }}
-
-            <details>
-                <summary>Tags:</summary>
-                <ul>
-                    {% for tag in tags %}
-                    <li>{{ tag }}
-                    {% endfor %}
-                </ul>
-            </details>
-
-            <details>
-                <summary>Comments:</summary>
-                <ul>
-                    {% for comment in user_comments %}
-                        <li>{{ comment["Text"] | e}}
-                            <small>
-                                Copyright {{ comment["ContentLicense"]}} by
-                                {% if comment["UserId"] %}
-                                <a href="{{ '{}/users/{}'.format(comment["site_url"], comment["UserId"]) }}">
-                                    {{ comment["DisplayName"] }}
-                                </a>
-                                {% else %}
-                                <Deleted User>
-                                {% endif %}
-                            </small>
-                        </li>
-                    {% endfor %}
-                </ul>
-            </details>
-        </details>
-        """
-    )
+    TEMPLATE = Template(STACKEXCHANGE_HTML)
 
     def _get_rendered_doc_fields(self, key):
         base_fields = list(
@@ -757,10 +787,10 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
         created_at = isoparse(doc["CreationDate"])
         rounded_times = utilities.round_datetime(created_at)
-        for granularity, dt in rounded_times.items():
+        for granularity, timestamp in rounded_times.items():
             # Don't bother indexing at minute/hour granularity - just day/month/year
             if granularity in ("minute", "hour"):
                 continue
-            indexed[f"created_{granularity}"] = set([dt.isoformat()])
+            indexed[f"created_{granularity}"] = set([timestamp.isoformat()])
 
         return indexed

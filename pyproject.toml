@@ -48,11 +48,14 @@ addopts = "--ignore=examples"
 profile = "black"
 
 [tool.pylint.MAIN]
-extension-pkg-allow-list = "pyroaring"
+extension-pkg-allow-list = [
+  "pyroaring",
+]
 
 [tool.pylint.'MESSAGES CONTROL']
 disable = [
   "too-many-arguments",
   "too-many-locals",
   "protected-access",
+  "too-many-instance-attributes",
 ]

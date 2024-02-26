@@ -4,6 +4,8 @@ to document keys.
 
 """
 
+# pylint: disable=too-many-lines
+
 import array
 import atexit
 import collections
@@ -23,32 +25,38 @@ from functools import wraps
 from typing import Any, Hashable, Optional, Union
 
 import networkx as nx
-from pyroaring import AbstractBitMap, BitMap, FrozenBitMap
+from pyroaring import AbstractBitMap, BitMap
 
-from hyperreal import _index_schema, corpus, db_utilities, utilities
+from hyperreal import _index_schema, db_utilities, utilities
+from hyperreal.corpus import BaseCorpus, TableRenderableCorpus, WebRenderableCorpus
 
 logger = logging.getLogger(__name__)
 
 
 class CorpusMissingError(AttributeError):
-    pass
+    """
+    Raised when using functions that assume a corpus, but no corpus is present.
+
+    """
 
 
 class UnsupportedCorpusOperation(AttributeError):
-    pass
+    """
+    Raised when the corpus provided does not support this function.
+    """
 
 
 class IndexingError(AttributeError):
-    pass
+    "Raised for specific problems during indexing."
 
 
-FeatureKey = tuple[str, Any]
+FeatureKey = tuple[str, Hashable]
 FeatureKeyOrId = Union[FeatureKey, int]
-FeatureIdAndKey = tuple[int, str, Any]
+FeatureIdAndKey = tuple[int, str, Hashable]
 BitSlice = list[BitMap]
 
 
-def requires_corpus(RequiredCorpus):
+def requires_corpus(required_corpus):
     """
     Mark method as requiring specific corpus functionality.
 
@@ -64,7 +72,7 @@ def requires_corpus(RequiredCorpus):
                     "A Corpus must be provided to the index for this functionality."
                 )
 
-            if not isinstance(self.corpus, RequiredCorpus):
+            if not isinstance(self.corpus, required_corpus):
                 raise UnsupportedCorpusOperation(
                     "The required functionality is not available on this corpus."
                 )
@@ -119,7 +127,7 @@ def atomic(writes=False):
                 # We've decremented to the final transaction level and are about
                 # to commit.
                 if self._transaction_level == 0 and self._changed:
-                    self.logger.info(f"Changes detected - updating clusters.")
+                    self.logger.info("Changes detected - updating clusters.")
                     # Note that this will check for changed queries, and will
                     # therefore be a noop if there aren't any.
                     self._update_changed_clusters()
@@ -133,6 +141,13 @@ def atomic(writes=False):
 
 
 class Index:
+    """
+    An index represents access to a collection of documents defined by a corpus.
+
+    """
+
+    # pylint: disable=too-many-public-methods
+
     def __init__(self, db_path, corpus=None, pool=None, random_seed=None):
         """
         The corpus object is optional - if not provided certain operations such
@@ -155,6 +170,8 @@ class Index:
         self.db = db_utilities.connect_sqlite(self.db_path)
         self.random = random.Random(random_seed)
 
+        # _created_pool indicates that we need to cleanup the pool.
+        self._created_pool = False
         self._pool = pool
 
         for statement in """
@@ -174,13 +191,6 @@ class Index:
             self.db.execute("commit")
 
         self.corpus = corpus
-
-        self.settings = {
-            row[0]: row[1] for row in self.db.execute("select key, value from settings")
-        }
-
-        # TODO: reach into the corpus for this instead.
-        self.settings["display_query_results"] = "document"
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -204,12 +214,14 @@ class Index:
         """
         if self._pool is None:
             self._pool = cf.ProcessPoolExecutor(mp_context=mp.get_context("spawn"))
+            self._created_pool = True
 
-            def shutdown_pool(pool):
+            def shutdown_pool(idx):
                 "Create an exit handler to ensure that the pool is cleaned up on exit."
-                pool.shutdown(wait=False, cancel_futures=True)
+                if idx._pool is not None:
+                    idx._pool.shutdown(wait=False, cancel_futures=True)
 
-            atexit.register(shutdown_pool, self._pool)
+            atexit.register(shutdown_pool, self)
 
         return self._pool
 
@@ -238,11 +250,31 @@ class Index:
         self.__init__(args[0], corpus=args[1])
 
     def close(self):
+        """
+        Close the resources associated with this index.
+
+        This includes the database holding the index, the corpus if provided,
+        and the multiprocessing pool (if one was created rather than passed
+        in).
+
+        """
+        if self._created_pool:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
+
         self.db.close()
 
+        if self.corpus is not None:
+            self.corpus.close()
+
     @atomic()
-    def __getitem__(self, key: Union[FeatureKey, int, slice]) -> BitMap:
-        """key can either be a feature_id integer, a (field, value) tuple, or a slice of (field, value)'s indicating a range."""
+    def __getitem__(self, key: FeatureKeyOrId) -> BitMap:
+        """
+        Retrieve the set of documents matching a literal feature from the index.
+
+        A feature is represented as either a integer `feature_id` or a tuple
+        of `("field_name", value)`.
+        """
 
         if isinstance(key, int):
             try:
@@ -266,6 +298,11 @@ class Index:
             except IndexError:
                 return BitMap()
 
+        else:
+            raise ValueError(
+                "Must provide an integer feature_id or a ('field', value) pair."
+            )
+
     def lookup_feature(self, feature_id: int) -> tuple[str, Any]:
         """Lookup the (field, value) for this feature by feature_id."""
 
@@ -278,8 +315,8 @@ class Index:
 
         if results:
             return results[0]
-        else:
-            raise KeyError(f"Feature with id '{feature_id}' not found.")
+
+        raise KeyError(f"Feature with id '{feature_id}' not found.")
 
     def lookup_feature_id(self, key: tuple[str, Any]) -> int:
         """Lookup the (field, value) for this feature by feature_id."""
@@ -293,10 +330,10 @@ class Index:
 
         if results:
             return results[0][0]
-        else:
-            raise KeyError(f"Feature with key '{key}' not found.")
 
-    @requires_corpus(corpus.BaseCorpus)
+        raise KeyError(f"Feature with key '{key}' not found.")
+
+    @requires_corpus(BaseCorpus)
     def index(
         self,
         doc_batch_size=1000,
@@ -328,15 +365,17 @@ class Index:
 
         """
 
+        # pylint: disable=too-many-statements
+
         workers = workers or self.pool._max_workers
 
         try:
             self.db.execute("pragma foreign_keys=0")
             self.db.execute("begin")
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
             raise IndexingError(
                 "The `index` method can't be called in a nested transaction."
-            )
+            ) from exc
 
         try:
             manager = mp.Manager()
@@ -344,6 +383,7 @@ class Index:
 
             detach = False
 
+            # pylint: disable-next=consider-using-with
             tempdir = working_dir or tempfile.TemporaryDirectory()
             temp_index = os.path.join(tempdir.name, "temp_index.db")
 
@@ -599,8 +639,7 @@ class Index:
             [field, min_docs],
         )
 
-        for item in value_docs:
-            yield item
+        yield from value_docs
 
     @atomic()
     def intersect_queries_with_field(
@@ -631,14 +670,14 @@ class Index:
 
         return values, totals, intersections
 
-    @requires_corpus(corpus.BaseCorpus)
+    @requires_corpus(BaseCorpus)
     def docs(self, query):
         """Retrieve the documents matching the given query set."""
         keys = self.convert_query_to_keys(query)
         for key, doc in self.corpus.docs(doc_keys=sorted(keys)):
             yield keys[key], key, doc
 
-    @requires_corpus(corpus.BaseCorpus)
+    @requires_corpus(BaseCorpus)
     @atomic()
     def extract_matching_feature_windows(
         self, query, features, window_size, random_sample_size=None
@@ -674,7 +713,7 @@ class Index:
         for doc_id, doc_key, doc in self.docs(query):
             indexed = self.corpus.index(doc)
 
-            doc_cooccurrence = dict()
+            doc_cooccurrence = {}
 
             for field, to_match in field_features.items():
                 cooccurrence = collections.defaultdict(list)
@@ -689,7 +728,7 @@ class Index:
                             )
                 else:
                     for value in to_match & values:
-                        cooccurrence[value]
+                        cooccurrence[value] = []
 
                 doc_cooccurrence[field] = cooccurrence
 
@@ -710,9 +749,9 @@ class Index:
         ) in self.extract_matching_feature_windows(
             query, features, window_size, random_sample_size=random_sample_size
         ):
-            match_concordances = dict()
+            match_concordances = {}
             for field, match_windows in cooccurrence_windows.items():
-                field_matches = dict()
+                field_matches = {}
                 for match, windows in match_windows.items():
                     field_matches[match] = []
                     for window in windows:
@@ -743,10 +782,9 @@ class Index:
             )
             return sampled
 
-        else:
-            return bitmap.copy()
+        return bitmap.copy()
 
-    @requires_corpus(corpus.BaseCorpus)
+    @requires_corpus(BaseCorpus)
     @atomic()
     def render_passages_table(
         self,
@@ -773,7 +811,7 @@ class Index:
         # Break up the passages to distribute the work over the pool
         it = iter(scored_passages)
 
-        for i in range(0, len(scored_passages), batch_size):
+        for _ in range(0, len(scored_passages), batch_size):
             futures.add(
                 self.pool.submit(
                     _construct_passages,
@@ -788,10 +826,9 @@ class Index:
 
         for f in cf.as_completed(futures):
             constructed = f.result()
-            for passage in constructed:
-                yield passage
+            yield from constructed
 
-    @requires_corpus(corpus.WebRenderableCorpus)
+    @requires_corpus(WebRenderableCorpus)
     def render_docs_html(self, query, random_sample_size=None):
         """
         Return the rendered representation of the docs matching this query.
@@ -807,7 +844,7 @@ class Index:
             (doc_keys[doc[0]], *doc) for doc in self.corpus.render_docs_html(doc_keys)
         ]
 
-    @requires_corpus(corpus.TableRenderableCorpus)
+    @requires_corpus(TableRenderableCorpus)
     def render_docs_table(self, query, random_sample_size=None):
         """
         Return the rendered representation of the docs matching this query.
@@ -846,7 +883,7 @@ class Index:
         cluster_ids = set(cluster_ids or self.cluster_ids)
 
         already_sampled = BitMap()
-        cluster_samples = dict()
+        cluster_samples = {}
 
         # Per cluster samples
         for cluster_id, _, _ in cluster_order:
@@ -869,8 +906,8 @@ class Index:
         return cluster_samples, sample_clusters
 
     @atomic()
-    @requires_corpus(corpus.TableRenderableCorpus)
-    def export_document_sample(self, sample_docs, sample_clusters, output_path):
+    @requires_corpus(TableRenderableCorpus)
+    def export_document_sample(self, cluster_sample_docs, sample_clusters, output_path):
         """
         Export the given sample of documents to CSV.
 
@@ -899,7 +936,7 @@ class Index:
 
             writer.writeheader()
 
-            for cluster_id, sample_docs in sample_docs.items():
+            for cluster_id, sample_docs in cluster_sample_docs.items():
                 write_docs = self.corpus.render_docs_table(
                     self.convert_query_to_keys(sample_docs)
                 )
@@ -1102,6 +1139,7 @@ class Index:
 
     @property
     def cluster_ids(self):
+        """The ids of all defined feature-clusters."""
         return [
             r[0]
             for r in self.db.execute(
@@ -1111,6 +1149,7 @@ class Index:
 
     @property
     def pinned_cluster_ids(self):
+        """The ids of all clusters pinned to prevent further change."""
         return {
             r[0]
             for r in self.db.execute(
@@ -1218,7 +1257,7 @@ class Index:
         """
         cluster_features = list(
             self.db.execute(
-                f"""
+                """
                 select
                     feature_id,
                     field,
@@ -1369,7 +1408,8 @@ class Index:
         if group_test_batches and group_test_batches > len(cluster_ids) / 2:
             group_test_batches = None
             self.logger.info(
-                f"{group_test_batches=} is too high to be useful for {len(cluster_ids)=}, disabling."
+                f"{group_test_batches=} is too high to be useful for {len(cluster_ids)=}, "
+                "disabling."
             )
 
         # Group testing, generating randomised groupings of clusters to prune
@@ -1476,6 +1516,8 @@ class Index:
         candidates.
         """
 
+        # pylint: disable=too-many-branches,too-many-statements
+
         target_clusters = target_clusters or len(cluster_feature)
 
         # Handle cases where moves are not possible by returning immediately.
@@ -1484,7 +1526,7 @@ class Index:
         if n_clusters == 0:
             return cluster_feature, set()
         # Or if there is only one cluster, and target_clusters is the same
-        elif n_clusters == 1 == target_clusters:
+        if n_clusters == 1 == target_clusters:
             return cluster_feature, set()
 
         # Make sure to copy the input dict
@@ -1516,7 +1558,6 @@ class Index:
         }
 
         movable_feature_list = list(movable_features)
-        moved_features = len(movable_features)
 
         changed_clusters = set(cluster_feature)
 
@@ -1551,8 +1592,6 @@ class Index:
         dissolve_per_iteration = math.ceil(dissolve_clusters / max(1, iterations - 1))
         dissolve_cluster_ids = set()
 
-        prev_obj = 0
-
         for iteration in range(iterations):
             # Calculate possible moves given this clustering
             objectives, best_moves = self._find_best_moves(
@@ -1573,12 +1612,17 @@ class Index:
             if dissolve_clusters:
                 n_dissolve = min(dissolve_clusters, dissolve_per_iteration)
                 dissolve_clusters -= n_dissolve
-                dissolve_cluster_ids = set(
-                    sorted(
-                        cluster_feature.keys() - clusters_with_pinned_features,
-                        key=lambda x: objectives[x],
-                    )[:n_dissolve]
+
+                dissolve_cluster_order = sorted(
+                    (cluster_obj, cluster_id)
+                    for cluster_id, cluster_obj in cluster_feature.items()
+                    # Don't dissolve any cluster with a pinned feature
+                    if cluster_id not in clusters_with_pinned_features
                 )
+                dissolve_cluster_ids = set(
+                    cluster_id for _, cluster_id in dissolve_cluster_order[:n_dissolve]
+                )
+
                 self.logger.info(
                     f"Dissolving {len(dissolve_cluster_ids)} low objective clusters"
                 )
@@ -1704,7 +1748,6 @@ class Index:
         # Set target clusters to the current number of clusters, or the
         # provided value. But we also need to account for pinned clusters in
         # the next step, otherwise this will be the wrong count.
-        # TODO: move pinned cluster handling down to _refine_feature_groups.
         target_clusters = target_clusters or len(cluster_feature)
 
         # Remove pinned clusters from refinement, and don't count them towards
@@ -1873,7 +1916,7 @@ class Index:
         for future in cf.as_completed(futures):
             cluster_id, weights = future.result()
 
-            for o_cluster, sim, inter in weights:
+            for o_cluster, sim, _ in weights:
                 graph.add_edge(cluster_id, o_cluster, weight=sim)
 
         return graph
@@ -1957,7 +2000,6 @@ class Index:
         Count collocations near the given query of positions.
 
         """
-        # TODO: Validate clauses are all from the same field.
         futures = set()
 
         for first_doc_id in self._field_partitions(field):
@@ -1987,6 +2029,13 @@ class Index:
         return collocations, total_query, total_window
 
     def _field_partitions(self, field):
+        """
+        Return the list of partitions of positional information for the given field.
+
+        Each partition is identified by the `doc_id` of the first document in
+        the partition.
+
+        """
         return [
             r[0]
             for r in self.db.execute(
@@ -2001,6 +2050,7 @@ class Index:
 
     @property
     def positional_fields(self):
+        """Return the names of all fields with positional information in this index."""
         return {
             r[0]
             for r in self.db.execute(
@@ -2031,8 +2081,8 @@ class Index:
         )
         if positions:
             return positions[0][0]
-        else:
-            return BitMap()
+
+        return BitMap()
 
     def _get_partition_header(self, field, first_doc_id):
         header = list(
@@ -2050,10 +2100,10 @@ class Index:
         )
         if header:
             return header[0]
-        else:
-            raise ValueError(
-                f"No position partition corresponding to {field=}, {first_doc_id=}"
-            )
+
+        raise ValueError(
+            f"No position partition corresponding to {field=}, {first_doc_id=}"
+        )
 
 
 def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_lock):
@@ -2061,6 +2111,8 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
     Index all of the given docs into temp_db_path.
 
     """
+
+    # pylint: disable=too-many-nested-blocks
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
@@ -2103,12 +2155,17 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                     # If values is empty, move on to the next layer.
                     if not values:
                         continue
-                    else:
-                        field_doc_positions_starts[field][0].add(doc_id)
-                        # +1 because it's the start of the *next* document.
-                        field_doc_positions_starts[field][1].add(
-                            position + batch_position + 1
-                        )
+
+                    field_doc_positions_starts[field][0].add(doc_id)
+                    # pylint will complain about this as position may not be defined
+                    # if values is empty, however if values is empty we will already
+                    # have continued.
+                    # pylint: disable=undefined-loop-variable
+                    # +1 because it's the start of the *next* document.
+                    field_doc_positions_starts[field][1].add(
+                        position + batch_position + 1
+                    )
+                    # pylint: enable=undefined-loop-variable
 
                 set_values = set(values)
                 set_values.discard(None)
@@ -2222,9 +2279,7 @@ def _pivot_cluster_features_by_query_jaccard(
 
         search_order = sorted(features, reverse=True)
 
-        # TODO: find further ways to accelerate this - it seems like most features
-        # end up being checked when the similarity is low.
-        for max_threshold, f_id, field, value, docs_count in search_order:
+        for max_threshold, f_id, field, value, _ in search_order:
             # Early break if the length threshold can't be reached.
             if max_threshold < results[0][0]:
                 break
@@ -2516,17 +2571,17 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
 
             else:
                 last_position = position
-        else:
-            # Don't forget the last window, if it wasn't closed off.
-            if last_position != passage_start:
-                passage_scores[doc_id].append(
-                    (
-                        field,
-                        passage_start - doc_start,
-                        last_position - doc_start,
-                        positions.range_cardinality(passage_start, last_position + 1),
-                    )
+
+        # Don't forget the last window, if it wasn't closed off.
+        if last_position != passage_start:
+            passage_scores[doc_id].append(
+                (
+                    field,
+                    passage_start - doc_start,
+                    last_position - doc_start,
+                    positions.range_cardinality(passage_start, last_position + 1),
                 )
+            )
 
     return (
         field,
@@ -2546,7 +2601,7 @@ def _count_collocations(idx, field, first_doc_id, features, window_size):
     with idx:
         counts = []
         positions = idx._union_position_query(first_doc_id, features)
-        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
+        _, _, doc_boundaries = idx._get_partition_header(field, first_doc_id)
         valid_window = utilities.expand_positions_window(
             positions, doc_boundaries, window_size
         )

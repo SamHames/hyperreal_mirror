@@ -1,9 +1,13 @@
+"""
+Miscellaneous utility functions for string, position and bitmap handling.
+
+These are usually simple and usable outside the context of the full library
+so are not tightly integrated anywhere else.
+
+"""
 import heapq
 import itertools
-import math
 import operator
-from html.parser import HTMLParser
-from io import StringIO
 
 import regex
 from pyroaring import BitMap
@@ -34,17 +38,40 @@ social_media_cleaner = regex.compile(
 
 
 def social_media_tokens(text):
+    """
+    Tokeniser to handle social media tokenisation for whitespace delimited languages.
+
+    This tokeniser:
+
+    - removes @mentions, #hashtags and URLs before tokenising the
+    - lowercases the text
+    - converts rounded (smart) quotes to flat equivalents
+    - tokenises any text remaining paying using unicode whitespace rules
+      as found in the Python regex module
+
+    """
     cleaned = social_media_cleaner.sub(
         "", text.translate(curly_quote_translator).lower()
     )
-    tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
-    return tokens
+    tokenised = [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    return tokenised
 
 
 def tokens(text):
+    """
+    Tokeniser for whitespace delimited languages.
+
+    This tokeniser:
+
+    - lowercases the text
+    - converts rounded (smart) quotes to flat equivalents
+    - tokenises the text paying using unicode whitespace rules
+      as found in the Python regex module
+
+    """
     cleaned = text.translate(curly_quote_translator).lower()
-    tokens = [token for token in word_tokenizer.split(cleaned) if token.strip()]
-    return tokens
+    tokenised = [token for token in word_tokenizer.split(cleaned) if token.strip()]
+    return tokenised
 
 
 def bstm(matching, bitslice, top_k):
@@ -76,6 +103,16 @@ def bstm(matching, bitslice, top_k):
 
 
 def round_datetime(datetime):
+    """
+    Round the given datetime to different granularities.
+
+    Granularities are: minute, hour, day, month, year.
+
+    This function is provided because currently only literal values can be
+    searched - it is recommended to index rounded rather than exact
+    datetimes.
+
+    """
     minute = datetime.replace(second=0, microsecond=0)
     hour = minute.replace(minute=0)
     day = hour.replace(hour=0)
@@ -95,7 +132,7 @@ def compute_bitslice(bitmaps):
 
         matching |= doc_ids
 
-        for i, bs in enumerate(bitslice):
+        for bs in bitslice:
             carry = bs & doc_ids
             bs ^= doc_ids
             doc_ids = carry
