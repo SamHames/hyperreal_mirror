@@ -1,6 +1,5 @@
 """
-Tests for the server module - these are more integration tests, running against a
-real server spawned in a subprocess.
+Tests for the server module.
 
 """
 
@@ -8,7 +7,6 @@ import concurrent.futures as cf
 import multiprocessing as mp
 import pathlib
 import shutil
-import subprocess
 import uuid
 
 import cherrypy
@@ -63,7 +61,7 @@ def server(tmp_path, request):
         engine.exit()
 
 
-def test_server(server):
+def test_server(server_url):
     """
     Start an index only server in the background using the CLI.
 
@@ -71,7 +69,7 @@ def test_server(server):
 
     """
 
-    r = requests.get(server)
+    r = requests.get(server_url, timeout=1)
     r.raise_for_status()
 
     # There should be an index listing in there somewhere
@@ -80,7 +78,7 @@ def test_server(server):
 
     assert "/index/0" in links
 
-    r = requests.get(server + "/index/0")
+    r = requests.get(server_url + "/index/0", timeout=1)
     r.raise_for_status()
 
     doc = html.document_fromstring(r.content)
@@ -101,5 +99,5 @@ def test_server(server):
         raise ValueError("Missing a feature_id link")
 
     for test_link in must_be_present:
-        r = requests.get(server + test_link)
+        r = requests.get(server_url + test_link, timeout=1)
         r.raise_for_status()

@@ -6,7 +6,6 @@ concrete corpus objects.
 import collections
 import concurrent.futures as cf
 import csv
-import heapq
 import logging
 import multiprocessing as mp
 import pathlib
@@ -20,22 +19,30 @@ from pyroaring import BitMap
 import hyperreal
 
 
-@pytest.fixture(scope="module")
-def pool():
+@pytest.fixture(scope="module", name="pool")
+def fixture_pool():
+    """
+    A ProcessPoolExecutor that can be reused for the whole module.
+
+    Avoids spinning up/down a new process pool for every test.
+
+    """
     context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(4, mp_context=context) as pool:
-        yield pool
+    with cf.ProcessPoolExecutor(4, mp_context=context) as process_pool:
+        yield process_pool
 
 
-@pytest.fixture
-def example_index_path(tmp_path):
+@pytest.fixture(name="example_index_path")
+def fixture_example_index_path(tmp_path):
+    "Returns a path to a copy of the example index in temporary storage."
     random_name = tmp_path / str(uuid.uuid4())
     shutil.copy(pathlib.Path("tests", "index", "alice_index.db"), random_name)
     return random_name
 
 
-@pytest.fixture
-def example_index_corpora_path(tmp_path):
+@pytest.fixture(name="example_index_corpora_path")
+def fixture_example_index_corpora_path(tmp_path):
+    "Returns a path to a copy of the example index and corpora in temporary storage."
     random_corpus = tmp_path / str(uuid.uuid4())
     shutil.copy(pathlib.Path("tests", "corpora", "alice.db"), random_corpus)
     random_index = tmp_path / str(uuid.uuid4())
@@ -44,9 +51,11 @@ def example_index_corpora_path(tmp_path):
     return random_corpus, random_index
 
 
-# This is a list of tuples, corresponding to the corpus class to test, and the
-# concrete arguments to that class to instantiate against the test data.
 def check_alice():
+    """
+    Generate test statistics for the Alice corpus against the known tokenisation.
+
+    """
     with open("tests/data/alice30.txt", "r", encoding="utf-8") as f:
         docs = (line[0] for line in csv.reader(f) if line and line[0].strip())
         target_nnz = 0
@@ -62,6 +71,8 @@ def check_alice():
     return target_docs, target_nnz, target_positions
 
 
+# This is a list of tuples, corresponding to the corpus class to test, and the
+# concrete arguments to that class to instantiate against the test data.
 corpora_test_cases = [
     (
         hyperreal.corpus.PlainTextSqliteCorpus,
@@ -123,19 +134,19 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     )
 
     # Test window extraction from documents.
+    matching_docs = idx[("text", "hatter")]
+    words_to_match = [("text", "hatter"), ("text", "mad")]
     for (
-        doc_key,
-        doc_id,
-        cooccurrence_windows,
-    ) in idx.extract_matching_feature_windows(
-        idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
-    ):
-        for match, windows in cooccurrence_windows["text"].items():
+        _,
+        _,
+        cooc_windows,
+    ) in idx.extract_matching_feature_windows(matching_docs, words_to_match, 10, 5):
+        for match, windows in cooc_windows["text"].items():
             assert match in ["mad", "hatter"]
             assert all("hatter" in window or "mad" in window for window in windows)
             assert all(len(window) <= 21 for window in windows)
 
-    for doc_key, doc_id, concordances in idx.concordances(
+    for _, _, concordances in idx.concordances(
         idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
     ):
         for concordance in concordances["text"]:
@@ -151,7 +162,7 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
 
     # Actually render the passages as well
     rendered = list(idx.render_passages_table(score_passages))
-    for doc_id, doc_key, doc in rendered:
+    for _, _, doc in rendered:
         assert all("hare" in p for p in doc["text"])
         assert all("hatter" in p for p in doc["text"])
 
@@ -184,7 +195,7 @@ def test_model_creation(pool, example_index_path, n_clusters):
     assert 0 == len(idx.cluster_ids)
 
     # No op cases - empty and single clusters selected.
-    assert idx._refine_feature_groups({}) == (dict(), set())
+    assert idx._refine_feature_groups({}) == ({}, set())
     idx.refine_clusters(iterations=10, cluster_ids=[1])
 
 
@@ -243,6 +254,7 @@ def test_model_editing(example_index_path, pool):
 
 
 def test_model_structured_sampling(example_index_corpora_path, pool, tmp_path):
+    """Test that structured sampling produces something."""
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
     idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
 
@@ -275,6 +287,7 @@ def test_model_structured_sampling(example_index_corpora_path, pool, tmp_path):
 
 
 def test_querying(example_index_corpora_path, pool):
+    """Test some simple applications of boolean querying and rendering of results."""
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
     index = hyperreal.index.Index(
         example_index_corpora_path[1], corpus=corpus, pool=pool
@@ -292,17 +305,15 @@ def test_querying(example_index_corpora_path, pool):
     assert q == len(index.render_docs_table(query))
     assert 5 == len(index.render_docs_table(query, random_sample_size=5))
 
-    for doc_id, doc_key, doc in index.docs(query):
+    for _, _, doc in index.docs(query):
         assert "the" in hyperreal.utilities.tokens(doc["text"])
 
     # This is a hacky test, as we're tokenising the representation of the text.
-    for doc_id, doc_key, rendered_doc in index.render_docs_html(
-        query, random_sample_size=3
-    ):
+    for _, _, rendered_doc in index.render_docs_html(query, random_sample_size=3):
         assert "the" in hyperreal.utilities.tokens(rendered_doc)
 
     # No matches, return nothing:
-    assert not len(index[("nonexistent", "field")])
+    assert not index[("nonexistent", "field")]
 
     # Confirm that feature_id -> feature mappings in the model are correct
     # And the cluster queries are in fact boolean combinations.
@@ -312,19 +323,22 @@ def test_querying(example_index_corpora_path, pool):
         # Used for checking the ranking with bstm
         accumulator = collections.Counter()
 
-        for feature_id, field, value, docs_count in index.cluster_features(cluster_id):
+        for feature_id, field, value, _ in index.cluster_features(cluster_id):
             assert index[feature_id] == index[(field, value)]
             assert (index[feature_id] & cluster_matching) == index[feature_id]
             for doc_id in index[feature_id]:
                 accumulator[doc_id] += 1
 
         # also test the ranking with bstm - we should retrieve the same number
-        # of results by each method.
+        # of results by each method. Note that we check against the number of
+        # retrieved top_k from bstm because it returns more than the
+        # specified number of results in the event of ties.
         top_k = hyperreal.utilities.bstm(cluster_matching, cluster_bs, 5)
         n_check = len(top_k)
-        real_top_k = BitMap(
-            heapq.nlargest(n_check, accumulator, key=lambda x: accumulator[x])
-        )
+        real_sorted = [
+            doc_id for doc_id, _ in sorted(accumulator.items(), key=lambda x: x[1])
+        ]
+        real_top_k = BitMap(real_sorted[-n_check:])
 
         assert top_k == real_top_k
 
@@ -366,7 +380,7 @@ def test_pivoting(example_index_path, pool):
             pivoted = index.pivot_clusters_by_query(
                 index[query], top_k=2, scoring=scoring
             )
-            for cluster_id, weight, features in pivoted:
+            for _, _, features in pivoted:
                 # This feature should be first in the cluster, but the cluster
                 # containing it may not always be first.
                 if query == features[0][1:3]:
@@ -514,7 +528,7 @@ def test_graph_creation(example_index_path, pool):
     assert len(graph.nodes) == 32
 
 
-def test_indexing_utility(example_index_corpora_path, tmp_path, pool):
+def test_indexing_utility(example_index_corpora_path, tmp_path):
     """Test the indexing utility function."""
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
 
@@ -529,6 +543,14 @@ def test_indexing_utility(example_index_corpora_path, tmp_path, pool):
 
 
 def test_field_intersection(tmp_path, pool):
+    """
+    Test computational machinery for intersecting fields with queries.
+
+    This functionality is intended to enable things like evaluating time
+    series trends such as calculating how much a particular word is used
+    each month.
+
+    """
     data_path = pathlib.Path("tests", "data")
     target_corpora_db = tmp_path / "sx_corpus.db"
     target_index_db = tmp_path / "sx_corpus_index.db"
@@ -550,11 +572,7 @@ def test_field_intersection(tmp_path, pool):
         "June 2020": sx_idx[("created_month", "2020-06-01T00:00:00")],
     }
 
-    values, totals, intersections = sx_idx.intersect_queries_with_field(
-        queries, "created_year"
-    )
-
-    non_zero_month_intersection = 0
+    _, _, intersections = sx_idx.intersect_queries_with_field(queries, "created_year")
 
     assert all(c > 0 for c in intersections["visa"])
 

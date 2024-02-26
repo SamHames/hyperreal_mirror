@@ -6,11 +6,8 @@ Note that the Twitter tests require that some Twitter data has been collected.
 See the tox environment "collect_twitter_test_data" for this.
 
 """
-import os
 import pathlib
-import sqlite3
 
-import pytest
 from click.testing import CliRunner
 
 from hyperreal import cli
@@ -20,6 +17,7 @@ corpora_path = pathlib.Path("tests", "corpora")
 
 
 def test_plaintext_corpus(tmp_path):
+    """Basic tests of the plaintext corpus support."""
     target_corpora_db = tmp_path / "test.db"
     target_index_db = tmp_path / "test_index.db"
     target_graphml = tmp_path / "test.graphml"
@@ -125,6 +123,7 @@ def test_plaintext_corpus(tmp_path):
 
 
 def test_sx_corpus(tmp_path):
+    """Basic tests of the stackexchange corpus support via the CLI."""
     target_corpora_db = tmp_path / "sx_corpus.db"
     target_index_db = tmp_path / "sx_corpus_index.db"
     target_csv = tmp_path / "sx_sample.csv"
