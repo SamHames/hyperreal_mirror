@@ -2,9 +2,6 @@
 Test at the CLI layer - these function closer to end to end tests and
 should test many of the most common entrypoints.
 
-Note that the Twitter tests require that some Twitter data has been collected.
-See the tox environment "collect_twitter_test_data" for this.
-
 """
 
 import pathlib
