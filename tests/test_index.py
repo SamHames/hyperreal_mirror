@@ -3,6 +3,7 @@ Test cases for the index functionality, including integration with some
 concrete corpus objects.
 
 """
+
 import collections
 import concurrent.futures as cf
 import csv

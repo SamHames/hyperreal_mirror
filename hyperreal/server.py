@@ -2,6 +2,7 @@
 Cherrypy based webserver for serving an index (or in future) a set of indexes.
 
 """
+
 import csv
 import io
 
@@ -489,9 +490,9 @@ class Index:
         """
 
         cherrypy.response.headers["Content-Type"] = "text/csv"
-        cherrypy.response.headers[
-            "Content-Disposition"
-        ] = 'attachment; filename="feature_clusters.csv"'
+        cherrypy.response.headers["Content-Disposition"] = (
+            'attachment; filename="feature_clusters.csv"'
+        )
         all_features = cherrypy.request.index.top_cluster_features(top_k=2**62)
 
         output = io.StringIO()

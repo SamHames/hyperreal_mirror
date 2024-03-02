@@ -6,6 +6,7 @@ Note that the Twitter tests require that some Twitter data has been collected.
 See the tox environment "collect_twitter_test_data" for this.
 
 """
+
 import pathlib
 
 from click.testing import CliRunner
