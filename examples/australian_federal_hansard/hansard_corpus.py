@@ -69,6 +69,10 @@ class HansardCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
+    def indexable_docs(self, keys):
+        for key, doc in self.docs(keys):
+            yield key, self.index(doc)
+
     def index(self, doc):
         root = html.fromstring(doc["page_html"])
 
@@ -93,7 +97,7 @@ class HansardCorpus(SqliteBackedCorpus):
             "html_tags": {str(elem.tag) for elem in root.iter()},
         }
 
-    def render_docs_html(self, doc_keys):
+    def html_docs(self, doc_keys):
         """Return the given documents as HTML."""
         docs = []
 

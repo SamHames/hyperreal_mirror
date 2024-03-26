@@ -18,47 +18,6 @@ import hyperreal.server
 logging.basicConfig(level=logging.INFO)
 
 
-def make_csv_exporter(corpus_type):
-    """
-    Return a click annotated function for an exporter that takes three arguments.
-
-    The expected arguments are (in order):
-
-    1. The path to the file representing the corpus.
-    2. The path to the index database.
-    3. The path to the output file of the CSV export.
-
-    """
-
-    @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
-    @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-    @click.argument("output_file", type=click.Path(dir_okay=False))
-    @click.option(
-        "--docs-per-cluster",
-        type=click.INT,
-        default=50,
-        help="The maximum number of documents to sample from each cluster. "
-        "If set to 0, all documents in clusters will be returned.",
-    )
-    def export_csv(corpus_db, index_db, output_file, docs_per_cluster):
-        """
-        Export a sample of documents from each cluster in the model.
-
-        """
-        if not hyperreal.index.Index.is_index_db(index_db):
-            raise ValueError(f"{index_db} is not a valid index file.")
-
-        corpus = corpus_type(corpus_db)
-        idx = hyperreal.index.Index(index_db, corpus=corpus)
-
-        cluster_samples, sample_clusters = idx.structured_doc_sample(
-            docs_per_cluster=docs_per_cluster
-        )
-        idx.export_document_sample(cluster_samples, sample_clusters, output_file)
-
-    return export_csv
-
-
 def make_two_file_indexer(corpus_type):
     """
     Return a click annotated function for an indexer that takes two arguments.
@@ -197,10 +156,6 @@ plaintext_corpus.command(name="index")(
     make_two_file_indexer(hyperreal.corpus.PlainTextSqliteCorpus)
 )
 
-plaintext_corpus.command(name="sample")(
-    make_csv_exporter(hyperreal.corpus.PlainTextSqliteCorpus)
-)
-
 
 @cli.group()
 def stackexchange_corpus():
@@ -261,10 +216,6 @@ def stackexchange_corpus_serve(corpus_db, index_db):
         engine = hyperreal.server.launch_web_server(index_server)
         engine.block()
 
-
-stackexchange_corpus.command(name="sample")(
-    make_csv_exporter(hyperreal.corpus.StackExchangeCorpus)
-)
 
 stackexchange_corpus.command(name="index")(
     make_two_file_indexer(hyperreal.corpus.StackExchangeCorpus)
@@ -458,7 +409,7 @@ def export_clusters(index_db, cluster_file, top_k_features):
     if not hyperreal.index.Index.is_index_db(index_db):
         raise ValueError(f"{index_db} is not a valid index file.")
 
-    idx = hyperreal.index.Index(index_db)
+    idx = hyperreal.index.Index(index_db, None)
 
     with open(cluster_file, "w", encoding="utf-8") as output:
         writer = csv.writer(output, dialect="excel", quoting=csv.QUOTE_ALL)
@@ -469,26 +420,3 @@ def export_clusters(index_db, cluster_file, top_k_features):
         for cluster_id, _, cluster_features in features:
             for row in cluster_features:
                 writer.writerow([cluster_id, *row])
-
-
-@cli.command()
-@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-def serve(index_db):
-    """
-    Serve the given index file.
-
-    Note that this method of serving will not provide access to the underlying
-    corpus of documents - this is useful for non-consumptive types of analysis.
-    If you want to view the underlying documents, see the serve subcommand for
-    the specific type of corpus you're interested in.
-
-    """
-
-    if not hyperreal.index.Index.is_index_db(index_db):
-        raise ValueError(f"{index_db} is not a valid index file.")
-
-    mp_context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
-        index_server = hyperreal.server.SingleIndexServer(index_db, pool=pool)
-        engine = hyperreal.server.launch_web_server(index_server)
-        engine.block()

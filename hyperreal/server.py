@@ -2,6 +2,7 @@
 Cherrypy based webserver for serving an index (or in future) a set of indexes.
 
 """
+
 import csv
 import io
 
@@ -95,7 +96,6 @@ class Cluster:
 
         features = cherrypy.request.index.cluster_features(cluster_id)
         n_features = len(features)
-        search_results = []
         query = cherrypy.request.index.cluster_docs(cluster_id)
 
         # Default concordance features is everything in the cluster, unless other things
@@ -134,27 +134,14 @@ class Cluster:
         visible_features = [feature[0] for feature in features]
 
         # Retrieve matching documents if we have a corpus to render them.
-        if cherrypy.request.index.corpus is not None:
-            if result_type == "concordance":
-                search_results = list(
-                    cherrypy.request.index.concordances(
-                        query,
-                        concordance_features,
-                        15,
-                        random_sample_size=int(exemplar_docs),
-                    )
-                )
-            if result_type == "passage":
-                passages = cherrypy.request.index.score_passages_dnf(passage_query, 25)
-                search_results = list(
-                    cherrypy.request.index.render_passages_table(
-                        passages, random_sample_size=int(exemplar_docs)
-                    )
-                )
-            else:
-                search_results = cherrypy.request.index.render_docs_html(
-                    query, random_sample_size=int(exemplar_docs)
-                )
+        search_results = []
+
+        try:
+            search_results = cherrypy.request.index.html_docs(
+                query, random_sample_size=int(exemplar_docs)
+            )
+        except hyperreal.index.CorpusMissingError:
+            pass
 
         total_docs = len(query)
 
@@ -353,8 +340,6 @@ class Index:
     ):
         """Display an entire feature clustering defined on an index."""
         template = templates.get_template("index.html")
-
-        search_results = []
         total_docs = 0
         query = None
         highlight_cluster_id = None
@@ -366,14 +351,11 @@ class Index:
         if not cherrypy.request.index.cluster_ids:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
 
-        passage_query = []
+        search_results = []
 
         if feature_id is not None:
             query = cherrypy.request.index[int(feature_id)]
             highlight_feature_id = int(feature_id)
-            concordance_features = [highlight_feature_id]
-            passage_query.append([highlight_feature_id])
-
         elif cluster_id is not None:
             cluster_docs = cherrypy.request.index.cluster_docs(int(cluster_id))
 
@@ -383,40 +365,18 @@ class Index:
                 query &= cluster_docs
 
             highlight_cluster_id = int(cluster_id)
-            cluster_features = cherrypy.request.index.cluster_features(
-                highlight_cluster_id
-            )
-            concordance_features = [f[1:3] for f in cluster_features]
-            passage_query.append([f[0] for f in cluster_features])
 
         if query:
             clusters = cherrypy.request.index.pivot_clusters_by_query(
                 query, scoring=scoring, top_k=int(top_k_features)
             )
 
-            if cherrypy.request.index.corpus is not None:
-                if result_type == "concordance":
-                    search_results = list(
-                        cherrypy.request.index.concordances(
-                            query,
-                            concordance_features,
-                            15,
-                            random_sample_size=int(exemplar_docs),
-                        )
-                    )
-                if result_type == "passage":
-                    passages = cherrypy.request.index.score_passages_dnf(
-                        passage_query, 25
-                    )
-                    search_results = list(
-                        cherrypy.request.index.render_passages_table(
-                            passages, random_sample_size=int(exemplar_docs)
-                        )
-                    )
-                else:
-                    search_results = cherrypy.request.index.render_docs_html(
-                        query, random_sample_size=int(exemplar_docs)
-                    )
+            try:
+                search_results = cherrypy.request.index.html_docs(
+                    query, random_sample_size=int(exemplar_docs)
+                )
+            except hyperreal.index.CorpusMissingError:
+                pass
 
             total_docs = len(query)
 
@@ -489,9 +449,9 @@ class Index:
         """
 
         cherrypy.response.headers["Content-Type"] = "text/csv"
-        cherrypy.response.headers[
-            "Content-Disposition"
-        ] = 'attachment; filename="feature_clusters.csv"'
+        cherrypy.response.headers["Content-Disposition"] = (
+            'attachment; filename="feature_clusters.csv"'
+        )
         all_features = cherrypy.request.index.top_cluster_features(top_k=2**62)
 
         output = io.StringIO()

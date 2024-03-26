@@ -3,6 +3,7 @@ Test cases for the index functionality, including integration with some
 concrete corpus objects.
 
 """
+
 import collections
 import concurrent.futures as cf
 import csv
@@ -133,24 +134,11 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
         == list(idx.db.execute("select sum(docs_count) from position_doc_map"))[0][0]
     )
 
-    # Test window extraction from documents.
-    matching_docs = idx[("text", "hatter")]
-    words_to_match = [("text", "hatter"), ("text", "mad")]
-    for (
-        _,
-        _,
-        cooc_windows,
-    ) in idx.extract_matching_feature_windows(matching_docs, words_to_match, 10, 5):
-        for match, windows in cooc_windows["text"].items():
-            assert match in ["mad", "hatter"]
-            assert all("hatter" in window or "mad" in window for window in windows)
-            assert all(len(window) <= 21 for window in windows)
+    # Test positional information extraction from documents.
+    matching_docs = idx.indexable_docs(idx[("text", "hatter")])
 
-    for _, _, concordances in idx.concordances(
-        idx[("text", "hatter")], [("text", "hatter"), ("text", "mad")], 10, 5
-    ):
-        for concordance in concordances["text"]:
-            assert "mad" in concordance or "hatter" in concordance
+    for _, _, indexed_doc in matching_docs:
+        assert "hatter" in indexed_doc["text"]
 
     # Test passage retrieval - because this is one line = one document,
     # the passage retrieval is the same as the document retrieval
@@ -159,16 +147,6 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
 
     assert len(score_passages) > 0
     assert len(score_passages) == len(idx[("text", "hare")] & idx[("text", "hatter")])
-
-    # Actually render the passages as well
-    rendered = list(idx.render_passages_table(score_passages))
-    for _, _, doc in rendered:
-        assert all("hare" in p for p in doc["text"])
-        assert all("hatter" in p for p in doc["text"])
-
-    assert (
-        len(list(idx.render_passages_table(score_passages, random_sample_size=3))) == 3
-    )
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
@@ -253,7 +231,7 @@ def test_model_editing(example_index_path, pool):
     assert len(index.cluster_ids) == 13
 
 
-def test_model_structured_sampling(example_index_corpora_path, pool, tmp_path):
+def test_model_structured_sampling(example_index_corpora_path, pool):
     """Test that structured sampling produces something."""
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
     idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
@@ -272,11 +250,6 @@ def test_model_structured_sampling(example_index_corpora_path, pool, tmp_path):
     )
 
     assert sum(len(docs) for docs in sample_clusters.values()) >= 16
-
-    # Test writing
-    write_path = tmp_path / "test.csv"
-
-    idx.export_document_sample(cluster_sample, sample_clusters, write_path)
 
     # Selective cluster exporting
     cluster_sample, sample_clusters = idx.structured_doc_sample(
@@ -300,16 +273,14 @@ def test_querying(example_index_corpora_path, pool):
     assert q
     assert q == len(list(index.convert_query_to_keys(query)))
     assert q == len(list(index.docs(query)))
-    assert q == len(index.render_docs_html(query))
-    assert 5 == len(index.render_docs_html(query, random_sample_size=5))
-    assert q == len(index.render_docs_table(query))
-    assert 5 == len(index.render_docs_table(query, random_sample_size=5))
+    assert q == len(list(index.html_docs(query)))
+    assert 5 == len(list(index.html_docs(query, random_sample_size=5)))
 
     for _, _, doc in index.docs(query):
         assert "the" in hyperreal.utilities.tokens(doc["text"])
 
     # This is a hacky test, as we're tokenising the representation of the text.
-    for _, _, rendered_doc in index.render_docs_html(query, random_sample_size=3):
+    for _, _, rendered_doc in index.html_docs(query, random_sample_size=3):
         assert "the" in hyperreal.utilities.tokens(rendered_doc)
 
     # No matches, return nothing:
@@ -362,7 +333,7 @@ def test_require_corpus(example_index_corpora_path, pool):
     query = index_wo_corpus[("text", "the")]
 
     with pytest.raises(hyperreal.index.CorpusMissingError):
-        index_wo_corpus.docs(query)
+        list(index_wo_corpus.docs(query))
 
     assert len(query) == len(list(index_wi_corpus.docs(query)))
 
@@ -534,12 +505,9 @@ def test_indexing_utility(example_index_corpora_path, tmp_path):
 
     temp_index = tmp_path / "tempindex.db"
 
-    doc_keys = BitMap(range(1, 100))
-    doc_ids = doc_keys
+    key_id_map = {i: i for i in range(1, 100)}
 
-    hyperreal.index._index_docs(
-        corpus, doc_keys, doc_ids, str(temp_index), 1, mp.Lock()
-    )
+    hyperreal.index._index_docs(corpus, key_id_map, str(temp_index), 1, mp.Lock())
 
 
 def test_field_intersection(tmp_path, pool):

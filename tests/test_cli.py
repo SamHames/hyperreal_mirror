@@ -6,6 +6,7 @@ Note that the Twitter tests require that some Twitter data has been collected.
 See the tox environment "collect_twitter_test_data" for this.
 
 """
+
 import pathlib
 
 from click.testing import CliRunner
@@ -106,27 +107,11 @@ def test_plaintext_corpus(tmp_path):
 
     assert result.exit_code == 0
 
-    # Export sample
-
-    result = runner.invoke(
-        cli.plaintext_corpus,
-        [
-            "sample",
-            str(target_corpora_db),
-            str(target_index_db),
-            str(target_csv),
-            "--docs-per-cluster=10",
-        ],
-    )
-
-    assert result.exit_code == 0
-
 
 def test_sx_corpus(tmp_path):
     """Basic tests of the stackexchange corpus support via the CLI."""
     target_corpora_db = tmp_path / "sx_corpus.db"
     target_index_db = tmp_path / "sx_corpus_index.db"
-    target_csv = tmp_path / "sx_sample.csv"
 
     runner = CliRunner()
 
@@ -166,21 +151,6 @@ def test_sx_corpus(tmp_path):
             "--include-field",
             "UserPosting",
             str(target_index_db),
-        ],
-    )
-
-    assert result.exit_code == 0
-
-    # Export sample
-
-    result = runner.invoke(
-        cli.stackexchange_corpus,
-        [
-            "sample",
-            str(target_corpora_db),
-            str(target_index_db),
-            str(target_csv),
-            "--docs-per-cluster=10",
         ],
     )
 

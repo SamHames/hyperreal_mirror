@@ -10,9 +10,7 @@ import array
 import atexit
 import collections
 import concurrent.futures as cf
-import csv
 import heapq
-import itertools
 import logging
 import math
 import multiprocessing as mp
@@ -28,7 +26,7 @@ import networkx as nx
 from pyroaring import AbstractBitMap, BitMap
 
 from hyperreal import _index_schema, db_utilities, utilities
-from hyperreal.corpus import BaseCorpus, TableRenderableCorpus, WebRenderableCorpus
+from hyperreal.corpus import SupportsCorpus
 
 logger = logging.getLogger(__name__)
 
@@ -54,34 +52,6 @@ FeatureKey = tuple[str, Hashable]
 FeatureKeyOrId = Union[FeatureKey, int]
 FeatureIdAndKey = tuple[int, str, Hashable]
 BitSlice = list[BitMap]
-
-
-def requires_corpus(required_corpus):
-    """
-    Mark method as requiring specific corpus functionality.
-
-    Raises an AttributeError if no corpus object is present on this index.
-
-    """
-
-    def corpus_wrapper(func):
-        @wraps(func)
-        def wrapper_func(self, *args, **kwargs):
-            if self.corpus is None:
-                raise CorpusMissingError(
-                    "A Corpus must be provided to the index for this functionality."
-                )
-
-            if not isinstance(self.corpus, required_corpus):
-                raise UnsupportedCorpusOperation(
-                    "The required functionality is not available on this corpus."
-                )
-
-            return func(self, *args, **kwargs)
-
-        return wrapper_func
-
-    return corpus_wrapper
 
 
 def atomic(writes=False):
@@ -148,7 +118,13 @@ class Index:
 
     # pylint: disable=too-many-public-methods
 
-    def __init__(self, db_path, corpus=None, pool=None, random_seed=None):
+    def __init__(
+        self,
+        db_path,
+        corpus: Optional[SupportsCorpus] = None,
+        pool=None,
+        random_seed=None,
+    ):
         """
         The corpus object is optional - if not provided certain operations such
         as retrieving or rendering documents won't be possible.
@@ -190,7 +166,7 @@ class Index:
             self._update_changed_clusters()
             self.db.execute("commit")
 
-        self.corpus = corpus
+        self._corpus = corpus
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -201,6 +177,14 @@ class Index:
 
         # Set up a context specific adapter for this index.
         self.logger = logging.LoggerAdapter(logger, {"index_db_path": self.db_path})
+
+    @property
+    def corpus(self):
+        """The corpus associated with this index."""
+        if self._corpus is None:
+            raise CorpusMissingError("This functionality requires a corpus.")
+
+        return self._corpus
 
     @property
     def pool(self):
@@ -244,7 +228,7 @@ class Index:
         self.close()
 
     def __getstate__(self):
-        return self.db_path, self.corpus
+        return self.db_path, self._corpus
 
     def __setstate__(self, args):
         self.__init__(args[0], corpus=args[1])
@@ -264,8 +248,8 @@ class Index:
 
         self.db.close()
 
-        if self.corpus is not None:
-            self.corpus.close()
+        if self._corpus is not None:
+            self._corpus.close()
 
     @atomic()
     def __getitem__(self, key: FeatureKeyOrId) -> BitMap:
@@ -333,7 +317,6 @@ class Index:
 
         raise KeyError(f"Feature with key '{key}' not found.")
 
-    @requires_corpus(BaseCorpus)
     def index(
         self,
         doc_batch_size=1000,
@@ -394,20 +377,18 @@ class Index:
 
             # we will associate document keys to internal document ids
             # sequentially
-            doc_keys = enumerate(self.corpus.keys())
+            keys = enumerate(self.corpus.keys())
 
-            batch_doc_ids = []
-            batch_doc_keys = []
+            batch_key_id_map = {}
             batch_size = 0
 
             futures = set()
 
             self.logger.info("Beginning indexing.")
 
-            for doc_key in doc_keys:
-                self.db.execute("insert into doc_key values(?, ?)", doc_key)
-                batch_doc_ids.append(doc_key[0])
-                batch_doc_keys.append(doc_key[1])
+            for key in keys:
+                self.db.execute("insert into doc_key values(?, ?)", key)
+                batch_key_id_map[key[1]] = key[0]
                 batch_size += 1
 
                 if batch_size >= doc_batch_size:
@@ -418,15 +399,13 @@ class Index:
                         self.pool.submit(
                             _index_docs,
                             self.corpus,
-                            batch_doc_ids,
-                            batch_doc_keys,
+                            batch_key_id_map,
                             temp_index,
                             index_positions,
                             write_lock,
                         )
                     )
-                    batch_doc_ids = []
-                    batch_doc_keys = []
+                    batch_key_id_map = {}
                     batch_size = 0
 
                     # Be polite and avoid filling up the queue.
@@ -437,14 +416,13 @@ class Index:
                             f.result()
 
             # Dispatch the final batch.
-            if batch_doc_keys:
+            if batch_key_id_map:
                 self.logger.debug("Dispatching final batch for indexing.")
                 futures.add(
                     self.pool.submit(
                         _index_docs,
                         self.corpus,
-                        batch_doc_ids,
-                        batch_doc_keys,
+                        batch_key_id_map,
                         temp_index,
                         index_positions,
                         write_lock,
@@ -601,7 +579,7 @@ class Index:
     @atomic()
     def convert_query_to_keys(self, query) -> dict[Hashable, int]:
         """
-        Return a mapping of doc_keys to their doc_id.
+        Return a mapping of keys to their doc_id.
 
         This can be passed directly to corpus objects to retrieve matching
         docs.
@@ -670,98 +648,11 @@ class Index:
 
         return values, totals, intersections
 
-    @requires_corpus(BaseCorpus)
     def docs(self, query):
         """Retrieve the documents matching the given query set."""
         keys = self.convert_query_to_keys(query)
-        for key, doc in self.corpus.docs(doc_keys=sorted(keys)):
+        for key, doc in self.corpus.docs(sorted(keys)):
             yield keys[key], key, doc
-
-    @requires_corpus(BaseCorpus)
-    @atomic()
-    def extract_matching_feature_windows(
-        self, query, features, window_size, random_sample_size=None
-    ):
-        """
-        Retrieve matching features and cooccurrence windows around each
-        matching feature in sequence fields in each of the given documents.
-
-        window_size is the number of features to extract either size of a match.
-
-        See also the concordance function which turns features back into
-        strings.
-
-        """
-        if random_sample_size is not None:
-            query = self.sample_bitmap(query, random_sample_size)
-
-        field_features = collections.defaultdict(set)
-
-        for feature in features:
-            if isinstance(feature, int):
-                field, value = self.lookup_feature(feature)
-            elif isinstance(feature, tuple):
-                field, value = feature
-            else:
-                raise TypeError(
-                    f"Unknown feature type {feature} "
-                    "- try an integer feature ID or a ('field', value) tuple"
-                )
-
-            field_features[field].add(value)
-
-        for doc_id, doc_key, doc in self.docs(query):
-            indexed = self.corpus.index(doc)
-
-            doc_cooccurrence = {}
-
-            for field, to_match in field_features.items():
-                cooccurrence = collections.defaultdict(list)
-                values = indexed.get(field, set())
-
-                if isinstance(values, collections.abc.Sequence):
-                    for i, value in enumerate(values):
-                        if value in to_match:
-                            start_window = max(0, i - window_size)
-                            cooccurrence[value].append(
-                                values[start_window : i + window_size + 1]
-                            )
-                else:
-                    for value in to_match & values:
-                        cooccurrence[value] = []
-
-                doc_cooccurrence[field] = cooccurrence
-
-            yield (doc_key, doc_id, doc_cooccurrence)
-
-    def concordances(
-        self, query, features, window_size, random_sample_size=None, join_character=" "
-    ):
-        """
-        A utility function that wraps the cooccurrence function to produce
-        text strings instead.
-
-        """
-        for (
-            doc_key,
-            doc_id,
-            cooccurrence_windows,
-        ) in self.extract_matching_feature_windows(
-            query, features, window_size, random_sample_size=random_sample_size
-        ):
-            match_concordances = {}
-            for field, match_windows in cooccurrence_windows.items():
-                field_matches = {}
-                for match, windows in match_windows.items():
-                    field_matches[match] = []
-                    for window in windows:
-                        field_matches[match].append(
-                            join_character.join(w for w in window if w is not None)
-                        )
-
-                match_concordances[field] = field_matches
-
-            yield doc_key, doc_id, match_concordances
 
     def sample_bitmap(self, bitmap, random_sample_size):
         """
@@ -784,52 +675,7 @@ class Index:
 
         return bitmap.copy()
 
-    @requires_corpus(BaseCorpus)
-    @atomic()
-    def render_passages_table(
-        self,
-        scored_passages,
-        passage_overhang=20,
-        batch_size=1000,
-        random_sample_size=None,
-    ):
-        """
-        Render a table of passages from the associated documents.
-
-        """
-
-        if random_sample_size is not None:
-            keep_keys = heapq.nlargest(
-                random_sample_size,
-                ((self.random.random(), doc_id) for doc_id in scored_passages.keys()),
-            )
-            scored_passages = {
-                doc_id: scored_passages[doc_id] for _, doc_id in keep_keys
-            }
-
-        futures = set()
-        # Break up the passages to distribute the work over the pool
-        it = iter(scored_passages)
-
-        for _ in range(0, len(scored_passages), batch_size):
-            futures.add(
-                self.pool.submit(
-                    _construct_passages,
-                    self,
-                    {
-                        doc_id: scored_passages[doc_id]
-                        for doc_id in itertools.islice(it, batch_size)
-                    },
-                    passage_overhang,
-                )
-            )
-
-        for f in cf.as_completed(futures):
-            constructed = f.result()
-            yield from constructed
-
-    @requires_corpus(WebRenderableCorpus)
-    def render_docs_html(self, query, random_sample_size=None):
+    def html_docs(self, query, random_sample_size=None):
         """
         Return the rendered representation of the docs matching this query.
 
@@ -839,15 +685,12 @@ class Index:
         if random_sample_size is not None:
             query = self.sample_bitmap(query, random_sample_size)
 
-        doc_keys = self.convert_query_to_keys(query)
-        return [
-            (doc_keys[doc[0]], *doc) for doc in self.corpus.render_docs_html(doc_keys)
-        ]
+        keys = self.convert_query_to_keys(query)
+        return ((keys[doc[0]], *doc) for doc in self.corpus.html_docs(keys))
 
-    @requires_corpus(TableRenderableCorpus)
-    def render_docs_table(self, query, random_sample_size=None):
+    def indexable_docs(self, query, random_sample_size=None):
         """
-        Return the rendered representation of the docs matching this query.
+        Return the indexed representation of the docs matching this query.
 
         Optionally take a random sample of documents before rendering.
         """
@@ -855,8 +698,8 @@ class Index:
         if random_sample_size is not None:
             query = self.sample_bitmap(query, random_sample_size)
 
-        doc_keys = self.convert_query_to_keys(query)
-        return self.corpus.render_docs_table(doc_keys)
+        keys = self.convert_query_to_keys(query)
+        return ((keys[doc[0]], *doc) for doc in self.corpus.indexable_docs(keys))
 
     @atomic()
     def structured_doc_sample(self, docs_per_cluster=100, cluster_ids=None):
@@ -904,51 +747,6 @@ class Index:
         }
 
         return cluster_samples, sample_clusters
-
-    @atomic()
-    @requires_corpus(TableRenderableCorpus)
-    def export_document_sample(self, cluster_sample_docs, sample_clusters, output_path):
-        """
-        Export the given sample of documents to CSV.
-
-        It is currently assumed that all documents have the same fields.
-
-        This method uses the fields exposed in the table_fields property of
-        the corpus to determine what to export - if a document has additional
-        fields these are silently dropped.
-
-        """
-
-        with open(output_path, "w", encoding="utf-8") as out:
-            table_fields = (
-                ["doc_key", "sampled_cluster"]
-                + self.corpus.table_fields
-                + [f"cluster_{cluster_id}" for cluster_id in sorted(sample_clusters)]
-            )
-
-            writer = csv.DictWriter(
-                out,
-                table_fields,
-                extrasaction="ignore",
-                dialect="excel",
-                quoting=csv.QUOTE_ALL,
-            )
-
-            writer.writeheader()
-
-            for cluster_id, sample_docs in cluster_sample_docs.items():
-                write_docs = self.corpus.render_docs_table(
-                    self.convert_query_to_keys(sample_docs)
-                )
-
-                for doc_id, (key, doc) in zip(sample_docs, write_docs):
-                    doc["doc_key"] = key
-                    doc["sampled_cluster"] = cluster_id
-                    for other_cluster_id, cluster_docs in sample_clusters.items():
-                        if doc_id in cluster_docs:
-                            doc[f"cluster_{other_cluster_id}"] = 1
-
-                    writer.writerow(doc)
 
     def indexed_field_summary(self):
         """
@@ -2106,20 +1904,17 @@ class Index:
         )
 
 
-def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_lock):
+def _index_docs(corpus, batch_key_id_map, temp_db_path, index_positions, write_lock):
     """
     Index all of the given docs into temp_db_path.
 
     """
 
-    # pylint: disable=too-many-nested-blocks
+    # pylint: disable=too-many-nested-blocks,too-many-branches
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
     try:
-        if len(doc_ids) != len(doc_keys):
-            raise ValueError("There must be exactly one doc_id for every doc_key.")
-
         # Mapping of {field: {value: (BitMap(), BitMap())}}
         # One bitmap for document occurrence, the other other for recording
         # positional information.
@@ -2134,22 +1929,46 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
             lambda: (BitMap(), BitMap([0]))
         )
 
-        docs = corpus.docs(doc_keys=doc_keys)
+        indexable_docs = corpus.indexable_docs(batch_key_id_map)
 
-        first_doc_id = doc_ids[0]
-        last_doc_id = doc_ids[-1]
+        first_doc_id = min(batch_key_id_map.values())
+        last_doc_id = max(batch_key_id_map.values())
 
-        for doc_id, (_, doc) in zip(doc_ids, docs):
-            features = corpus.index(doc)
+        for key, indexable_doc in indexable_docs:
+            doc_id = batch_key_id_map[key]
 
-            for field, values in features.items():
-                # Only record position information when requested.
-                if index_positions and isinstance(values, collections.abc.Sequence):
+            for field, values in indexable_doc.items():
+                positional = False
+
+                # handle document value presence for different kinds of fields
+                # lists -> positional information to be optionally indexed
+                if isinstance(values, list):
+                    if index_positions:
+                        positional = True
+
+                    # Convert to a set of values for the final document
+                    # indexing.
+                    doc_values = set(values)
+
+                elif isinstance(values, set):
+                    # No work necessary, but we do need to distinguish between
+                    # sets and single values so we can convert the latter.
+                    doc_values = values
+                else:
+                    # Convert singleton case to a sequence so the next step
+                    # doesn't need to be a special case.
+                    doc_values = [values]
+
+                for value in doc_values:
+                    if value is None:
+                        raise ValueError("Values cannot contain None")
+                    batch[field][value][0].add(doc_id)
+
+                # Construct the positional index if needed.
+                if positional:
                     batch_position = field_doc_positions_starts[field][1][-1]
 
                     for position, value in enumerate(values):
-                        if value is None:
-                            raise ValueError("Values cannot contain None")
                         batch[field][value][1].add(position + batch_position)
 
                     # If values is empty, move on to the next layer.
@@ -2157,21 +1976,18 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                         continue
 
                     field_doc_positions_starts[field][0].add(doc_id)
-                    # pylint will complain about this as position may not be defined
-                    # if values is empty, however if values is empty we will already
-                    # have continued.
+                    # pylint will complain about this as position may not
+                    # be defined if values is empty, however if values is
+                    # empty we will already have continued.
+
                     # pylint: disable=undefined-loop-variable
-                    # +1 because it's the start of the *next* document.
                     field_doc_positions_starts[field][1].add(
-                        position + batch_position + 1
+                        # +1 because it's the start of the *next* doc.
+                        position
+                        + batch_position
+                        + 1
                     )
                     # pylint: enable=undefined-loop-variable
-
-                set_values = set(values)
-                set_values.discard(None)
-
-                for value in set_values:
-                    batch[field][value][0].add(doc_id)
 
         with write_lock:
             local_db.execute("pragma synchronous=0")

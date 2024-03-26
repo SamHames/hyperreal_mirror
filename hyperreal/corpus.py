@@ -1,19 +1,18 @@
 """
-For the purposes of hyperreal, a corpus is a collection of documents. A corpus
-object is a Data Access Object (DAO), that is responsible for representing and
-accessing documents stored elsewhere. The corpus is also responsible for
-describing how those documents are to be represented in the index.
+A Hyperreal corpus describes how to access and display a set of documents.
 
-This module describes the protocol a Corpus class needs to implement, and also
-shows concrete implementation examples.
+The corpus is the main site of customisation for the particulars of your
+dataset/collection of documents. The interface is designed so that you never
+need to hold large collections of data in memory at once by only handling
+documents one at a time through generators.
 
 """
 
 import abc
-import json
 import re
 from collections import defaultdict
-from typing import Any, Protocol, Sequence, runtime_checkable
+from collections.abc import Hashable, Iterable, Mapping
+from typing import Any, Protocol, Union
 from xml.etree import ElementTree
 
 from dateutil.parser import isoparse
@@ -24,85 +23,180 @@ from markupsafe import Markup
 from hyperreal import utilities
 from hyperreal.db_utilities import connect_sqlite, dict_factory
 
+Feature = tuple[str, Hashable]
+"""
+A feature in a document is a field and a paired value.
 
-@runtime_checkable
-class BaseCorpus(Protocol):
+Values must be Hashable, can't be None, and need to be storable in a single
+SQLite column.
+
+Examples of features could be:
+
+- The datetime a document was created as an ISO8601 string: 
+    `('created_at', '2024-01-01T00:00:00')`
+- A single word extracted from a text field: 
+    `('text', 'cat')`
+- A numerical quantity, like the number of likes on a social media post:
+    `('likes', 100)
+
+"""
+
+FieldValues = Union[list[Hashable], set[Hashable], Hashable]
+IndexableDoc = Mapping[str, FieldValues]
+"""
+An IndexableDoc is the structured format that the Hyperreal index uses.
+
+This indexable format of the document is a mapping of fields to values with
+the following requirements:
+
+- Field names must always be strings.
+- Field values must be hashable, and not None.
+- The contents of a field can be either a single value or a group of values.
+- A single value by itself is just treated as a singular value in a document.
+- A list of values indicates that this field has multiple values in a document
+  and the values are order dependent - for example the words in a text field.
+- A set of values indicates that this field has multiple values and order is
+  *not* important - for example tags applied to a photograph.
+
+An example IndexableDoc could be:
+
+```
+{   
+    # A singular value field.
+    'creation_date': '2024-03-01',
+
+    # The tokens extracted from the text.
+    'text': ['the', 'cat', 'sat', 'on', 'the', 'mat'],
+
+    # The authors of the document.
+    'authors': {'Jane', 'Arjun', 'Sally'}
+}
+```
+
+"""
+
+# pylint: disable=too-few-public-methods
+
+
+class Field(Protocol):
+    """A field describes how to extract and display specific components of a document."""
+
+    def __init__(self, value):
+        """Take a single value from the index and prepare it for transformation."""
+
+    @classmethod
+    def extract(cls, doc) -> FieldValues:
+        """Extract values for this field from the document."""
+
+
+class SupportsCorpus(Protocol):
+    """A corpus describes how to identify and retrieve and display documents."""
+
+    fields: Mapping[str, Field]
     """
-    - provides access to documents, and describes how to index them.
-    - needs to be picklable and safely enable concurrent read access
-    - Designed to enable small batches of work, and avoid representing entire
-      collections in memory/work on collections much larger than memory.
-    - Designed to enable downstream concurrent computing on those small batches.
+    The fields object gives a mapping describing how to convert and extract.
+
+    The fields in the fields attribute should align with the output of the
+    `indexable_docs` method.
 
     """
 
     CORPUS_TYPE: str
+    """
+    The type of corpus.
+
+    This is used to make sure that the index and the corpus are consistent.
+
+    """
+
+    def docs(self, keys: Iterable) -> Iterable[tuple[Any, Any]]:
+        """
+        Retrieve documents identified by the given keys.
+
+        The return must be an iterator (preferably a generator) of document
+        keys and objects representing the document. There are no constraints
+        on what the document *is* in Python.
+
+        """
+
+    def keys(self) -> Iterable:
+        """
+        Iterate through all keys in the corpus.
+
+        This enables enumeration of the entire collection of documents and
+        their identifiers.
+
+        Keys may be any single value other than None that can be inserted into
+        an SQLite table.
+
+        """
+
+    def indexable_docs(self, keys: Iterable) -> Iterable[tuple[Any, IndexableDoc]]:
+        """
+        Iterate through the indexable form of a document for the given keys.
+
+        This is called directly by the `Index.index` method - note that the BaseCorpus
+        provides some additional machinery using the fields specification to create
+        this automatically.
+
+        """
+
+    def close(self) -> None:
+        """
+        Close this corpus, cleaning up all open objects.
+
+        There may be no cleanup necessary, in which case this is a no-op.
+
+        """
+
+
+class BaseCorpus:
+    """
+    The BaseCorpus provides a starting point implementing your own corpus.
+
+
+    """
+
+    fields = {}
 
     @abc.abstractmethod
-    def docs(self, doc_keys=None):
+    def docs(self, keys: Iterable) -> Iterable[tuple[Any, Any]]:
         """
-        Return an iterator of key-document pairs matching the given keys.
-
-        If doc_keys is None, all documents will be iterated over.
+        Retrieve documents identified by the given keys.
 
         """
 
     @abc.abstractmethod
-    def keys(self):
-        """An iterator of all document keys present."""
+    def keys(self) -> Iterable:
+        """
+        Iterate through all keys in the corpus.
+
+        """
 
     @abc.abstractmethod
-    def index(self, doc):
+    def close(self) -> None:
         """
-        Returns a mapping of the indexable fields in the document:
+        Close this corpus, cleaning up all open objects.
 
-            {
-                "field1": [value1, value2],
-                "field2": [value],
-                "field3": {value_a, value_b}
+        """
+
+    def indexable_docs(self, keys: Iterable) -> Iterable[tuple[Any, IndexableDoc]]:
+        """
+        Iterate through the indexable form of docs identified by the keys.
+
+        This uses the field extractors specified on the fields attribute of
+        this corpus to automatically extract all values.
+
+        """
+        docs = self.docs(keys)
+
+        for key, doc in docs:
+            indexable = {
+                field: extractor.extract(doc)
+                for field, extractor in self.fields.items()
             }
 
-        Values need not be deduplicated: the indexer will take care of that
-        for the boolean query construction, and leaving duplicates allows for
-        things like Bag of Feature counts.
-
-        """
-
-    def close(self):
-        """Close any open resources associated with this corpus."""
-
-    def __getitem__(self, doc_key):
-        return self.docs([doc_key])
-
-    def __iter__(self):
-        return self.docs(doc_keys=None)
-
-
-@runtime_checkable
-class WebRenderableCorpus(BaseCorpus, Protocol):
-    """A corpus that supports rendering of documents through the server interface."""
-
-    @abc.abstractmethod
-    def render_docs_html(self, doc_keys):
-        """Render documents into a list of HTML strings."""
-
-
-@runtime_checkable
-class TableRenderableCorpus(BaseCorpus, Protocol):
-    """A corpus that supports rendering of documents in tabular contexts."""
-
-    @property
-    def table_fields(self) -> Sequence[str]:
-        """The sequence of field names to be rendered in the tabular context."""
-
-    @abc.abstractmethod
-    def render_docs_table(self, doc_keys) -> Sequence[tuple[Any, dict[str, Any]]]:
-        """
-        Render a series of documents into a form suitable for a spreadsheet.
-
-        This enables spreadsheet export and sampling of documents.
-
-        """
+            yield key, indexable
 
 
 class SqliteBackedCorpus(BaseCorpus):
@@ -124,8 +218,7 @@ class SqliteBackedCorpus(BaseCorpus):
 
         You will still need to:
 
-        - Add the CORPUS_TYPE class attribute
-        - Define the docs, keys and index methods
+        - Define the docs and keys methods.
 
         """
 
@@ -165,12 +258,21 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
     """
 
     CORPUS_TYPE = "PlainTextSqliteCorpus"
-    table_fields = ["text"]
 
     def __init__(self, db_path, tokeniser=utilities.tokens):
         super().__init__(db_path)
 
         self.tokeniser = tokeniser
+
+        class TextField:
+            """A standard text field class."""
+
+            @classmethod
+            def extract(cls, doc):
+                """Extract the tokens from the text"""
+                return tokeniser(doc["text"])
+
+        self.fields = {"text": TextField}
 
     def __getstate__(self):
         return self.db_path, self.tokeniser
@@ -206,15 +308,10 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release add_texts")
 
-    def docs(self, doc_keys=None):
+    def docs(self, keys):
         self.db.execute("savepoint docs")
         try:
-            # Note that it's valid to pass an empty sequence of doc_keys,
-            # so we need to check sentinel explicitly.
-            if doc_keys is None:
-                doc_keys = self.keys()
-
-            for key in doc_keys:
+            for key in keys:
                 doc = list(
                     self.db.execute(
                         "select doc_id, text from doc where doc_id = ?", [key]
@@ -228,25 +325,9 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
     def keys(self):
         return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
 
-    def index(self, doc):
-        return {
-            "text": self.tokeniser(doc["text"]),
-        }
-
-    def render_docs_html(self, doc_keys):
+    def html_docs(self, keys):
         """Return the given documents as HTML."""
-        return [(key, doc["text"]) for key, doc in self.docs(doc_keys=doc_keys)]
-
-    def render_docs_table(self, doc_keys):
-        """
-        Return the documents for rendering in a spreadsheet or table.
-
-        The only field is "text" in this case.
-
-        """
-        return [
-            (key, {"text": doc["text"]}) for key, doc in self.docs(doc_keys=doc_keys)
-        ]
+        return [(key, f'<p>{doc["text"]}</p>') for key, doc in self.docs(keys)]
 
 
 STACKEXCHANGE_HTML = """
@@ -315,20 +396,6 @@ class StackExchangeCorpus(SqliteBackedCorpus):
     """
 
     CORPUS_TYPE = "StackExchangeCorpus"
-    table_fields = [
-        "site_url",
-        "Id",
-        "OwnerUserId",
-        "DisplayName",
-        "ContentLicense",
-        "PostType",
-        "Body",
-        "ParentId",
-        "QuestionTitle",
-        "LiveLink",
-        "tags",
-        "comments",
-    ]
 
     def add_site_data(self, posts_file, comments_file, users_file, site_url):
         """
@@ -546,16 +613,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             self.db.execute("rollback")
             raise
 
-    def docs(self, doc_keys=None):
+    def docs(self, keys):
         self.db.execute("savepoint docs")
 
         try:
-            # Note that it's valid to pass an empty sequence of doc_keys,
-            # so we need to check sentinel explicitly.
-            if doc_keys is None:
-                doc_keys = self.keys()
-
-            for key in doc_keys:
+            for key in keys:
                 doc = list(
                     self.db.execute(
                         """
@@ -697,13 +759,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
         return base_fields, tags, user_comments
 
-    def render_docs_html(self, doc_keys):
+    def html_docs(self, keys):
         """Render a HTML version of the stackexchange posts, including metadata."""
         self.db.execute("savepoint render_docs_html")
 
         docs = []
 
-        for key in doc_keys:
+        for key in keys:
             base_fields, tags, user_comments = self._get_rendered_doc_fields(key)
             docs.append(
                 (
@@ -722,34 +784,17 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
         return docs
 
-    def render_docs_table(self, doc_keys):
-        """Render a simplified tabular version of the stackexchange posts, including metadata."""
-        self.db.execute("savepoint render_docs_spreadsheet")
-
-        docs = []
-
-        for key in doc_keys:
-            base_fields, tags, user_comments = self._get_rendered_doc_fields(key)
-            base_fields["tags"] = ", ".join(tags)
-            base_fields["comments"] = json.dumps(
-                [
-                    {
-                        key: comment[key]
-                        for key in ["DisplayName", "Text", "ContentLicense"]
-                    }
-                    for comment in user_comments
-                ]
-            )
-            docs.append((key, base_fields))
-
-        self.db.execute("release render_docs_spreadsheet")
-
-        return docs
-
     def keys(self):
         return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
 
+    def indexable_docs(self, keys):
+        docs = self.docs(keys)
+
+        for key, doc in docs:
+            yield key, self.index(doc)
+
     def index(self, doc):
+        """Prepare a document for indexing."""
         code_blocks = []
 
         if doc["Body"]:

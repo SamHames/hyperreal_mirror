@@ -30,7 +30,7 @@
     {% if search_results %}
     <li>
         <div class="cluster-header">
-            {% if search_results|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
+            Sample of {{ total_docs }} documents.
         </div>
 
         {{ render_search_results(search_results, result_type) }}
