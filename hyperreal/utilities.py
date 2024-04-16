@@ -103,26 +103,6 @@ def bstm(matching, bitslice, top_k):
     return g | e
 
 
-def round_datetime(datetime):
-    """
-    Round the given datetime to different granularities.
-
-    Granularities are: minute, hour, day, month, year.
-
-    This function is provided because currently only literal values can be
-    searched - it is recommended to index rounded rather than exact
-    datetimes.
-
-    """
-    minute = datetime.replace(second=0, microsecond=0)
-    hour = minute.replace(minute=0)
-    day = hour.replace(hour=0)
-    month = day.replace(day=1)
-    year = month.replace(month=1)
-
-    return {"minute": minute, "hour": hour, "day": day, "month": month, "year": year}
-
-
 def compute_bitslice(bitmaps):
     """Compute the bitslice of the given bitmaps."""
     matching = BitMap()

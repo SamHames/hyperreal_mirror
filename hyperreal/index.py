@@ -22,11 +22,10 @@ from collections.abc import Iterable, Sequence
 from functools import wraps
 from typing import Any, Hashable, Optional, Union
 
-import networkx as nx
 from pyroaring import AbstractBitMap, BitMap
 
 from hyperreal import _index_schema, db_utilities, utilities
-from hyperreal.corpus import SupportsCorpus
+from hyperreal.corpus import Corpus
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +120,7 @@ class Index:
     def __init__(
         self,
         db_path,
-        corpus: Optional[SupportsCorpus] = None,
+        corpus: Corpus,
         pool=None,
         random_seed=None,
     ):
@@ -166,7 +165,7 @@ class Index:
             self._update_changed_clusters()
             self.db.execute("commit")
 
-        self._corpus = corpus
+        self.corpus = corpus
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -177,14 +176,6 @@ class Index:
 
         # Set up a context specific adapter for this index.
         self.logger = logging.LoggerAdapter(logger, {"index_db_path": self.db_path})
-
-    @property
-    def corpus(self):
-        """The corpus associated with this index."""
-        if self._corpus is None:
-            raise CorpusMissingError("This functionality requires a corpus.")
-
-        return self._corpus
 
     @property
     def pool(self):
@@ -228,7 +219,7 @@ class Index:
         self.close()
 
     def __getstate__(self):
-        return self.db_path, self._corpus
+        return self.db_path, self.corpus
 
     def __setstate__(self, args):
         self.__init__(args[0], corpus=args[1])
@@ -247,9 +238,7 @@ class Index:
             self._pool = None
 
         self.db.close()
-
-        if self._corpus is not None:
-            self._corpus.close()
+        self.corpus.close()
 
     @atomic()
     def __getitem__(self, key: FeatureKeyOrId) -> BitMap:
@@ -258,6 +247,11 @@ class Index:
 
         A feature is represented as either a integer `feature_id` or a tuple
         of `("field_name", value)`.
+
+        Note that an exception will be raised if the field doesn't exist, but not
+        if the value doesn't exist on a valid field. If the value doesn't exist on a
+        field the return result indicates no matching documents.
+
         """
 
         if isinstance(key, int):
@@ -273,10 +267,21 @@ class Index:
 
         elif isinstance(key, tuple):
             try:
+                field, value = key
+
+                if field not in self.corpus.field_values:
+                    raise KeyError(f"Field {field} does not exist on this index.")
+
+                indexed_value = self.corpus.field_values[field].to_index(value)
+
                 return list(
                     self.db.execute(
-                        "select doc_ids from inverted_index where (field, value) = (?, ?)",
-                        key,
+                        """
+                        select doc_ids 
+                        from inverted_index 
+                        where (field, value) = (?, ?)
+                        """,
+                        (field, indexed_value),
                     )
                 )[0][0]
             except IndexError:
@@ -298,17 +303,20 @@ class Index:
         )
 
         if results:
-            return results[0]
+            field, value = results[0]
+            return field, self.corpus.field_values[field].from_index(value)
 
         raise KeyError(f"Feature with id '{feature_id}' not found.")
 
     def lookup_feature_id(self, key: tuple[str, Any]) -> int:
-        """Lookup the (field, value) for this feature by feature_id."""
+        """Lookup the feature_id for this feature"""
 
+        field, value = key
+        indexed_value = self.corpus.field_values[field].to_index(value)
         results = list(
             self.db.execute(
                 "select feature_id from inverted_index where (field, value) = (?, ?)",
-                key,
+                (field, indexed_value),
             )
         )
 
@@ -317,7 +325,7 @@ class Index:
 
         raise KeyError(f"Feature with key '{key}' not found.")
 
-    def index(
+    def rebuild(
         self,
         doc_batch_size=1000,
         working_dir=None,
@@ -325,7 +333,7 @@ class Index:
         index_positions=False,
     ):
         """
-        Indexes the corpus, using the provided function or the corpus default.
+        Rebuilds the index from the corpus.
 
         This method will index the entire corpus from scratch. If the corpus has
         already been indexed, it will be atomically replaced.
@@ -638,8 +646,10 @@ class Index:
         values = []
         totals = []
 
+        converter = self.corpus.field_values[field].from_index
+
         for value, docs_count, doc_ids in self.iter_field_docs(field):
-            values.append(value)
+            values.append(converter(value))
             totals.append(docs_count)
 
             for name, query in queries.items():
@@ -1670,56 +1680,6 @@ class Index:
         self.db.execute("delete from changed_cluster")
 
     @atomic()
-    def create_cluster_cooccurrence_graph(self, top_k=5, include_field_in_label=True):
-        """
-        Create a networkx graph showing cluster-cluster relationships.
-
-        In this graph each cluster of features is a node, and the edges
-        between nodes show cluster overlap. Edges are weighted by the jaccard
-        similarity of documents belonging to each cluster.
-
-        Nodes are labelled with the top_k features from that node.
-
-        """
-
-        graph = nx.Graph()
-        clusters = self.top_cluster_features(top_k=top_k)
-        # First add basic node information
-        for cluster_id, doc_count, top_features in clusters:
-            if include_field_in_label:
-                label = ", ".join(
-                    f"{field}:{value}" for _, field, value, _ in top_features
-                )
-            else:
-                label = ", ".join(value for _, field, value, _ in top_features)
-
-            graph.add_node(cluster_id, document_count=doc_count, label=label)
-
-        # The compute all the pairwise cluster details, in parallel.
-        futures = set()
-
-        for i, (cluster_id, _, _) in enumerate(clusters):
-            query = self.cluster_docs(cluster_id)
-            comparison_clusters = [c[0] for c in clusters[i + 1 :]]
-            futures.add(
-                self.pool.submit(
-                    _calculate_query_cluster_cooccurrence,
-                    self,
-                    cluster_id,
-                    query,
-                    comparison_clusters,
-                )
-            )
-
-        for future in cf.as_completed(futures):
-            cluster_id, weights = future.result()
-
-            for o_cluster, sim, _ in weights:
-                graph.add_edge(cluster_id, o_cluster, weight=sim)
-
-        return graph
-
-    @atomic()
     def _or_partition_positions(self, features):
         # Make sure that all of the features are from the same field.
         fields_covered = set()
@@ -2046,7 +2006,9 @@ def _index_docs(corpus, batch_key_id_map, temp_db_path, index_positions, write_l
                     (
                         (
                             field,
-                            value,
+                            # Use the corpus specified ValueHandler for this field to
+                            # transform for the index.
+                            corpus.field_values[field].to_index(value),
                             len(docs),
                             docs,
                             len(positions),

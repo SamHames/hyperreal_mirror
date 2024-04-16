@@ -90,7 +90,7 @@ with open('corpus.txt', 'r') as f:
 # initialisation.
 idx = index.Index('corpus_index.db', corpus=c)
 # This only needs to be done once, unless the corpus changes.
-idx.index()
+idx.rebuild()
 
 # Create a model on this index, with 128 clusters and only including features
 # that match at least 10 documents.

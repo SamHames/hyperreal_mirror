@@ -10,6 +10,7 @@ import cherrypy
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 import hyperreal.index
+from hyperreal.corpus import EmptyCorpus
 
 # Cherrypy uses raise HTTPRedirect often, so this lint is just noise.
 # pylint: disable=raise-missing-from
@@ -565,7 +566,7 @@ class SingleIndexServer:
     def __init__(
         self,
         index_path,
-        corpus_class=None,
+        corpus_class=EmptyCorpus,
         corpus_args=None,
         corpus_kwargs=None,
         pool=None,

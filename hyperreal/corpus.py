@@ -12,6 +12,7 @@ import abc
 import re
 from collections import defaultdict
 from collections.abc import Hashable, Iterable, Mapping
+from html import escape
 from typing import Any, Protocol, Union
 from xml.etree import ElementTree
 
@@ -20,7 +21,7 @@ from jinja2 import Template
 from lxml.html import fragment_fromstring
 from markupsafe import Markup
 
-from hyperreal import utilities
+from hyperreal import utilities, value_handlers
 from hyperreal.db_utilities import connect_sqlite, dict_factory
 
 Feature = tuple[str, Hashable]
@@ -32,8 +33,8 @@ SQLite column.
 
 Examples of features could be:
 
-- The datetime a document was created as an ISO8601 string: 
-    `('created_at', '2024-01-01T00:00:00')`
+- The datetime a document was created:
+    `('created_at', datetime(2024, 1, 1))`
 - A single word extracted from a text field: 
     `('text', 'cat')`
 - A numerical quantity, like the number of likes on a social media post:
@@ -63,7 +64,7 @@ An example IndexableDoc could be:
 ```
 {   
     # A singular value field.
-    'creation_date': '2024-03-01',
+    'creation_date': date(2024, 03, 01)',
 
     # The tokens extracted from the text.
     'text': ['the', 'cat', 'sat', 'on', 'the', 'mat'],
@@ -78,37 +79,32 @@ An example IndexableDoc could be:
 # pylint: disable=too-few-public-methods
 
 
-class Field(Protocol):
-    """A field describes how to extract and display specific components of a document."""
-
-    def __init__(self, value):
-        """Take a single value from the index and prepare it for transformation."""
-
-    @classmethod
-    def extract(cls, doc) -> FieldValues:
-        """Extract values for this field from the document."""
-
-
-class SupportsCorpus(Protocol):
-    """A corpus describes how to identify and retrieve and display documents."""
-
-    fields: Mapping[str, Field]
+class Corpus(Protocol):
     """
-    The fields object gives a mapping describing how to convert and extract.
+    A corpus describes how to identify and retrieve and display documents.
 
-    The fields in the fields attribute should align with the output of the
+    Note that corpus objects must also be picklable.
+
+    """
+
+    field_values: Mapping[str, value_handlers.ValueHandler]
+    """
+    Maps fields to their ValueHandler that describes how to transform them.
+
+    There must be an entry in field_values for every field output by the
     `indexable_docs` method.
 
     """
 
     CORPUS_TYPE: str
     """
-    The type of corpus.
+    A name for this type of corpus.
 
-    This is used to make sure that the index and the corpus are consistent.
+    This will be used to make sure that the index and the corpus are consistent.
 
     """
 
+    @abc.abstractmethod
     def docs(self, keys: Iterable) -> Iterable[tuple[Any, Any]]:
         """
         Retrieve documents identified by the given keys.
@@ -119,6 +115,7 @@ class SupportsCorpus(Protocol):
 
         """
 
+    @abc.abstractmethod
     def keys(self) -> Iterable:
         """
         Iterate through all keys in the corpus.
@@ -131,16 +128,23 @@ class SupportsCorpus(Protocol):
 
         """
 
+    @abc.abstractmethod
     def indexable_docs(self, keys: Iterable) -> Iterable[tuple[Any, IndexableDoc]]:
         """
         Iterate through the indexable form of a document for the given keys.
 
-        This is called directly by the `Index.index` method - note that the BaseCorpus
-        provides some additional machinery using the fields specification to create
-        this automatically.
+        This is called directly by the `Index.index` method.
 
         """
 
+    @abc.abstractmethod
+    def html_docs(self, keys: Iterable) -> Iterable[tuple[Any, str]]:
+        """
+        Return iterable of HTML representations of the docs identified by the keys.
+
+        """
+
+    @abc.abstractmethod
     def close(self) -> None:
         """
         Close this corpus, cleaning up all open objects.
@@ -150,56 +154,36 @@ class SupportsCorpus(Protocol):
         """
 
 
-class BaseCorpus:
+class EmptyCorpus(Corpus):
     """
-    The BaseCorpus provides a starting point implementing your own corpus.
+    A specialised corpus object that will not access or retrieve documents.
 
+    This is useful only in places where you don't need to know anything about the
+    documents or the extracted values, such as for running feature clustering
+    algorithms over an index, which does not require access to the underlying
+    documents.
 
     """
 
-    fields = {}
+    field_values = defaultdict(value_handlers.ValueHandler)
 
-    @abc.abstractmethod
-    def docs(self, keys: Iterable) -> Iterable[tuple[Any, Any]]:
-        """
-        Retrieve documents identified by the given keys.
+    def docs(self, keys):
+        return []
 
-        """
+    def keys(self):
+        return []
 
-    @abc.abstractmethod
-    def keys(self) -> Iterable:
-        """
-        Iterate through all keys in the corpus.
+    def close(self):
+        return
 
-        """
+    def indexable_docs(self, keys):
+        return []
 
-    @abc.abstractmethod
-    def close(self) -> None:
-        """
-        Close this corpus, cleaning up all open objects.
-
-        """
-
-    def indexable_docs(self, keys: Iterable) -> Iterable[tuple[Any, IndexableDoc]]:
-        """
-        Iterate through the indexable form of docs identified by the keys.
-
-        This uses the field extractors specified on the fields attribute of
-        this corpus to automatically extract all values.
-
-        """
-        docs = self.docs(keys)
-
-        for key, doc in docs:
-            indexable = {
-                field: extractor.extract(doc)
-                for field, extractor in self.fields.items()
-            }
-
-            yield key, indexable
+    def html_docs(self, keys):
+        return []
 
 
-class SqliteBackedCorpus(BaseCorpus):
+class SqliteBackedCorpus(Corpus):
     """A helper class for creating corpuses backed by SQLite databases."""
 
     # pylint: disable=abstract-method
@@ -216,9 +200,7 @@ class SqliteBackedCorpus(BaseCorpus):
         This handles some basic things like saving the database path and ensuring
         that the corpus object is picklable for multiprocessing.
 
-        You will still need to:
-
-        - Define the docs and keys methods.
+        You will still need to define the docs and keys methods.
 
         """
 
@@ -259,20 +241,11 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 
     CORPUS_TYPE = "PlainTextSqliteCorpus"
 
+    field_values = {"text": value_handlers.StringHandler()}
+
     def __init__(self, db_path, tokeniser=utilities.tokens):
         super().__init__(db_path)
-
         self.tokeniser = tokeniser
-
-        class TextField:
-            """A standard text field class."""
-
-            @classmethod
-            def extract(cls, doc):
-                """Extract the tokens from the text"""
-                return tokeniser(doc["text"])
-
-        self.fields = {"text": TextField}
 
     def __getstate__(self):
         return self.db_path, self.tokeniser
@@ -322,12 +295,19 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
+    def indexable_docs(self, keys):
+        for key, doc in self.docs(keys):
+            yield key, {"text": self.tokeniser(doc["text"])}
+
     def keys(self):
         return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
 
     def html_docs(self, keys):
         """Return the given documents as HTML."""
-        return [(key, f'<p>{doc["text"]}</p>') for key, doc in self.docs(keys)]
+        return [
+            (key, Markup(f'<p>{escape(doc["text"])}</p>)'))
+            for key, doc in self.docs(keys)
+        ]
 
 
 STACKEXCHANGE_HTML = """
@@ -396,6 +376,20 @@ class StackExchangeCorpus(SqliteBackedCorpus):
     """
 
     CORPUS_TYPE = "StackExchangeCorpus"
+
+    field_values = {
+        "UserPosting": value_handlers.StringHandler(),
+        "Post": value_handlers.StringHandler(),
+        "CodeBlock": value_handlers.StringHandler(),
+        "Tag": value_handlers.StringHandler(),
+        "UserCommenting": value_handlers.StringHandler(),
+        "Comment": value_handlers.StringHandler(),
+        "Site": value_handlers.StringHandler(),
+        "PostType": value_handlers.StringHandler(),
+        "CreationDate": value_handlers.DateHandler(),
+        "CreationMonth": value_handlers.DateHandler(),
+        "CreationYear": value_handlers.DateHandler(),
+    }
 
     def add_site_data(self, posts_file, comments_file, users_file, site_url):
         """
@@ -813,8 +807,10 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         else:
             post_text = ""
 
+        creation_date = isoparse(doc["CreationDate"]).date()
+
         indexed = {
-            "UserPosting": set([doc["DisplayName"]]),
+            "UserPosting": doc["DisplayName"],
             "Post": utilities.tokens((doc["Title"] or ""))
             + utilities.tokens(post_text),
             "CodeBlock": [
@@ -823,19 +819,16 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             "Tag": doc["Tags"],
             # Comments from deleted users remain, but have no UserId associated.
             "UserCommenting": {u["DisplayName"] for u in doc["UserComments"]},
+            # Note that all comments are treated as a single field - this is not ideal.
             "Comment": [
                 t for c in doc["UserComments"] for t in utilities.tokens(c["Text"])
             ],
-            "Site": set([doc["site_url"]]),
-            "PostType": set([doc["PostType"]]),
+            "Site": doc["site_url"],
+            "PostType": doc["PostType"],
+            # Note rounded to the nearest UTC date to avoid too many values.
+            "CreationDate": creation_date,
+            "CreationMonth": creation_date.replace(day=1),
+            "CreationYear": creation_date.replace(month=1, day=1),
         }
-
-        created_at = isoparse(doc["CreationDate"])
-        rounded_times = utilities.round_datetime(created_at)
-        for granularity, timestamp in rounded_times.items():
-            # Don't bother indexing at minute/hour granularity - just day/month/year
-            if granularity in ("minute", "hour"):
-                continue
-            indexed[f"created_{granularity}"] = set([timestamp.isoformat()])
 
         return indexed

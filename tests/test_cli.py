@@ -21,8 +21,6 @@ def test_plaintext_corpus(tmp_path):
     """Basic tests of the plaintext corpus support."""
     target_corpora_db = tmp_path / "test.db"
     target_index_db = tmp_path / "test_index.db"
-    target_graphml = tmp_path / "test.graphml"
-    target_csv = tmp_path / "test.csv"
 
     runner = CliRunner()
 
@@ -73,36 +71,6 @@ def test_plaintext_corpus(tmp_path):
         cli.model,
         args + ["--restart"],
         input="Y",
-    )
-
-    assert result.exit_code == 0
-
-    # Graph
-    result = runner.invoke(
-        cli.export,
-        ["graph", str(target_index_db), str(target_graphml)],
-    )
-
-    assert result.exit_code == 0
-
-    # Graph
-    result = runner.invoke(
-        cli.export,
-        [
-            "graph",
-            str(target_index_db),
-            str(target_graphml),
-            "--exclude-field-in-label",
-        ],
-    )
-
-    assert result.exit_code == 0
-
-    # Clusters
-
-    result = runner.invoke(
-        cli.export,
-        ["clusters", str(target_index_db), str(target_csv)],
     )
 
     assert result.exit_code == 0
