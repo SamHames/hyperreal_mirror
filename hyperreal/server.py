@@ -85,7 +85,7 @@ class Cluster:
 
         # Redirect to the index overview page to create a new model if no
         # index has been created.
-        if not cherrypy.request.index.cluster_ids:
+        if not idx.cluster_ids:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
 
         ## Cluster specific navigation
@@ -104,7 +104,7 @@ class Cluster:
         ]
 
         # Pinned clusters can't be changed, only unpinned
-        pinned = int(cluster_id in cherrypy.request.index.pinned_cluster_ids)
+        pinned = int(cluster_id in idx.pinned_cluster_ids)
 
         # Set defaults to be used if neither cluster/feature_id are provided. In this
         # case there is no query to drive contextualisation, and no docs to display.
@@ -261,9 +261,9 @@ class Cluster:
         Currently this is limited to exact matches on a single value only.
 
         """
-
-        search_value = cherrypy.request.index.field_values[field].from_str(value)
-        feature_id = cherrypy.request.index.lookup_feature_id((field, search_value))
+        idx = cherrypy.request.index
+        search_value = idx.field_values[field].from_str(value)
+        feature_id = idx.lookup_feature_id((field, search_value))
 
         raise cherrypy.HTTPRedirect(
             f"/index/{index_id}/cluster/{cluster_id}/?feature_id={feature_id}"
@@ -586,9 +586,9 @@ class Index:
         cluster view.
 
         """
-
-        search_value = cherrypy.request.index.field_values[field].from_str(value)
-        feature_id = cherrypy.request.index.lookup_feature_id((field, search_value))
+        idx = cherrypy.request.index
+        search_value = idx.field_values[field].from_str(value)
+        feature_id = idx.lookup_feature_id((field, search_value))
 
         if cluster_id is not None:
             raise cherrypy.HTTPRedirect(
@@ -603,10 +603,11 @@ class Index:
         Show the details of the index, including indexed fields and associated cardinalities.
 
         """
+        idx = cherrypy.request.index
 
         template = templates.get_template("details.html")
-        current_clusters = len(cherrypy.request.index.cluster_ids)
-        field_summary = cherrypy.request.index.indexed_field_summary()
+        current_clusters = len(idx.cluster_ids)
+        field_summary = idx.indexed_field_summary()
 
         return template.render(
             field_summary=field_summary,
@@ -657,13 +658,14 @@ class Index:
         Note that this does not actually run any iterations of refinement.
 
         """
-        cherrypy.request.index.initialise_clusters(
+        idx = cherrypy.request.index
+        idx.initialise_clusters(
             n_clusters=int(clusters),
             min_docs=int(min_docs),
             include_fields=include_fields or None,
         )
 
-        cherrypy.request.index.refine_clusters(
+        idx.refine_clusters(
             iterations=int(iterations),
             minimum_cluster_features=int(minimum_cluster_features),
         )
