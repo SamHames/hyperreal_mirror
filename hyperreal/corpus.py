@@ -133,7 +133,7 @@ class Corpus(Protocol):
         """
         Iterate through the indexable form of a document for the given keys.
 
-        This is called directly by the `Index.index` method.
+        This is called directly by the `Index.rebuild` method.
 
         """
 
@@ -165,7 +165,7 @@ class EmptyCorpus(Corpus):
 
     """
 
-    field_values = defaultdict(value_handlers.ValueHandler)
+    field_values = defaultdict(value_handlers.NoopHandler)
 
     def docs(self, keys):
         return []

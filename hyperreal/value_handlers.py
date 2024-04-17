@@ -69,7 +69,7 @@ class SupportsSegment(Protocol):
         Take a segment of a sequence of values and render it to a single string.
 
         This is used to create passages and concordances from the output of
-        `indexable_docs`
+        `indexable_docs`.
 
         """
         selected_values = values[start:end]
@@ -88,7 +88,7 @@ class SupportsSegment(Protocol):
         Take a segment of a sequence of values and render it to a single HTML string.
 
         This is used to create passages and concordances from the output of
-        `indexable_docs`
+        `indexable_docs`.
 
         """
         selected_values = values[start:end]
@@ -96,11 +96,15 @@ class SupportsSegment(Protocol):
         if highlight is not None:
             highlight = set(highlight)
             selected_values = [
-                f"<mark>{escape(value)}<mark>" if value in highlight else value
+                f"<mark>{escape(value)}</mark>" if value in highlight else value
                 for value in selected_values
             ]
 
         return Markup(" ".join(selected_values))
+
+
+class NoopHandler(ValueHandler):
+    """A simple handler that does nothing but pass values through."""
 
 
 class StringHandler(SupportsSegment, ValueHandler):

@@ -343,10 +343,6 @@ def test_fixed_seed(example_index_corpora_path, pool, n_clusters):
     """
     Test creation of a model (the core numerical component!).
 
-    Note that byte for byte repeatability is only guaranteed with a single
-    worker processing pool, as currently there is a dependency on the order
-    of operations - this might be fixed in the future.
-
     """
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
     idx = hyperreal.index.Index(

@@ -11,48 +11,7 @@
 {%- endmacro %}
 
 
-{% macro render_all_field_matches(matches) %}
-<table class="concordance-table">
-    <caption>Documents and properties matching the query.</caption>
-    <thead>
-        <tr>
-            <th>Document</th>
-            <th>Field</th>
-            <th>Value</th>
-            <th>Concordances</th>
-        </tr>
-    </thead>
 
-    <tbody>
-    {% for doc_key, doc_id, field_matches in matches %}
-        {% set doc_loop = loop %}
-        {% for field, matches in field_matches.items() %}
-            {% set field_loop = loop %}
-            {% for value, concordances in matches.items() %}
-            <tr>
-                {% if doc_loop.changed(doc_key) %}
-                    <th rowspan="{{ field_matches.values() | map('length') | sum }}">{{ doc_key }}</th>
-                {% endif %}
-                {% if field_loop.changed(field) %}
-                    <td rowspan="{{ matches|length }}">{{ field }}</td>
-                {% endif %}
-                <td>{{ value }}</td>
-                <td>
-                    {% if concordances %}
-                    <ul class="concordances">
-                        {% for line in concordances %}
-                        <li class="concordance-line">{{ line }}</li>
-                        {% endfor %}
-                    </ul>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        {% endfor %}
-    {% endfor %}
-    </tbody>
-</table>
-{%- endmacro %}
 
 
 
@@ -120,7 +79,7 @@
 {%- endmacro %}
 
 
-{% macro render_search_results(results, result_type) -%}
+{% macro render_single_result(doc_html, matching_context) -%}
     {% if result_type == 'concordances' %}
         {{ render_all_field_matches(results) }}
 
@@ -139,5 +98,74 @@
         </ul>
     {% endif %}
 
+{%- endmacro %}
+
+
+{% macro render_all_field_matches(matches) %}
+<table class="concordance-table">
+    <caption>Documents and properties matching the query.</caption>
+    <thead>
+        <tr>
+            <th>Document</th>
+            <th>Field</th>
+            <th>Value</th>
+            <th>Concordances</th>
+        </tr>
+    </thead>
+
+    <tbody>
+    {% for doc_key, doc_id, field_matches in matches %}
+        {% set doc_loop = loop %}
+        {% for field, matches in field_matches.items() %}
+            {% set field_loop = loop %}
+            {% for value, concordances in matches.items() %}
+            <tr>
+                {% if doc_loop.changed(doc_key) %}
+                    <th rowspan="{{ field_matches.values() | map('length') | sum }}">{{ doc_key }}</th>
+                {% endif %}
+                {% if field_loop.changed(field) %}
+                    <td rowspan="{{ matches|length }}">{{ field }}</td>
+                {% endif %}
+                <td>{{ value }}</td>
+                <td>
+                    {% if concordances %}
+                    <ul class="concordances">
+                        {% for line in concordances %}
+                        <li class="concordance-line">{{ line }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        {% endfor %}
+    {% endfor %}
+    </tbody>
+</table>
+{%- endmacro %}
+
+
+{% macro render_search_result(doc, matches, snippets) -%}
+{% if snippets %}
+<details>
+    <summary>Snippets</summary>
+    {% for snippet in snippets %}
+    <p>
+        {{ snippet }}
+    </p>
+    {% endfor %}
+</details>
+{% endif %}
+<dl>
+    {% for field, values in matches.items() %}
+    <dt>{{ field }}</dt>
+    <dd>
+        {% for value in values %}
+        <span>{{ value }}</span>
+        {% endfor %}
+    </dd>
+    {% endfor %}
+</dl>
+<div>{{doc}}</div>
 {%- endmacro %}
 

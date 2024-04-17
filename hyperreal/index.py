@@ -18,7 +18,7 @@ import os
 import random
 import sqlite3
 import tempfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Sequence, Set
 from functools import wraps
 from typing import Any, Hashable, Optional, Union
 
@@ -166,6 +166,7 @@ class Index:
             self.db.execute("commit")
 
         self.corpus = corpus
+        self.field_values = corpus.field_values
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -269,10 +270,10 @@ class Index:
             try:
                 field, value = key
 
-                if field not in self.corpus.field_values:
+                if field not in self.field_values:
                     raise KeyError(f"Field {field} does not exist on this index.")
 
-                indexed_value = self.corpus.field_values[field].to_index(value)
+                indexed_value = self.field_values[field].to_index(value)
 
                 return list(
                     self.db.execute(
@@ -304,7 +305,7 @@ class Index:
 
         if results:
             field, value = results[0]
-            return field, self.corpus.field_values[field].from_index(value)
+            return field, self.field_values[field].from_index(value)
 
         raise KeyError(f"Feature with id '{feature_id}' not found.")
 
@@ -312,7 +313,7 @@ class Index:
         """Lookup the feature_id for this feature"""
 
         field, value = key
-        indexed_value = self.corpus.field_values[field].to_index(value)
+        indexed_value = self.field_values[field].to_index(value)
         results = list(
             self.db.execute(
                 "select feature_id from inverted_index where (field, value) = (?, ?)",
@@ -613,16 +614,24 @@ class Index:
         Iteration is by lexicographical order of the values.
 
         """
+        if field not in self.field_values:
+            raise KeyError(
+                f"Field {field} is not defined on this index. "
+                f"Valid fields are {self.field_values.keys()}"
+            )
 
-        value_docs = self.db.execute(
-            """
-            select value, docs_count, doc_ids
-            from inverted_index
-            where field = ?1
-                and docs_count >= ?2
-            order by value
-            """,
-            [field, min_docs],
+        value_docs = (
+            (self.field_values[field].from_index(row[0]), *row[1:])
+            for row in self.db.execute(
+                """
+                select value, docs_count, doc_ids
+                from inverted_index
+                where field = ?1
+                    and docs_count >= ?2
+                order by value
+                """,
+                [field, min_docs],
+            )
         )
 
         yield from value_docs
@@ -646,10 +655,8 @@ class Index:
         values = []
         totals = []
 
-        converter = self.corpus.field_values[field].from_index
-
         for value, docs_count, doc_ids in self.iter_field_docs(field):
-            values.append(converter(value))
+            values.append(value)
             totals.append(docs_count)
 
             for name, query in queries.items():
@@ -710,6 +717,46 @@ class Index:
 
         keys = self.convert_query_to_keys(query)
         return ((keys[doc[0]], *doc) for doc in self.corpus.indexable_docs(keys))
+
+    @staticmethod
+    def match_doc_features(
+        indexable_doc, features_to_match
+    ) -> dict[str, dict[Any, list]]:
+        """
+        Identify which parts of `features` occur in this `indexable_doc`.
+
+        This returns a mapping showing the fields and associated values that match the
+        doc from the given list of features. If the field is a positional/sequence
+        field it will also return the numerical offset of that value in the field to
+        allow the production of concordances, snippets or passages.
+
+        This can be used with a set of features constituting a query and the
+        `indexable_docs` method to annotate a set of results with appropriate context
+        to show why this document was retrieved for this query.
+
+        """
+        matches = collections.defaultdict(lambda: collections.defaultdict(list))
+
+        for field, match_values in features_to_match.items():
+            if field not in indexable_doc:
+                continue
+
+            doc_values = indexable_doc[field]
+
+            if isinstance(doc_values, Sequence):
+                for position, value in enumerate(doc_values):
+                    if value in match_values:
+                        matches[field][value].append(position)
+
+            elif isinstance(doc_values, Set):
+                for value in doc_values & match_values:
+                    matches[field][value] = []
+
+            else:
+                if doc_values in match_values:
+                    matches[field][doc_values] = []
+
+        return matches
 
     @atomic()
     def structured_doc_sample(self, docs_per_cluster=100, cluster_ids=None):
@@ -868,7 +915,7 @@ class Index:
         self.logger.info(f"Delete features {feature_ids}.")
 
     def next_cluster_id(self):
-        """Returns a new cluster_id, guaranteed to be higher than anything already assigned."""
+        """Return a new cluster_id, higher than anything already assigned."""
         next_cluster_id = list(
             self.db.execute(
                 """
@@ -1063,8 +1110,9 @@ class Index:
         document count are returned in descending order.
 
         """
-        cluster_features = list(
-            self.db.execute(
+        cluster_features = [
+            (*row[:2], self.field_values[row[1]].from_index(row[2]), row[3])
+            for row in self.db.execute(
                 """
                 select
                     feature_id,
@@ -1081,7 +1129,7 @@ class Index:
                 """,
                 [cluster_id, top_k],
             )
-        )
+        ]
 
         return cluster_features
 
@@ -1902,7 +1950,7 @@ def _index_docs(corpus, batch_key_id_map, temp_db_path, index_positions, write_l
 
                 # handle document value presence for different kinds of fields
                 # lists -> positional information to be optionally indexed
-                if isinstance(values, list):
+                if isinstance(values, Sequence):
                     if index_positions:
                         positional = True
 
@@ -1910,7 +1958,7 @@ def _index_docs(corpus, batch_key_id_map, temp_db_path, index_positions, write_l
                     # indexing.
                     doc_values = set(values)
 
-                elif isinstance(values, set):
+                elif isinstance(values, Set):
                     # No work necessary, but we do need to distinguish between
                     # sets and single values so we can convert the latter.
                     doc_values = values
