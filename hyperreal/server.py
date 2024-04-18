@@ -534,7 +534,7 @@ class Index:
                         idx.field_values[field].segment_to_html(
                             doc_field_values,
                             start,
-                            end,
+                            end + 1,
                             highlight=values,
                         )
                         for start, end in zip(starts, ends)
