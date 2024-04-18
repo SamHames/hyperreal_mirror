@@ -18,6 +18,7 @@ import zipfile
 from lxml import html
 from markupsafe import Markup
 
+from hyperreal import value_handlers
 from hyperreal.index import Index
 from hyperreal.corpus import SqliteBackedCorpus
 from hyperreal.utilities import tokens
@@ -27,6 +28,18 @@ import hyperreal.server
 class HansardCorpus(SqliteBackedCorpus):
     CORPUS_TYPE = "Australian Federal Hansard"
 
+    field_values = {
+        "text": value_handlers.StringHandler(),
+        "house": value_handlers.StringHandler(),
+        "debate_id": value_handlers.StringHandler(),
+        "date": value_handlers.DateHandler(),
+        "month": value_handlers.DateHandler(),
+        "year": value_handlers.DateHandler(),
+        "parl_no": value_handlers.IntegerHandler(),
+        "html_classes": value_handlers.StringHandler(),
+        "html_tags": value_handlers.StringHandler(),
+    }
+
     def __init__(self, db_path):
         """
         A corpus to wrap around the data model found in https://github.com/SamHames/hansard-tidy
@@ -34,7 +47,7 @@ class HansardCorpus(SqliteBackedCorpus):
         """
         super().__init__(db_path)
 
-    def docs(self, doc_keys=None):
+    def docs(self, doc_keys):
         self.db.execute("savepoint docs")
         try:
             # Note that it's valid to pass an empty sequence of doc_keys,
@@ -83,13 +96,13 @@ class HansardCorpus(SqliteBackedCorpus):
         year = month.replace(month=1)
 
         return {
-            "page": page_tokens,
-            "house": set([doc["house"]]),
-            "debate_id": set([doc["debate_id"]]),
-            "date": set([page_date.isoformat()]),
-            "month": set([month.isoformat()]),
-            "year": set([year.isoformat()]),
-            "parl_no": set([doc["parl_no"]]),
+            "text": page_tokens,
+            "house": doc["house"],
+            "debate_id": doc["debate_id"],
+            "date": page_date,
+            "month": month,
+            "year": year,
+            "parl_no": doc["parl_no"],
             # Index the formatting elements so we can systematically investigate them
             "html_classes": {
                 str(clss) for elem in root.iter() for clss in elem.classes
@@ -149,7 +162,7 @@ if __name__ == "__main__":
         idx = Index(db_index, corpus=corpus, pool=pool)
 
         if "index" in args:
-            idx.index(doc_batch_size=50000, index_positions=True)
+            idx.rebuild(doc_batch_size=50000, index_positions=True)
 
         if "cluster" in args:
             idx.initialise_clusters(
