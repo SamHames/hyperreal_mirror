@@ -1744,6 +1744,46 @@ class Index:
                 raise TypeError(f"Unsupported feature {f}.")
 
     @atomic()
+    def field_proximity_query(
+        self, field, value_clauses: list[list], window_size: int
+    ) -> BitMap():
+        """
+        Find documents where values co-occur within `window_size` proximity.
+
+        This is useful to create more specific and precise searches for language,
+        rather than just co-occurence in whole documents. This is especially helpful
+        for collections where whole documents may be long and topically diverse.
+
+        """
+
+        # Convert values to feature_ids
+        clause_feature_ids = [
+            [self.lookup_feature_id((field, value)) for value in clause]
+            for clause in value_clauses
+        ]
+
+        futures = set()
+
+        for first_doc_id in self._field_partitions(field):
+            futures.add(
+                self.pool.submit(
+                    _field_proximity_query,
+                    self,
+                    field,
+                    clause_feature_ids,
+                    first_doc_id,
+                    window_size,
+                )
+            )
+
+        matching_doc_ids = BitMap()
+
+        for future in cf.as_completed(futures):
+            matching_doc_ids |= future.result()
+
+        return matching_doc_ids
+
+    @atomic()
     def score_passages_dnf(
         self, feature_clauses: list[list[FeatureKeyOrId]], window_size: int
     ) -> dict[int, list[tuple[int, int, int]]]:
@@ -2282,6 +2322,61 @@ def _union_query(args):
             weight += len(docs)
 
     return query_key, query, weight
+
+
+def _field_proximity_query(idx, field, clause_feature_ids, first_doc_id, window_size):
+    """
+    Return documents where values occur near each other in a field.
+
+    `value_clauses` is a list of clauses in DNF: at least one value from each clause
+    must be within window_size of each for that position and document to match.
+
+    """
+
+    with idx:
+
+        _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
+
+        positions = idx._union_position_query(first_doc_id, clause_feature_ids[0])
+        valid_window = utilities.expand_positions_window(
+            positions, doc_boundaries, window_size
+        )
+
+        for clause in clause_feature_ids[1:]:
+
+            # Keep only the union positions that actually intersect with the
+            # existing window - these are the starts and ends of spans that
+            # can satisfy the spacing criteria.
+            clause_positions = (
+                idx._union_position_query(first_doc_id, clause) & valid_window
+            )
+
+            # Early termination if there's no matches at any point during a clause.
+            if not clause_positions:
+                return BitMap()
+
+            # Keep the remaining positions so we can count them as matching
+            positions |= clause_positions
+
+            # Update the windows by intersecting with the new valid windows
+            # from this clause.
+            valid_window &= utilities.expand_positions_window(
+                clause_positions, doc_boundaries, window_size
+            )
+
+        # Apply the final valid window to the positions.
+        positions &= valid_window
+
+        if not positions:
+            return BitMap()
+
+        # Convert matching positions to doc_ids containing the match by looking up
+        # in the header for this partition
+        matching_docs = BitMap(
+            doc_ids[doc_boundaries.rank(position) - 1] for position in positions
+        )
+
+        return matching_docs
 
 
 def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):

@@ -12,6 +12,7 @@ import logging
 import multiprocessing as mp
 import os
 import sys
+import textwrap
 import traceback
 import zipfile
 
@@ -134,6 +135,11 @@ class HansardCorpus(SqliteBackedCorpus):
             docs.append((key, Markup(doc_html)))
 
         return docs
+
+    def doc_to_str(self, doc):
+        root = html.fromstring(doc["page_html"])
+        text = " ".join(root.itertext()).strip()
+        return textwrap.fill(text, width=100, replace_whitespace=False)
 
     def keys(self):
         """The pages are the central document."""
