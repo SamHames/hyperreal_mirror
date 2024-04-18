@@ -18,7 +18,7 @@ import os
 import random
 import sqlite3
 import tempfile
-from collections.abc import Iterable, Sequence, Set
+from collections.abc import Iterable, Sequence
 from functools import wraps
 from typing import Any, Hashable, Optional, Union
 
@@ -743,12 +743,12 @@ class Index:
 
             doc_values = indexable_doc[field]
 
-            if isinstance(doc_values, Sequence):
+            if isinstance(doc_values, list):
                 for position, value in enumerate(doc_values):
                     if value in match_values:
                         matches[field][value].append(position)
 
-            elif isinstance(doc_values, Set):
+            elif isinstance(doc_values, set):
                 for value in doc_values & match_values:
                     matches[field][value] = []
 
@@ -1950,7 +1950,7 @@ def _index_docs(corpus, batch_key_id_map, temp_db_path, index_positions, write_l
 
                 # handle document value presence for different kinds of fields
                 # lists -> positional information to be optionally indexed
-                if isinstance(values, Sequence):
+                if isinstance(values, list):
                     if index_positions:
                         positional = True
 
@@ -1958,7 +1958,7 @@ def _index_docs(corpus, batch_key_id_map, temp_db_path, index_positions, write_l
                     # indexing.
                     doc_values = set(values)
 
-                elif isinstance(values, Set):
+                elif isinstance(values, set):
                     # No work necessary, but we do need to distinguish between
                     # sets and single values so we can convert the latter.
                     doc_values = values
