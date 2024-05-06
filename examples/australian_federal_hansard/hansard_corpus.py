@@ -83,11 +83,7 @@ class HansardCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
-    def indexable_docs(self, keys):
-        for key, doc in self.docs(keys):
-            yield key, self.index(doc)
-
-    def index(self, doc):
+    def doc_to_features(self, doc):
         root = html.fromstring(doc["page_html"])
 
         page_tokens = tokens(" ".join(root.itertext()))
@@ -111,30 +107,24 @@ class HansardCorpus(SqliteBackedCorpus):
             "html_tags": {str(elem.tag) for elem in root.iter()},
         }
 
-    def html_docs(self, doc_keys):
-        """Return the given documents as HTML."""
-        docs = []
+    def doc_to_html(self, doc):
+        summary = ", ".join(
+            doc[item] for item in ("date", "house", "title") if doc[item]
+        )
 
-        for key, doc in self.docs(doc_keys=doc_keys):
-            summary = ", ".join(
-                doc[item] for item in ("date", "house", "title") if doc[item]
-            )
+        doc_html = """
+            <details>
+                <summary>{}</summary>
+                <div>
+                    <a href="{}">See in context</a>
+                </div>
+                <div>{}</div>
+            </details>
+            """.format(
+            summary, doc["url"], doc["page_html"]
+        )
 
-            doc_html = """
-                <details>
-                    <summary>{}</summary>
-                    <div>
-                        <a href="{}">See in context</a>
-                    </div>
-                    <div>{}</div>
-                </details>
-                """.format(
-                summary, doc["url"], doc["page_html"]
-            )
-
-            docs.append((key, Markup(doc_html)))
-
-        return docs
+        return Markup(doc_html)
 
     def doc_to_str(self, doc):
         root = html.fromstring(doc["page_html"])
