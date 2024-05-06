@@ -241,7 +241,7 @@ class Cluster:
         return template.generate(
             clusters=clusters,
             total_docs=total_docs,
-            search_results=zip(html_docs, matches, snippets),
+            search_results=list(zip(html_docs, matches, snippets)),
             # Design note: might be worth letting templates grab the request
             # context, and avoid passing this around for everything that
             # needs it?
@@ -570,7 +570,7 @@ class Index:
         return template.generate(
             clusters=clusters,
             total_docs=total_docs,
-            search_results=zip(html_docs, matches, snippets),
+            search_results=list(zip(html_docs, matches, snippets)),
             # Design note: might be worth letting templates grab the request
             # context, and avoid passing this around for everything that
             # needs it?
