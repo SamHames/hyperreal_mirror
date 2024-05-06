@@ -111,7 +111,7 @@ class Cluster:
         highlight_feature_id = None
         query = idx.cluster_docs(cluster_id)
 
-        docs = []
+        html_docs = []
         matches = []
         snippets = []
         snippet_window = int(snippet_window)
@@ -159,13 +159,16 @@ class Cluster:
 
         sampled_docs = idx.sample_bitmap(query, int(exemplar_docs))
 
-        docs = list(idx.html_docs(sampled_docs))
+        for _, _, doc in idx.docs(sampled_docs):
 
-        for _, _, indexable_doc in idx.indexable_docs(sampled_docs):
-            feature_matches = idx.match_doc_features(indexable_doc, highlight_features)
+            html_docs.append(idx.corpus.doc_to_html(doc))
+
+            doc_features = idx.corpus.doc_to_features(doc)
+
+            feature_matches = idx.match_doc_features(doc_features, highlight_features)
 
             for field, values in feature_matches.items():
-                doc_field_values = indexable_doc[field]
+                doc_field_values = doc_features[field]
 
                 # Find matching positions across all values in the field to generate
                 # unified concordances
@@ -238,7 +241,7 @@ class Cluster:
         return template.generate(
             clusters=clusters,
             total_docs=total_docs,
-            search_results=zip(docs, matches, snippets),
+            search_results=zip(html_docs, matches, snippets),
             # Design note: might be worth letting templates grab the request
             # context, and avoid passing this around for everything that
             # needs it?
@@ -444,7 +447,7 @@ class Index:
         highlight_feature_id = None
         query = None
         total_docs = 0
-        docs = []
+        html_docs = []
         matches = []
         snippets = []
         snippet_window = int(snippet_window)
@@ -482,15 +485,18 @@ class Index:
 
             sampled_docs = idx.sample_bitmap(query, int(exemplar_docs))
 
-            docs = list(idx.html_docs(sampled_docs))
+            for _, _, doc in idx.docs(sampled_docs):
 
-            for _, _, indexable_doc in idx.indexable_docs(sampled_docs):
+                html_docs.append(idx.corpus.doc_to_html(doc))
+
+                doc_features = idx.corpus.doc_to_features(doc)
+
                 feature_matches = idx.match_doc_features(
-                    indexable_doc, highlight_features
+                    doc_features, highlight_features
                 )
 
                 for field, values in feature_matches.items():
-                    doc_field_values = indexable_doc[field]
+                    doc_field_values = doc_features[field]
 
                     # Find matching positions across all values in the field to generate
                     # unified concordances
@@ -564,7 +570,7 @@ class Index:
         return template.generate(
             clusters=clusters,
             total_docs=total_docs,
-            search_results=zip(docs, matches, snippets),
+            search_results=zip(html_docs, matches, snippets),
             # Design note: might be worth letting templates grab the request
             # context, and avoid passing this around for everything that
             # needs it?

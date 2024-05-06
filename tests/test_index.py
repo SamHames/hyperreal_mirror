@@ -128,18 +128,16 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     )
 
     # Test positional information extraction from documents.
-    matching_docs = idx.indexable_docs(idx[("text", "hatter")])
+    matching_docs = idx.docs(idx[("text", "hatter")])
 
-    for _, _, indexed_doc in matching_docs:
-        assert "hatter" in indexed_doc["text"]
+    for _, _, doc in matching_docs:
+        assert "hatter" in c.doc_to_features(doc)["text"]
 
-    # Test passage retrieval - because this is one line = one document,
-    # the passage retrieval is the same as the document retrieval
-    passage_query = [[("text", word)] for word in "hare hatter".split()]
-    score_passages = idx.score_passages_dnf(passage_query, 50)
+    # Test proximity query
+    hare_hatter = idx.field_proximity_query("text", [["hare"], ["hatter"]], 50)
 
-    assert len(score_passages) > 0
-    assert len(score_passages) == len(idx[("text", "hare")] & idx[("text", "hatter")])
+    assert len(hare_hatter)
+    assert len(hare_hatter) == len(idx[("text", "hare")] & idx[("text", "hatter")])
 
 
 @pytest.mark.parametrize("n_clusters", [4, 16, 64])
@@ -264,15 +262,10 @@ def test_querying(example_index_corpora_path, pool):
     assert q
     assert q == len(list(idx.convert_query_to_keys(query)))
     assert q == len(list(idx.docs(query)))
-    assert q == len(list(idx.html_docs(query)))
-    assert 5 == len(list(idx.html_docs(query, random_sample_size=5)))
+    assert 5 == len(list(idx.docs(idx.sample_bitmap(query, random_sample_size=5))))
 
     for _, _, doc in idx.docs(query):
         assert "the" in hyperreal.utilities.tokens(doc["text"])
-
-    # This is a hacky test, as we're tokenising the representation of the text.
-    for _, _, rendered_doc in idx.html_docs(query, random_sample_size=3):
-        assert "the" in hyperreal.utilities.tokens(rendered_doc)
 
     # Non existent field raises error:
     with pytest.raises(KeyError):

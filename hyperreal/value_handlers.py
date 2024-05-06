@@ -69,7 +69,7 @@ class SupportsSegment(Protocol):
         Take a segment of a sequence of values and render it to a single string.
 
         This is used to create passages and concordances from the output of
-        `indexable_docs`.
+        `corpus.doc_to_features`.
 
         """
         selected_values = values[start:end]
@@ -88,7 +88,7 @@ class SupportsSegment(Protocol):
         Take a segment of a sequence of values and render it to a single HTML string.
 
         This is used to create passages and concordances from the output of
-        `indexable_docs`.
+        `corpus.doc_to_features`.
 
         """
         selected_values = values[start:end]

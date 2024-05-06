@@ -1,5 +1,5 @@
 """
-A Hyperreal corpus describes how to access and display a set of documents.
+A Hyperreal corpus describes how to access and display documents and features.
 
 The corpus is the main site of customisation for the particulars of your
 dataset/collection of documents. The interface is designed so that you never
@@ -43,9 +43,9 @@ Examples of features could be:
 """
 
 FieldValues = Union[list[Hashable], set[Hashable], Hashable]
-IndexableDoc = Mapping[str, FieldValues]
+DocFeatures = Mapping[str, FieldValues]
 """
-An IndexableDoc is the structured format that the Hyperreal index uses.
+An DocFeatures is the structured format that the Hyperreal index uses.
 
 This indexable format of the document is a mapping of fields to values with
 the following requirements:
@@ -59,7 +59,7 @@ the following requirements:
 - A set of values indicates that this field has multiple values and order is
   *not* important - for example tags applied to a photograph.
 
-An example IndexableDoc could be:
+An example DocFeatures could be:
 
 ```
 {   
@@ -92,7 +92,7 @@ class Corpus(Protocol):
     Maps fields to their ValueHandler that describes how to transform them.
 
     There must be an entry in field_values for every field output by the
-    `indexable_docs` method.
+    `doc_to_features` method.
 
     """
 
@@ -105,7 +105,7 @@ class Corpus(Protocol):
     """
 
     @abc.abstractmethod
-    def docs(self, keys: Iterable) -> Iterable[tuple[Any, Any]]:
+    def docs(self, keys: Iterable) -> Iterable[tuple[Hashable, Any]]:
         """
         Retrieve documents identified by the given keys.
 
@@ -129,22 +129,17 @@ class Corpus(Protocol):
         """
 
     @abc.abstractmethod
-    def indexable_docs(self, keys: Iterable) -> Iterable[tuple[Any, IndexableDoc]]:
-        """
-        Iterate through the indexable form of a document for the given keys.
-
-        This is called directly by the `Index.rebuild` method.
-
-        """
+    def doc_to_features(self, doc) -> DocFeatures:
+        """Extract the features from the given document."""
 
     @abc.abstractmethod
-    def html_docs(self, keys: Iterable) -> Iterable[tuple[Any, str]]:
-        """
-        Return iterable of HTML representations of the docs identified by the keys.
+    def doc_to_html(self, doc):
+        """Return HTML representing the document."""
 
-        """
+    def doc_to_str(self, doc) -> str:
+        """Return a string representation of the document."""
+        return str(doc)
 
-    @abc.abstractmethod
     def close(self) -> None:
         """
         Close this corpus, cleaning up all open objects.
@@ -176,11 +171,14 @@ class EmptyCorpus(Corpus):
     def close(self):
         return
 
-    def indexable_docs(self, keys):
-        return []
+    def doc_to_features(self, doc):
+        return {}
 
-    def html_docs(self, keys):
-        return []
+    def doc_to_html(self, doc):
+        return ""
+
+    def doc_to_str(self, doc):
+        return ""
 
 
 class SqliteBackedCorpus(Corpus):
@@ -281,6 +279,9 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release add_texts")
 
+    def keys(self):
+        return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
+
     def docs(self, keys):
         self.db.execute("savepoint docs")
         try:
@@ -295,19 +296,14 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
-    def indexable_docs(self, keys):
-        for key, doc in self.docs(keys):
-            yield key, {"text": self.tokeniser(doc["text"])}
+    def doc_to_features(self, doc):
+        return {"text": self.tokeniser(doc["text"])}
 
-    def keys(self):
-        return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
+    def doc_to_html(self, doc):
+        return Markup(f'<p>{escape(doc["text"])}</p>)')
 
-    def html_docs(self, keys):
-        """Return the given documents as HTML."""
-        return [
-            (key, Markup(f'<p>{escape(doc["text"])}</p>)'))
-            for key, doc in self.docs(keys)
-        ]
+    def doc_to_str(self, doc):
+        return doc["text"]
 
 
 STACKEXCHANGE_HTML = """
@@ -648,7 +644,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 doc["Tags"] = {
                     r["Tag"]
                     for r in self.db.execute(
-                        "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
+                        """
+                        select Tag 
+                        from PostTag 
+                        where (site_id, PostId) = (:site_id, :TagPostId)
+                        """,
                         doc,
                     )
                 }
@@ -682,112 +682,21 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
-    TEMPLATE = Template(STACKEXCHANGE_HTML)
-
-    def _get_rendered_doc_fields(self, key):
-        base_fields = list(
-            self.db.execute(
-                """
-                select
-                    Post.site_id,
-                    site_url,
-                    Post.Id,
-                    -- Used to retrieve tags for the root question, as
-                    -- the tags are not present on answers, only questions.
-                    coalesce(Post.ParentId, Post.Id) as TagPostId,
-                    Post.OwnerUserId,
-                    (
-                        select DisplayName
-                        from User
-                        where
-                            (User.site_id, User.Id) =
-                            (Post.site_id, Post.OwnerUserId)
-                    ) as DisplayName,
-                    post.ContentLicense,
-                    post.PostType,
-                    post.Body,
-                    Post.ParentId,
-                    coalesce(Post.Title, parent.Title) as QuestionTitle,
-                    site_url || '/questions/' || Post.Id as LiveLink
-                from Post
-                inner join site using(site_id)
-                left outer join Post parent
-                    on (parent.site_id, parent.Id) =
-                        (Post.site_id, Post.ParentId)
-                where Post.doc_id = ?
-                """,
-                [key],
-            )
-        )[0]
-
-        tags = {
-            r["Tag"]
-            for r in self.db.execute(
-                "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
-                base_fields,
-            )
-        }
-
-        user_comments = list(
-            self.db.execute(
-                """
-                select
-                    site_url,
-                    UserId,
-                    (
-                        select DisplayName
-                        from User
-                        where
-                            (User.site_id, User.Id) =
-                            (comment.site_id, comment.UserId)
-                    ) as DisplayName,
-                    Text,
-                    ContentLicense
-                from comment
-                inner join site using(site_id)
-                where (site_id, PostId) = (:site_id, :Id)
-                """,
-                base_fields,
-            )
-        )
-
-        return base_fields, tags, user_comments
-
-    def html_docs(self, keys):
-        """Render a HTML version of the stackexchange posts, including metadata."""
-        self.db.execute("savepoint render_docs_html")
-
-        docs = []
-
-        for key in keys:
-            base_fields, tags, user_comments = self._get_rendered_doc_fields(key)
-            docs.append(
-                (
-                    key,
-                    Markup(
-                        self.TEMPLATE.render(
-                            base_fields=base_fields,
-                            tags=tags,
-                            user_comments=user_comments,
-                        )
-                    ),
-                )
-            )
-
-        self.db.execute("release render_docs_html")
-
-        return docs
-
     def keys(self):
         return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
 
-    def indexable_docs(self, keys):
-        docs = self.docs(keys)
+    TEMPLATE = Template(STACKEXCHANGE_HTML)
 
-        for key, doc in docs:
-            yield key, self.index(doc)
+    def doc_to_html(self, doc):
+        return Markup(
+            self.TEMPLATE.render(
+                base_fields=doc,
+                tags=doc["tags"],
+                user_comments=doc["user_comments"],
+            )
+        )
 
-    def index(self, doc):
+    def doc_to_features(self, doc):
         """Prepare a document for indexing."""
         code_blocks = []
 
@@ -809,7 +718,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
         creation_date = isoparse(doc["CreationDate"]).date()
 
-        indexed = {
+        doc_features = {
             "UserPosting": doc["DisplayName"],
             "Post": utilities.tokens((doc["Title"] or ""))
             + utilities.tokens(post_text),
@@ -831,4 +740,4 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             "CreationYear": creation_date.replace(month=1, day=1),
         }
 
-        return indexed
+        return doc_features
