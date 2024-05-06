@@ -1,19 +1,19 @@
 """
-For the purposes of hyperreal, a corpus is a collection of documents. A corpus
-object is a Data Access Object (DAO), that is responsible for representing and
-accessing documents stored elsewhere. The corpus is also responsible for
-describing how those documents are to be represented in the index.
+A Hyperreal corpus describes how to access and display documents and features.
 
-This module describes the protocol a Corpus class needs to implement, and also
-shows concrete implementation examples.
+The corpus is the main site of customisation for the particulars of your
+dataset/collection of documents. The interface is designed so that you never
+need to hold large collections of data in memory at once by only handling
+documents one at a time through generators.
 
 """
 
 import abc
-import json
 import re
 from collections import defaultdict
-from typing import Any, Protocol, Sequence, runtime_checkable
+from collections.abc import Hashable, Iterable, Mapping
+from html import escape
+from typing import Any, Protocol, Union
 from xml.etree import ElementTree
 
 from dateutil.parser import isoparse
@@ -21,91 +21,167 @@ from jinja2 import Template
 from lxml.html import fragment_fromstring
 from markupsafe import Markup
 
-from hyperreal import utilities
+from hyperreal import utilities, value_handlers
 from hyperreal.db_utilities import connect_sqlite, dict_factory
 
+Feature = tuple[str, Hashable]
+"""
+A feature in a document is a field and a paired value.
 
-@runtime_checkable
-class BaseCorpus(Protocol):
+Values must be Hashable, can't be None, and need to be storable in a single
+SQLite column.
+
+Examples of features could be:
+
+- The datetime a document was created:
+    `('created_at', datetime(2024, 1, 1))`
+- A single word extracted from a text field: 
+    `('text', 'cat')`
+- A numerical quantity, like the number of likes on a social media post:
+    `('likes', 100)
+
+"""
+
+FieldValues = Union[list[Hashable], set[Hashable], Hashable]
+DocFeatures = Mapping[str, FieldValues]
+"""
+An DocFeatures is the structured format that the Hyperreal index uses.
+
+This indexable format of the document is a mapping of fields to values with
+the following requirements:
+
+- Field names must always be strings.
+- Field values must be hashable, and not None.
+- The contents of a field can be either a single value or a group of values.
+- A single value by itself is just treated as a singular value in a document.
+- A list of values indicates that this field has multiple values in a document
+  and the values are order dependent - for example the words in a text field.
+- A set of values indicates that this field has multiple values and order is
+  *not* important - for example tags applied to a photograph.
+
+An example DocFeatures could be:
+
+```
+{   
+    # A singular value field.
+    'creation_date': date(2024, 03, 01)',
+
+    # The tokens extracted from the text.
+    'text': ['the', 'cat', 'sat', 'on', 'the', 'mat'],
+
+    # The authors of the document.
+    'authors': {'Jane', 'Arjun', 'Sally'}
+}
+```
+
+"""
+
+# pylint: disable=too-few-public-methods
+
+
+class Corpus(Protocol):
     """
-    - provides access to documents, and describes how to index them.
-    - needs to be picklable and safely enable concurrent read access
-    - Designed to enable small batches of work, and avoid representing entire
-      collections in memory/work on collections much larger than memory.
-    - Designed to enable downstream concurrent computing on those small batches.
+    A corpus describes how to identify and retrieve and display documents.
+
+    Note that corpus objects must also be picklable.
+
+    """
+
+    field_values: Mapping[str, value_handlers.ValueHandler]
+    """
+    Maps fields to their ValueHandler that describes how to transform them.
+
+    There must be an entry in field_values for every field output by the
+    `doc_to_features` method.
 
     """
 
     CORPUS_TYPE: str
+    """
+    A name for this type of corpus.
+
+    This will be used to make sure that the index and the corpus are consistent.
+
+    """
 
     @abc.abstractmethod
-    def docs(self, doc_keys=None):
+    def docs(self, keys: Iterable) -> Iterable[tuple[Hashable, Any]]:
         """
-        Return an iterator of key-document pairs matching the given keys.
+        Retrieve documents identified by the given keys.
 
-        If doc_keys is None, all documents will be iterated over.
+        The return must be an iterator (preferably a generator) of document
+        keys and objects representing the document. There are no constraints
+        on what the document *is* in Python.
 
         """
 
     @abc.abstractmethod
+    def keys(self) -> Iterable:
+        """
+        Iterate through all keys in the corpus.
+
+        This enables enumeration of the entire collection of documents and
+        their identifiers.
+
+        Keys may be any single value other than None that can be inserted into
+        an SQLite table.
+
+        """
+
+    @abc.abstractmethod
+    def doc_to_features(self, doc) -> DocFeatures:
+        """Extract the features from the given document."""
+
+    @abc.abstractmethod
+    def doc_to_html(self, doc):
+        """Return HTML representing the document."""
+
+    def doc_to_str(self, doc) -> str:
+        """Return a string representation of the document."""
+        return str(doc)
+
+    def close(self) -> None:
+        """
+        Close this corpus, cleaning up all open objects.
+
+        There may be no cleanup necessary, in which case this is a no-op.
+
+        """
+
+
+class EmptyCorpus(Corpus):
+    """
+    A specialised corpus object that will not access or retrieve documents.
+
+    This is useful only in places where you don't need to know anything about the
+    documents or the extracted values, such as for running feature clustering
+    algorithms over an index, which does not require access to the underlying
+    documents.
+
+    """
+
+    field_values = defaultdict(value_handlers.NoopHandler)
+
+    def docs(self, keys):
+        return []
+
     def keys(self):
-        """An iterator of all document keys present."""
-
-    @abc.abstractmethod
-    def index(self, doc):
-        """
-        Returns a mapping of the indexable fields in the document:
-
-            {
-                "field1": [value1, value2],
-                "field2": [value],
-                "field3": {value_a, value_b}
-            }
-
-        Values need not be deduplicated: the indexer will take care of that
-        for the boolean query construction, and leaving duplicates allows for
-        things like Bag of Feature counts.
-
-        """
+        return []
 
     def close(self):
-        """Close any open resources associated with this corpus."""
+        return
 
-    def __getitem__(self, doc_key):
-        return self.docs([doc_key])
+    def doc_to_features(self, doc):
+        return {}
 
-    def __iter__(self):
-        return self.docs(doc_keys=None)
+    def doc_to_html(self, doc):
+        return ""
 
-
-@runtime_checkable
-class WebRenderableCorpus(BaseCorpus, Protocol):
-    """A corpus that supports rendering of documents through the server interface."""
-
-    @abc.abstractmethod
-    def render_docs_html(self, doc_keys):
-        """Render documents into a list of HTML strings."""
+    def doc_to_str(self, doc):
+        return ""
 
 
-@runtime_checkable
-class TableRenderableCorpus(BaseCorpus, Protocol):
-    """A corpus that supports rendering of documents in tabular contexts."""
-
-    @property
-    def table_fields(self) -> Sequence[str]:
-        """The sequence of field names to be rendered in the tabular context."""
-
-    @abc.abstractmethod
-    def render_docs_table(self, doc_keys) -> Sequence[tuple[Any, dict[str, Any]]]:
-        """
-        Render a series of documents into a form suitable for a spreadsheet.
-
-        This enables spreadsheet export and sampling of documents.
-
-        """
-
-
-class SqliteBackedCorpus(BaseCorpus):
+class SqliteBackedCorpus(Corpus):
     """A helper class for creating corpuses backed by SQLite databases."""
 
     # pylint: disable=abstract-method
@@ -122,10 +198,7 @@ class SqliteBackedCorpus(BaseCorpus):
         This handles some basic things like saving the database path and ensuring
         that the corpus object is picklable for multiprocessing.
 
-        You will still need to:
-
-        - Add the CORPUS_TYPE class attribute
-        - Define the docs, keys and index methods
+        You will still need to define the docs and keys methods.
 
         """
 
@@ -165,11 +238,11 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
     """
 
     CORPUS_TYPE = "PlainTextSqliteCorpus"
-    table_fields = ["text"]
+
+    field_values = {"text": value_handlers.StringHandler()}
 
     def __init__(self, db_path, tokeniser=utilities.tokens):
         super().__init__(db_path)
-
         self.tokeniser = tokeniser
 
     def __getstate__(self):
@@ -206,15 +279,13 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release add_texts")
 
-    def docs(self, doc_keys=None):
+    def keys(self):
+        return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
+
+    def docs(self, keys):
         self.db.execute("savepoint docs")
         try:
-            # Note that it's valid to pass an empty sequence of doc_keys,
-            # so we need to check sentinel explicitly.
-            if doc_keys is None:
-                doc_keys = self.keys()
-
-            for key in doc_keys:
+            for key in keys:
                 doc = list(
                     self.db.execute(
                         "select doc_id, text from doc where doc_id = ?", [key]
@@ -225,28 +296,14 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
-    def keys(self):
-        return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
+    def doc_to_features(self, doc):
+        return {"text": self.tokeniser(doc["text"])}
 
-    def index(self, doc):
-        return {
-            "text": self.tokeniser(doc["text"]),
-        }
+    def doc_to_html(self, doc):
+        return Markup(f'<p>{escape(doc["text"])}</p>)')
 
-    def render_docs_html(self, doc_keys):
-        """Return the given documents as HTML."""
-        return [(key, doc["text"]) for key, doc in self.docs(doc_keys=doc_keys)]
-
-    def render_docs_table(self, doc_keys):
-        """
-        Return the documents for rendering in a spreadsheet or table.
-
-        The only field is "text" in this case.
-
-        """
-        return [
-            (key, {"text": doc["text"]}) for key, doc in self.docs(doc_keys=doc_keys)
-        ]
+    def doc_to_str(self, doc):
+        return doc["text"]
 
 
 STACKEXCHANGE_HTML = """
@@ -315,20 +372,20 @@ class StackExchangeCorpus(SqliteBackedCorpus):
     """
 
     CORPUS_TYPE = "StackExchangeCorpus"
-    table_fields = [
-        "site_url",
-        "Id",
-        "OwnerUserId",
-        "DisplayName",
-        "ContentLicense",
-        "PostType",
-        "Body",
-        "ParentId",
-        "QuestionTitle",
-        "LiveLink",
-        "tags",
-        "comments",
-    ]
+
+    field_values = {
+        "UserPosting": value_handlers.StringHandler(),
+        "Post": value_handlers.StringHandler(),
+        "CodeBlock": value_handlers.StringHandler(),
+        "Tag": value_handlers.StringHandler(),
+        "UserCommenting": value_handlers.StringHandler(),
+        "Comment": value_handlers.StringHandler(),
+        "Site": value_handlers.StringHandler(),
+        "PostType": value_handlers.StringHandler(),
+        "CreationDate": value_handlers.DateHandler(),
+        "CreationMonth": value_handlers.DateHandler(),
+        "CreationYear": value_handlers.DateHandler(),
+    }
 
     def add_site_data(self, posts_file, comments_file, users_file, site_url):
         """
@@ -546,16 +603,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             self.db.execute("rollback")
             raise
 
-    def docs(self, doc_keys=None):
+    def docs(self, keys):
         self.db.execute("savepoint docs")
 
         try:
-            # Note that it's valid to pass an empty sequence of doc_keys,
-            # so we need to check sentinel explicitly.
-            if doc_keys is None:
-                doc_keys = self.keys()
-
-            for key in doc_keys:
+            for key in keys:
                 doc = list(
                     self.db.execute(
                         """
@@ -592,7 +644,11 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 doc["Tags"] = {
                     r["Tag"]
                     for r in self.db.execute(
-                        "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
+                        """
+                        select Tag 
+                        from PostTag 
+                        where (site_id, PostId) = (:site_id, :TagPostId)
+                        """,
                         doc,
                     )
                 }
@@ -626,130 +682,22 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
-    TEMPLATE = Template(STACKEXCHANGE_HTML)
-
-    def _get_rendered_doc_fields(self, key):
-        base_fields = list(
-            self.db.execute(
-                """
-                select
-                    Post.site_id,
-                    site_url,
-                    Post.Id,
-                    -- Used to retrieve tags for the root question, as
-                    -- the tags are not present on answers, only questions.
-                    coalesce(Post.ParentId, Post.Id) as TagPostId,
-                    Post.OwnerUserId,
-                    (
-                        select DisplayName
-                        from User
-                        where
-                            (User.site_id, User.Id) =
-                            (Post.site_id, Post.OwnerUserId)
-                    ) as DisplayName,
-                    post.ContentLicense,
-                    post.PostType,
-                    post.Body,
-                    Post.ParentId,
-                    coalesce(Post.Title, parent.Title) as QuestionTitle,
-                    site_url || '/questions/' || Post.Id as LiveLink
-                from Post
-                inner join site using(site_id)
-                left outer join Post parent
-                    on (parent.site_id, parent.Id) =
-                        (Post.site_id, Post.ParentId)
-                where Post.doc_id = ?
-                """,
-                [key],
-            )
-        )[0]
-
-        tags = {
-            r["Tag"]
-            for r in self.db.execute(
-                "select Tag from PostTag where (site_id, PostId) = (:site_id, :TagPostId)",
-                base_fields,
-            )
-        }
-
-        user_comments = list(
-            self.db.execute(
-                """
-                select
-                    site_url,
-                    UserId,
-                    (
-                        select DisplayName
-                        from User
-                        where
-                            (User.site_id, User.Id) =
-                            (comment.site_id, comment.UserId)
-                    ) as DisplayName,
-                    Text,
-                    ContentLicense
-                from comment
-                inner join site using(site_id)
-                where (site_id, PostId) = (:site_id, :Id)
-                """,
-                base_fields,
-            )
-        )
-
-        return base_fields, tags, user_comments
-
-    def render_docs_html(self, doc_keys):
-        """Render a HTML version of the stackexchange posts, including metadata."""
-        self.db.execute("savepoint render_docs_html")
-
-        docs = []
-
-        for key in doc_keys:
-            base_fields, tags, user_comments = self._get_rendered_doc_fields(key)
-            docs.append(
-                (
-                    key,
-                    Markup(
-                        self.TEMPLATE.render(
-                            base_fields=base_fields,
-                            tags=tags,
-                            user_comments=user_comments,
-                        )
-                    ),
-                )
-            )
-
-        self.db.execute("release render_docs_html")
-
-        return docs
-
-    def render_docs_table(self, doc_keys):
-        """Render a simplified tabular version of the stackexchange posts, including metadata."""
-        self.db.execute("savepoint render_docs_spreadsheet")
-
-        docs = []
-
-        for key in doc_keys:
-            base_fields, tags, user_comments = self._get_rendered_doc_fields(key)
-            base_fields["tags"] = ", ".join(tags)
-            base_fields["comments"] = json.dumps(
-                [
-                    {
-                        key: comment[key]
-                        for key in ["DisplayName", "Text", "ContentLicense"]
-                    }
-                    for comment in user_comments
-                ]
-            )
-            docs.append((key, base_fields))
-
-        self.db.execute("release render_docs_spreadsheet")
-
-        return docs
-
     def keys(self):
         return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
 
-    def index(self, doc):
+    TEMPLATE = Template(STACKEXCHANGE_HTML)
+
+    def doc_to_html(self, doc):
+        return Markup(
+            self.TEMPLATE.render(
+                base_fields=doc,
+                tags=doc["tags"],
+                user_comments=doc["user_comments"],
+            )
+        )
+
+    def doc_to_features(self, doc):
+        """Prepare a document for indexing."""
         code_blocks = []
 
         if doc["Body"]:
@@ -768,8 +716,10 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         else:
             post_text = ""
 
-        indexed = {
-            "UserPosting": set([doc["DisplayName"]]),
+        creation_date = isoparse(doc["CreationDate"]).date()
+
+        doc_features = {
+            "UserPosting": doc["DisplayName"],
             "Post": utilities.tokens((doc["Title"] or ""))
             + utilities.tokens(post_text),
             "CodeBlock": [
@@ -778,19 +728,16 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             "Tag": doc["Tags"],
             # Comments from deleted users remain, but have no UserId associated.
             "UserCommenting": {u["DisplayName"] for u in doc["UserComments"]},
+            # Note that all comments are treated as a single field - this is not ideal.
             "Comment": [
                 t for c in doc["UserComments"] for t in utilities.tokens(c["Text"])
             ],
-            "Site": set([doc["site_url"]]),
-            "PostType": set([doc["PostType"]]),
+            "Site": doc["site_url"],
+            "PostType": doc["PostType"],
+            # Note rounded to the nearest UTC date to avoid too many values.
+            "CreationDate": creation_date,
+            "CreationMonth": creation_date.replace(day=1),
+            "CreationYear": creation_date.replace(month=1, day=1),
         }
 
-        created_at = isoparse(doc["CreationDate"])
-        rounded_times = utilities.round_datetime(created_at)
-        for granularity, timestamp in rounded_times.items():
-            # Don't bother indexing at minute/hour granularity - just day/month/year
-            if granularity in ("minute", "hour"):
-                continue
-            indexed[f"created_{granularity}"] = set([timestamp.isoformat()])
-
-        return indexed
+        return doc_features

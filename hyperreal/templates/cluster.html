@@ -1,15 +1,10 @@
-{% extends "base.html" %}
+{% extends "index.html" %}
 
 {% from 'macros.html' import render_cluster, render_context_search, render_all_field_matches, render_search_results %}
 
 {% block title %}Cluster {{ cluster_id }}{% endblock %}
 
-{% block nav %}
-    <li><a href="/index/{{ index_id }}/details">Index Details</a></li>
-    <li><a href="/index/{{ index_id }}">Model Overview</a></li>
-{% endblock %}
-
-{% block content %}
+{% block context_edit %}
 {{ render_context_search(index_id, fields, cluster_id=cluster_id) }}
 
 <ul class="nav-links">
@@ -101,22 +96,5 @@
 
     {% endif %}
 </details>
-
-<ul class="cluster-list">
-    {% if search_results %}
-    <li>
-        <div class="cluster-header">
-            {% if search_results|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
-        </div>
-
-        {{ render_search_results(search_results, result_type) }}
-
-    </li>
-    {% endif %}
-
-    <li>
-        {{ render_cluster(index_id, cluster_id, features, highlight_feature_id=highlight_feature_id, context="cluster") }}
-    </li>
-</ul>
 
 {% endblock %}

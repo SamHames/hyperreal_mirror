@@ -10,9 +10,7 @@ import array
 import atexit
 import collections
 import concurrent.futures as cf
-import csv
 import heapq
-import itertools
 import logging
 import math
 import multiprocessing as mp
@@ -24,11 +22,10 @@ from collections.abc import Iterable, Sequence
 from functools import wraps
 from typing import Any, Hashable, Optional, Union
 
-import networkx as nx
 from pyroaring import AbstractBitMap, BitMap
 
 from hyperreal import _index_schema, db_utilities, utilities
-from hyperreal.corpus import BaseCorpus, TableRenderableCorpus, WebRenderableCorpus
+from hyperreal.corpus import Corpus
 
 logger = logging.getLogger(__name__)
 
@@ -54,34 +51,6 @@ FeatureKey = tuple[str, Hashable]
 FeatureKeyOrId = Union[FeatureKey, int]
 FeatureIdAndKey = tuple[int, str, Hashable]
 BitSlice = list[BitMap]
-
-
-def requires_corpus(required_corpus):
-    """
-    Mark method as requiring specific corpus functionality.
-
-    Raises an AttributeError if no corpus object is present on this index.
-
-    """
-
-    def corpus_wrapper(func):
-        @wraps(func)
-        def wrapper_func(self, *args, **kwargs):
-            if self.corpus is None:
-                raise CorpusMissingError(
-                    "A Corpus must be provided to the index for this functionality."
-                )
-
-            if not isinstance(self.corpus, required_corpus):
-                raise UnsupportedCorpusOperation(
-                    "The required functionality is not available on this corpus."
-                )
-
-            return func(self, *args, **kwargs)
-
-        return wrapper_func
-
-    return corpus_wrapper
 
 
 def atomic(writes=False):
@@ -148,7 +117,13 @@ class Index:
 
     # pylint: disable=too-many-public-methods
 
-    def __init__(self, db_path, corpus=None, pool=None, random_seed=None):
+    def __init__(
+        self,
+        db_path,
+        corpus: Corpus,
+        pool=None,
+        random_seed=None,
+    ):
         """
         The corpus object is optional - if not provided certain operations such
         as retrieving or rendering documents won't be possible.
@@ -191,6 +166,7 @@ class Index:
             self.db.execute("commit")
 
         self.corpus = corpus
+        self.field_values = corpus.field_values
 
         # For tracking the state of nested transactions. This is incremented
         # everytime a savepoint is entered with the @atomic() decorator, and
@@ -263,9 +239,7 @@ class Index:
             self._pool = None
 
         self.db.close()
-
-        if self.corpus is not None:
-            self.corpus.close()
+        self.corpus.close()
 
     @atomic()
     def __getitem__(self, key: FeatureKeyOrId) -> BitMap:
@@ -274,6 +248,11 @@ class Index:
 
         A feature is represented as either a integer `feature_id` or a tuple
         of `("field_name", value)`.
+
+        Note that an exception will be raised if the field doesn't exist, but not
+        if the value doesn't exist on a valid field. If the value doesn't exist on a
+        field the return result indicates no matching documents.
+
         """
 
         if isinstance(key, int):
@@ -289,10 +268,21 @@ class Index:
 
         elif isinstance(key, tuple):
             try:
+                field, value = key
+
+                if field not in self.field_values:
+                    raise KeyError(f"Field {field} does not exist on this index.")
+
+                indexed_value = self.field_values[field].to_index(value)
+
                 return list(
                     self.db.execute(
-                        "select doc_ids from inverted_index where (field, value) = (?, ?)",
-                        key,
+                        """
+                        select doc_ids 
+                        from inverted_index 
+                        where (field, value) = (?, ?)
+                        """,
+                        (field, indexed_value),
                     )
                 )[0][0]
             except IndexError:
@@ -314,17 +304,20 @@ class Index:
         )
 
         if results:
-            return results[0]
+            field, value = results[0]
+            return field, self.field_values[field].from_index(value)
 
         raise KeyError(f"Feature with id '{feature_id}' not found.")
 
     def lookup_feature_id(self, key: tuple[str, Any]) -> int:
-        """Lookup the (field, value) for this feature by feature_id."""
+        """Lookup the feature_id for this feature"""
 
+        field, value = key
+        indexed_value = self.field_values[field].to_index(value)
         results = list(
             self.db.execute(
                 "select feature_id from inverted_index where (field, value) = (?, ?)",
-                key,
+                (field, indexed_value),
             )
         )
 
@@ -333,8 +326,7 @@ class Index:
 
         raise KeyError(f"Feature with key '{key}' not found.")
 
-    @requires_corpus(BaseCorpus)
-    def index(
+    def rebuild(
         self,
         doc_batch_size=1000,
         working_dir=None,
@@ -342,7 +334,7 @@ class Index:
         index_positions=False,
     ):
         """
-        Indexes the corpus, using the provided function or the corpus default.
+        Rebuilds the index from the corpus.
 
         This method will index the entire corpus from scratch. If the corpus has
         already been indexed, it will be atomically replaced.
@@ -394,20 +386,18 @@ class Index:
 
             # we will associate document keys to internal document ids
             # sequentially
-            doc_keys = enumerate(self.corpus.keys())
+            keys = enumerate(self.corpus.keys())
 
-            batch_doc_ids = []
-            batch_doc_keys = []
+            batch_key_id_map = {}
             batch_size = 0
 
             futures = set()
 
             self.logger.info("Beginning indexing.")
 
-            for doc_key in doc_keys:
-                self.db.execute("insert into doc_key values(?, ?)", doc_key)
-                batch_doc_ids.append(doc_key[0])
-                batch_doc_keys.append(doc_key[1])
+            for key in keys:
+                self.db.execute("insert into doc_key values(?, ?)", key)
+                batch_key_id_map[key[1]] = key[0]
                 batch_size += 1
 
                 if batch_size >= doc_batch_size:
@@ -418,15 +408,13 @@ class Index:
                         self.pool.submit(
                             _index_docs,
                             self.corpus,
-                            batch_doc_ids,
-                            batch_doc_keys,
+                            batch_key_id_map,
                             temp_index,
                             index_positions,
                             write_lock,
                         )
                     )
-                    batch_doc_ids = []
-                    batch_doc_keys = []
+                    batch_key_id_map = {}
                     batch_size = 0
 
                     # Be polite and avoid filling up the queue.
@@ -437,14 +425,13 @@ class Index:
                             f.result()
 
             # Dispatch the final batch.
-            if batch_doc_keys:
+            if batch_key_id_map:
                 self.logger.debug("Dispatching final batch for indexing.")
                 futures.add(
                     self.pool.submit(
                         _index_docs,
                         self.corpus,
-                        batch_doc_ids,
-                        batch_doc_keys,
+                        batch_key_id_map,
                         temp_index,
                         index_positions,
                         write_lock,
@@ -601,7 +588,7 @@ class Index:
     @atomic()
     def convert_query_to_keys(self, query) -> dict[Hashable, int]:
         """
-        Return a mapping of doc_keys to their doc_id.
+        Return a mapping of keys to their doc_id.
 
         This can be passed directly to corpus objects to retrieve matching
         docs.
@@ -627,16 +614,24 @@ class Index:
         Iteration is by lexicographical order of the values.
 
         """
+        if field not in self.field_values:
+            raise KeyError(
+                f"Field {field} is not defined on this index. "
+                f"Valid fields are {self.field_values.keys()}"
+            )
 
-        value_docs = self.db.execute(
-            """
-            select value, docs_count, doc_ids
-            from inverted_index
-            where field = ?1
-                and docs_count >= ?2
-            order by value
-            """,
-            [field, min_docs],
+        value_docs = (
+            (self.field_values[field].from_index(row[0]), *row[1:])
+            for row in self.db.execute(
+                """
+                select value, docs_count, doc_ids
+                from inverted_index
+                where field = ?1
+                    and docs_count >= ?2
+                order by value
+                """,
+                [field, min_docs],
+            )
         )
 
         yield from value_docs
@@ -670,104 +665,17 @@ class Index:
 
         return values, totals, intersections
 
-    @requires_corpus(BaseCorpus)
     def docs(self, query):
         """Retrieve the documents matching the given query set."""
         keys = self.convert_query_to_keys(query)
-        for key, doc in self.corpus.docs(doc_keys=sorted(keys)):
+        for key, doc in self.corpus.docs(sorted(keys)):
             yield keys[key], key, doc
-
-    @requires_corpus(BaseCorpus)
-    @atomic()
-    def extract_matching_feature_windows(
-        self, query, features, window_size, random_sample_size=None
-    ):
-        """
-        Retrieve matching features and cooccurrence windows around each
-        matching feature in sequence fields in each of the given documents.
-
-        window_size is the number of features to extract either size of a match.
-
-        See also the concordance function which turns features back into
-        strings.
-
-        """
-        if random_sample_size is not None:
-            query = self.sample_bitmap(query, random_sample_size)
-
-        field_features = collections.defaultdict(set)
-
-        for feature in features:
-            if isinstance(feature, int):
-                field, value = self.lookup_feature(feature)
-            elif isinstance(feature, tuple):
-                field, value = feature
-            else:
-                raise TypeError(
-                    f"Unknown feature type {feature} "
-                    "- try an integer feature ID or a ('field', value) tuple"
-                )
-
-            field_features[field].add(value)
-
-        for doc_id, doc_key, doc in self.docs(query):
-            indexed = self.corpus.index(doc)
-
-            doc_cooccurrence = {}
-
-            for field, to_match in field_features.items():
-                cooccurrence = collections.defaultdict(list)
-                values = indexed.get(field, set())
-
-                if isinstance(values, collections.abc.Sequence):
-                    for i, value in enumerate(values):
-                        if value in to_match:
-                            start_window = max(0, i - window_size)
-                            cooccurrence[value].append(
-                                values[start_window : i + window_size + 1]
-                            )
-                else:
-                    for value in to_match & values:
-                        cooccurrence[value] = []
-
-                doc_cooccurrence[field] = cooccurrence
-
-            yield (doc_key, doc_id, doc_cooccurrence)
-
-    def concordances(
-        self, query, features, window_size, random_sample_size=None, join_character=" "
-    ):
-        """
-        A utility function that wraps the cooccurrence function to produce
-        text strings instead.
-
-        """
-        for (
-            doc_key,
-            doc_id,
-            cooccurrence_windows,
-        ) in self.extract_matching_feature_windows(
-            query, features, window_size, random_sample_size=random_sample_size
-        ):
-            match_concordances = {}
-            for field, match_windows in cooccurrence_windows.items():
-                field_matches = {}
-                for match, windows in match_windows.items():
-                    field_matches[match] = []
-                    for window in windows:
-                        field_matches[match].append(
-                            join_character.join(w for w in window if w is not None)
-                        )
-
-                match_concordances[field] = field_matches
-
-            yield doc_key, doc_id, match_concordances
 
     def sample_bitmap(self, bitmap, random_sample_size):
         """
         Sample up to random_sample_size members from bitmap.
 
-        If there are fewer than the sample size members in the bitmap, return
+        If there are fewer than random_sample_size members in the bitmap, return
         a copy of the bitmap.
 
         Uses the current state of the indexes random number generator to
@@ -784,79 +692,45 @@ class Index:
 
         return bitmap.copy()
 
-    @requires_corpus(BaseCorpus)
-    @atomic()
-    def render_passages_table(
-        self,
-        scored_passages,
-        passage_overhang=20,
-        batch_size=1000,
-        random_sample_size=None,
-    ):
+    @staticmethod
+    def match_doc_features(
+        doc_features, features_to_match
+    ) -> dict[str, dict[Any, list]]:
         """
-        Render a table of passages from the associated documents.
+        Identify which parts of `features` occur in this `doc_features`.
+
+        This returns a mapping showing the fields and associated values that match the
+        doc from the given list of features. If the field is a positional/sequence
+        field it will also return the numerical offset of that value in the field to
+        allow the production of concordances, snippets or passages.
+
+        This can be used with a set of features constituting a query and the
+        `doc_features` method to annotate a set of results with appropriate context
+        to show why this document was retrieved for this query.
 
         """
+        matches = collections.defaultdict(lambda: collections.defaultdict(list))
 
-        if random_sample_size is not None:
-            keep_keys = heapq.nlargest(
-                random_sample_size,
-                ((self.random.random(), doc_id) for doc_id in scored_passages.keys()),
-            )
-            scored_passages = {
-                doc_id: scored_passages[doc_id] for _, doc_id in keep_keys
-            }
+        for field, match_values in features_to_match.items():
+            if field not in doc_features:
+                continue
 
-        futures = set()
-        # Break up the passages to distribute the work over the pool
-        it = iter(scored_passages)
+            doc_values = doc_features[field]
 
-        for _ in range(0, len(scored_passages), batch_size):
-            futures.add(
-                self.pool.submit(
-                    _construct_passages,
-                    self,
-                    {
-                        doc_id: scored_passages[doc_id]
-                        for doc_id in itertools.islice(it, batch_size)
-                    },
-                    passage_overhang,
-                )
-            )
+            if isinstance(doc_values, list):
+                for position, value in enumerate(doc_values):
+                    if value in match_values:
+                        matches[field][value].append(position)
 
-        for f in cf.as_completed(futures):
-            constructed = f.result()
-            yield from constructed
+            elif isinstance(doc_values, set):
+                for value in doc_values & match_values:
+                    matches[field][value] = []
 
-    @requires_corpus(WebRenderableCorpus)
-    def render_docs_html(self, query, random_sample_size=None):
-        """
-        Return the rendered representation of the docs matching this query.
+            else:
+                if doc_values in match_values:
+                    matches[field][doc_values] = []
 
-        Optionally take a random sample of documents before rendering.
-        """
-
-        if random_sample_size is not None:
-            query = self.sample_bitmap(query, random_sample_size)
-
-        doc_keys = self.convert_query_to_keys(query)
-        return [
-            (doc_keys[doc[0]], *doc) for doc in self.corpus.render_docs_html(doc_keys)
-        ]
-
-    @requires_corpus(TableRenderableCorpus)
-    def render_docs_table(self, query, random_sample_size=None):
-        """
-        Return the rendered representation of the docs matching this query.
-
-        Optionally take a random sample of documents before rendering.
-        """
-
-        if random_sample_size is not None:
-            query = self.sample_bitmap(query, random_sample_size)
-
-        doc_keys = self.convert_query_to_keys(query)
-        return self.corpus.render_docs_table(doc_keys)
+        return matches
 
     @atomic()
     def structured_doc_sample(self, docs_per_cluster=100, cluster_ids=None):
@@ -904,51 +778,6 @@ class Index:
         }
 
         return cluster_samples, sample_clusters
-
-    @atomic()
-    @requires_corpus(TableRenderableCorpus)
-    def export_document_sample(self, cluster_sample_docs, sample_clusters, output_path):
-        """
-        Export the given sample of documents to CSV.
-
-        It is currently assumed that all documents have the same fields.
-
-        This method uses the fields exposed in the table_fields property of
-        the corpus to determine what to export - if a document has additional
-        fields these are silently dropped.
-
-        """
-
-        with open(output_path, "w", encoding="utf-8") as out:
-            table_fields = (
-                ["doc_key", "sampled_cluster"]
-                + self.corpus.table_fields
-                + [f"cluster_{cluster_id}" for cluster_id in sorted(sample_clusters)]
-            )
-
-            writer = csv.DictWriter(
-                out,
-                table_fields,
-                extrasaction="ignore",
-                dialect="excel",
-                quoting=csv.QUOTE_ALL,
-            )
-
-            writer.writeheader()
-
-            for cluster_id, sample_docs in cluster_sample_docs.items():
-                write_docs = self.corpus.render_docs_table(
-                    self.convert_query_to_keys(sample_docs)
-                )
-
-                for doc_id, (key, doc) in zip(sample_docs, write_docs):
-                    doc["doc_key"] = key
-                    doc["sampled_cluster"] = cluster_id
-                    for other_cluster_id, cluster_docs in sample_clusters.items():
-                        if doc_id in cluster_docs:
-                            doc[f"cluster_{other_cluster_id}"] = 1
-
-                    writer.writerow(doc)
 
     def indexed_field_summary(self):
         """
@@ -1060,7 +889,7 @@ class Index:
         self.logger.info(f"Delete features {feature_ids}.")
 
     def next_cluster_id(self):
-        """Returns a new cluster_id, guaranteed to be higher than anything already assigned."""
+        """Return a new cluster_id, higher than anything already assigned."""
         next_cluster_id = list(
             self.db.execute(
                 """
@@ -1255,8 +1084,9 @@ class Index:
         document count are returned in descending order.
 
         """
-        cluster_features = list(
-            self.db.execute(
+        cluster_features = [
+            (*row[:2], self.field_values[row[1]].from_index(row[2]), row[3])
+            for row in self.db.execute(
                 """
                 select
                     feature_id,
@@ -1273,7 +1103,7 @@ class Index:
                 """,
                 [cluster_id, top_k],
             )
-        )
+        ]
 
         return cluster_features
 
@@ -1872,56 +1702,6 @@ class Index:
         self.db.execute("delete from changed_cluster")
 
     @atomic()
-    def create_cluster_cooccurrence_graph(self, top_k=5, include_field_in_label=True):
-        """
-        Create a networkx graph showing cluster-cluster relationships.
-
-        In this graph each cluster of features is a node, and the edges
-        between nodes show cluster overlap. Edges are weighted by the jaccard
-        similarity of documents belonging to each cluster.
-
-        Nodes are labelled with the top_k features from that node.
-
-        """
-
-        graph = nx.Graph()
-        clusters = self.top_cluster_features(top_k=top_k)
-        # First add basic node information
-        for cluster_id, doc_count, top_features in clusters:
-            if include_field_in_label:
-                label = ", ".join(
-                    f"{field}:{value}" for _, field, value, _ in top_features
-                )
-            else:
-                label = ", ".join(value for _, field, value, _ in top_features)
-
-            graph.add_node(cluster_id, document_count=doc_count, label=label)
-
-        # The compute all the pairwise cluster details, in parallel.
-        futures = set()
-
-        for i, (cluster_id, _, _) in enumerate(clusters):
-            query = self.cluster_docs(cluster_id)
-            comparison_clusters = [c[0] for c in clusters[i + 1 :]]
-            futures.add(
-                self.pool.submit(
-                    _calculate_query_cluster_cooccurrence,
-                    self,
-                    cluster_id,
-                    query,
-                    comparison_clusters,
-                )
-            )
-
-        for future in cf.as_completed(futures):
-            cluster_id, weights = future.result()
-
-            for o_cluster, sim, _ in weights:
-                graph.add_edge(cluster_id, o_cluster, weight=sim)
-
-        return graph
-
-    @atomic()
     def _or_partition_positions(self, features):
         # Make sure that all of the features are from the same field.
         fields_covered = set()
@@ -1938,95 +1718,44 @@ class Index:
                 raise TypeError(f"Unsupported feature {f}.")
 
     @atomic()
-    def score_passages_dnf(
-        self, feature_clauses: list[list[FeatureKeyOrId]], window_size: int
-    ) -> dict[int, list[tuple[int, int, int]]]:
+    def field_proximity_query(
+        self, field, value_clauses: list[list], window_size: int
+    ) -> BitMap():
         """
-        Find passages matching the given query in Disjunctive Normal Form.
+        Find documents where values co-occur within `window_size` proximity.
 
-        Because the passage construction works on a single field at a time,
-        the input query is broken down into separate queries by field. This
-        means that the query is only in strict Disjunctive Normal Form when
-        the features are all from the same field.
-
-        """
-
-        # Make sure that all of the features are from the same field.
-        positional_fields = self.positional_fields
-        field_clauses = collections.defaultdict(list)
-
-        for clause in feature_clauses:
-            field_features = collections.defaultdict(set)
-
-            for feature in clause:
-                if isinstance(feature, int):
-                    field, _ = self.lookup_feature(feature)
-                    field_features[field].add(feature)
-                if isinstance(feature, tuple):
-                    feature_id = self.lookup_feature_id(feature)
-                    field_features[feature[0]].add(feature_id)
-
-            for field, clause in field_features.items():
-                if field in positional_fields:
-                    field_clauses[field].append(clause)
-
-        futures = set()
-
-        for field, query in field_clauses.items():
-            for first_doc_id in self._field_partitions(field):
-                futures.add(
-                    self.pool.submit(
-                        _score_passages_dnf,
-                        self,
-                        field,
-                        first_doc_id,
-                        query,
-                        window_size,
-                    )
-                )
-
-        passages = collections.defaultdict(list)
-
-        for future in cf.as_completed(futures):
-            field, _, scores = future.result()
-            for doc_id, doc_passages in scores.items():
-                passages[doc_id].extend(doc_passages)
-
-        return passages
-
-    @atomic()
-    def count_collocations(self, field, features, window_size):
-        """
-        Count collocations near the given query of positions.
+        This is useful to create more specific and precise searches for language,
+        rather than just co-occurence in whole documents. This is especially helpful
+        for collections where whole documents may be long and topically diverse.
 
         """
+
+        # Convert values to feature_ids
+        clause_feature_ids = [
+            [self.lookup_feature_id((field, value)) for value in clause]
+            for clause in value_clauses
+        ]
+
         futures = set()
 
         for first_doc_id in self._field_partitions(field):
             futures.add(
                 self.pool.submit(
-                    _count_collocations,
+                    _field_proximity_query,
                     self,
                     field,
+                    clause_feature_ids,
                     first_doc_id,
-                    features,
                     window_size,
                 )
             )
 
-        collocations = collections.defaultdict(lambda: [0, 0])
-        total_query = 0
-        total_window = 0
+        matching_doc_ids = BitMap()
 
         for future in cf.as_completed(futures):
-            counts, query_hits, window_hits = future.result()
-            total_query += query_hits
-            total_window += window_hits
+            matching_doc_ids |= future.result()
 
-            for feature_id, count, feature_count in counts:
-                collocations[feature_id][0] += count
-                collocations[feature_id][1] += feature_count
-        return collocations, total_query, total_window
+        return matching_doc_ids
 
     def _field_partitions(self, field):
         """
@@ -2106,20 +1835,17 @@ class Index:
         )
 
 
-def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_lock):
+def _index_docs(corpus, batch_key_id_map, temp_db_path, index_positions, write_lock):
     """
     Index all of the given docs into temp_db_path.
 
     """
 
-    # pylint: disable=too-many-nested-blocks
+    # pylint: disable=too-many-nested-blocks,too-many-branches
 
     local_db = db_utilities.connect_sqlite(temp_db_path)
 
     try:
-        if len(doc_ids) != len(doc_keys):
-            raise ValueError("There must be exactly one doc_id for every doc_key.")
-
         # Mapping of {field: {value: (BitMap(), BitMap())}}
         # One bitmap for document occurrence, the other other for recording
         # positional information.
@@ -2134,22 +1860,45 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
             lambda: (BitMap(), BitMap([0]))
         )
 
-        docs = corpus.docs(doc_keys=doc_keys)
+        first_doc_id = min(batch_key_id_map.values())
+        last_doc_id = max(batch_key_id_map.values())
 
-        first_doc_id = doc_ids[0]
-        last_doc_id = doc_ids[-1]
+        for key, doc in corpus.docs(batch_key_id_map):
+            doc_id = batch_key_id_map[key]
 
-        for doc_id, (_, doc) in zip(doc_ids, docs):
-            features = corpus.index(doc)
+            doc_features = corpus.doc_to_features(doc)
+            for field, values in doc_features.items():
+                positional = False
 
-            for field, values in features.items():
-                # Only record position information when requested.
-                if index_positions and isinstance(values, collections.abc.Sequence):
+                # handle document value presence for different kinds of fields
+                # lists -> positional information to be optionally indexed
+                if isinstance(values, list):
+                    if index_positions:
+                        positional = True
+
+                    # Convert to a set of values for the final document
+                    # indexing.
+                    doc_values = set(values)
+
+                elif isinstance(values, set):
+                    # No work necessary, but we do need to distinguish between
+                    # sets and single values so we can convert the latter.
+                    doc_values = values
+                else:
+                    # Convert singleton case to a sequence so the next step
+                    # doesn't need to be a special case.
+                    doc_values = [values]
+
+                for value in doc_values:
+                    if value is None:
+                        raise ValueError("Values cannot contain None")
+                    batch[field][value][0].add(doc_id)
+
+                # Construct the positional index if needed.
+                if positional:
                     batch_position = field_doc_positions_starts[field][1][-1]
 
                     for position, value in enumerate(values):
-                        if value is None:
-                            raise ValueError("Values cannot contain None")
                         batch[field][value][1].add(position + batch_position)
 
                     # If values is empty, move on to the next layer.
@@ -2157,21 +1906,18 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                         continue
 
                     field_doc_positions_starts[field][0].add(doc_id)
-                    # pylint will complain about this as position may not be defined
-                    # if values is empty, however if values is empty we will already
-                    # have continued.
+                    # pylint will complain about this as position may not
+                    # be defined if values is empty, however if values is
+                    # empty we will already have continued.
+
                     # pylint: disable=undefined-loop-variable
-                    # +1 because it's the start of the *next* document.
                     field_doc_positions_starts[field][1].add(
-                        position + batch_position + 1
+                        # +1 because it's the start of the *next* doc.
+                        position
+                        + batch_position
+                        + 1
                     )
                     # pylint: enable=undefined-loop-variable
-
-                set_values = set(values)
-                set_values.discard(None)
-
-                for value in set_values:
-                    batch[field][value][0].add(doc_id)
 
         with write_lock:
             local_db.execute("pragma synchronous=0")
@@ -2230,7 +1976,9 @@ def _index_docs(corpus, doc_ids, doc_keys, temp_db_path, index_positions, write_
                     (
                         (
                             field,
-                            value,
+                            # Use the corpus specified ValueHandler for this field to
+                            # transform for the index.
+                            corpus.field_values[field].to_index(value),
                             len(docs),
                             docs,
                             len(positions),
@@ -2458,44 +2206,26 @@ def _union_query(args):
     return query_key, query, weight
 
 
-def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
+def _field_proximity_query(idx, field, clause_feature_ids, first_doc_id, window_size):
     """
-    Score passages for a query in disjunctive normal form.
+    Return documents where values occur near each other in a field.
+
+    `value_clauses` is a list of clauses in DNF: at least one value from each clause
+    must be within window_size of each for that position and document to match.
 
     """
+
     with idx:
-        # Order clauses by ascending number of positions
-        clause_weights = []
-        for clause in feature_clauses:
-            weight = 0
-            for feature_id in clause:
-                position_count = list(
-                    idx.db.execute(
-                        """
-                        select position_count
-                        from position_index
-                        where (feature_id, first_doc_id) = (?, ?)
-                        """,
-                        (feature_id, first_doc_id),
-                    )
-                )
-                if position_count:
-                    weight += position_count[0][0]
 
-            clause_weights.append((weight, clause))
-
-        clause_weights.sort()
         _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
 
-        # Process the first clause to initialise everything
-        positions = idx._union_position_query(first_doc_id, clause_weights[0][1])
+        positions = idx._union_position_query(first_doc_id, clause_feature_ids[0])
         valid_window = utilities.expand_positions_window(
             positions, doc_boundaries, window_size
         )
 
-        passage_scores = collections.defaultdict(list)
+        for clause in clause_feature_ids[1:]:
 
-        for _, clause in clause_weights[1:]:
             # Keep only the union positions that actually intersect with the
             # existing window - these are the starts and ends of spans that
             # can satisfy the spacing criteria.
@@ -2505,11 +2235,7 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
 
             # Early termination if there's no matches at any point during a clause.
             if not clause_positions:
-                return (
-                    field,
-                    first_doc_id,
-                    passage_scores,
-                )
+                return BitMap()
 
             # Keep the remaining positions so we can count them as matching
             positions |= clause_positions
@@ -2522,136 +2248,14 @@ def _score_passages_dnf(idx, field, first_doc_id, feature_clauses, window_size):
 
         # Apply the final valid window to the positions.
         positions &= valid_window
-        valid_window.run_optimize()
 
         if not positions:
-            return (
-                field,
-                first_doc_id,
-                passage_scores,
-            )
+            return BitMap()
 
-        # Walk through the positions and check against valid_window to find passages.
-        # Establish boundaries for the first doc
-        passage_start = last_position = positions[0]
-        rank = doc_boundaries.rank(passage_start)
-
-        doc_start = doc_boundaries[rank - 1]
-        next_start = doc_boundaries[rank]
-        doc_id = doc_ids[rank - 1]
-
-        for position in positions[1:]:
-            if position >= next_start:
-                # End passage and move on to next document
-                passage_scores[doc_id].append(
-                    (
-                        field,
-                        passage_start - doc_start,
-                        last_position - doc_start,
-                        positions.range_cardinality(passage_start, last_position + 1),
-                    )
-                )
-                passage_start = last_position = position
-                rank = doc_boundaries.rank(position)
-                doc_start = doc_boundaries[rank - 1]
-                next_start = doc_boundaries[rank]
-                doc_id = doc_ids[rank - 1]
-
-            elif position - last_position > window_size:
-                # Immediately end the passage, don't need to check valid_window
-                passage_scores[doc_id].append(
-                    (
-                        field,
-                        passage_start - doc_start,
-                        last_position - doc_start,
-                        positions.range_cardinality(passage_start, last_position + 1),
-                    )
-                )
-                passage_start = last_position = position
-
-            else:
-                last_position = position
-
-        # Don't forget the last window, if it wasn't closed off.
-        if last_position != passage_start:
-            passage_scores[doc_id].append(
-                (
-                    field,
-                    passage_start - doc_start,
-                    last_position - doc_start,
-                    positions.range_cardinality(passage_start, last_position + 1),
-                )
-            )
-
-    return (
-        field,
-        first_doc_id,
-        passage_scores,
-    )
-
-
-def _count_collocations(idx, field, first_doc_id, features, window_size):
-    """
-    Count collocations of all of the given features up to window_size positions away.
-
-    """
-
-    features = set(features)
-
-    with idx:
-        counts = []
-        positions = idx._union_position_query(first_doc_id, features)
-        _, _, doc_boundaries = idx._get_partition_header(field, first_doc_id)
-        valid_window = utilities.expand_positions_window(
-            positions, doc_boundaries, window_size
+        # Convert matching positions to doc_ids containing the match by looking up
+        # in the header for this partition
+        matching_docs = BitMap(
+            doc_ids[doc_boundaries.rank(position) - 1] for position in positions
         )
 
-        for (feature_id,) in idx.db.execute(
-            "select feature_id from position_index where first_doc_id = ?",
-            [first_doc_id],
-        ):
-            if feature_id not in features:
-                other_positions = idx._get_partition_positions(first_doc_id, feature_id)
-                if other_positions:
-                    count = valid_window.intersection_cardinality(other_positions)
-                    counts.append((feature_id, count, len(other_positions)))
-
-    return counts, len(positions), len(valid_window)
-
-
-def _construct_passages(idx, scored_passages, passage_overhang, combiner_fn=" ".join):
-    """ """
-
-    with idx:
-        index_fn = idx.corpus.index
-
-        constructed = []
-
-        for doc_id, key, doc in idx.docs(scored_passages):
-            indexed = index_fn(doc)
-
-            doc_passages = collections.defaultdict(list)
-
-            for passage in scored_passages[doc_id]:
-                field, start, end = passage[:3]
-                passage_text = combiner_fn(
-                    indexed[field][
-                        max(0, start - passage_overhang) : end + passage_overhang
-                    ]
-                )
-
-                doc_passages[field].append(passage_text)
-
-            # Drop sequence fields
-            indexed = {
-                field: values
-                for field, values in indexed.items()
-                if isinstance(values, set)
-            }
-
-            for field, p in doc_passages.items():
-                indexed[field] = p
-
-            constructed.append((doc_id, key, indexed))
-
-    return constructed
+        return matching_docs

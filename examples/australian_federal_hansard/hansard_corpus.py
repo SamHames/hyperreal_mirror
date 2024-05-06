@@ -12,12 +12,14 @@ import logging
 import multiprocessing as mp
 import os
 import sys
+import textwrap
 import traceback
 import zipfile
 
 from lxml import html
 from markupsafe import Markup
 
+from hyperreal import value_handlers
 from hyperreal.index import Index
 from hyperreal.corpus import SqliteBackedCorpus
 from hyperreal.utilities import tokens
@@ -27,6 +29,18 @@ import hyperreal.server
 class HansardCorpus(SqliteBackedCorpus):
     CORPUS_TYPE = "Australian Federal Hansard"
 
+    field_values = {
+        "text": value_handlers.StringHandler(),
+        "house": value_handlers.StringHandler(),
+        "debate_id": value_handlers.StringHandler(),
+        "date": value_handlers.DateHandler(),
+        "month": value_handlers.DateHandler(),
+        "year": value_handlers.DateHandler(),
+        "parl_no": value_handlers.IntegerHandler(),
+        "html_classes": value_handlers.StringHandler(),
+        "html_tags": value_handlers.StringHandler(),
+    }
+
     def __init__(self, db_path):
         """
         A corpus to wrap around the data model found in https://github.com/SamHames/hansard-tidy
@@ -34,7 +48,7 @@ class HansardCorpus(SqliteBackedCorpus):
         """
         super().__init__(db_path)
 
-    def docs(self, doc_keys=None):
+    def docs(self, doc_keys):
         self.db.execute("savepoint docs")
         try:
             # Note that it's valid to pass an empty sequence of doc_keys,
@@ -69,7 +83,7 @@ class HansardCorpus(SqliteBackedCorpus):
         finally:
             self.db.execute("release docs")
 
-    def index(self, doc):
+    def doc_to_features(self, doc):
         root = html.fromstring(doc["page_html"])
 
         page_tokens = tokens(" ".join(root.itertext()))
@@ -79,13 +93,13 @@ class HansardCorpus(SqliteBackedCorpus):
         year = month.replace(month=1)
 
         return {
-            "page": page_tokens,
-            "house": set([doc["house"]]),
-            "debate_id": set([doc["debate_id"]]),
-            "date": set([page_date.isoformat()]),
-            "month": set([month.isoformat()]),
-            "year": set([year.isoformat()]),
-            "parl_no": set([doc["parl_no"]]),
+            "text": page_tokens,
+            "house": doc["house"],
+            "debate_id": doc["debate_id"],
+            "date": page_date,
+            "month": month,
+            "year": year,
+            "parl_no": doc["parl_no"],
             # Index the formatting elements so we can systematically investigate them
             "html_classes": {
                 str(clss) for elem in root.iter() for clss in elem.classes
@@ -93,30 +107,29 @@ class HansardCorpus(SqliteBackedCorpus):
             "html_tags": {str(elem.tag) for elem in root.iter()},
         }
 
-    def render_docs_html(self, doc_keys):
-        """Return the given documents as HTML."""
-        docs = []
+    def doc_to_html(self, doc):
+        summary = ", ".join(
+            doc[item] for item in ("date", "house", "title") if doc[item]
+        )
 
-        for key, doc in self.docs(doc_keys=doc_keys):
-            summary = ", ".join(
-                doc[item] for item in ("date", "house", "title") if doc[item]
-            )
+        doc_html = """
+            <details>
+                <summary>{}</summary>
+                <div>
+                    <a href="{}">See in context</a>
+                </div>
+                <div>{}</div>
+            </details>
+            """.format(
+            summary, doc["url"], doc["page_html"]
+        )
 
-            doc_html = """
-                <details>
-                    <summary>{}</summary>
-                    <div>
-                        <a href="{}">See in context</a>
-                    </div>
-                    <div>{}</div>
-                </details>
-                """.format(
-                summary, doc["url"], doc["page_html"]
-            )
+        return Markup(doc_html)
 
-            docs.append((key, Markup(doc_html)))
-
-        return docs
+    def doc_to_str(self, doc):
+        root = html.fromstring(doc["page_html"])
+        text = " ".join(root.itertext()).strip()
+        return textwrap.fill(text, width=100, replace_whitespace=False)
 
     def keys(self):
         """The pages are the central document."""
@@ -145,7 +158,7 @@ if __name__ == "__main__":
         idx = Index(db_index, corpus=corpus, pool=pool)
 
         if "index" in args:
-            idx.index(doc_batch_size=50000, index_positions=True)
+            idx.rebuild(doc_batch_size=50000, index_positions=True)
 
         if "cluster" in args:
             idx.initialise_clusters(

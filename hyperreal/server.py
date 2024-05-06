@@ -5,11 +5,13 @@ Cherrypy based webserver for serving an index (or in future) a set of indexes.
 
 import csv
 import io
+from collections import defaultdict
 
 import cherrypy
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 import hyperreal.index
+from hyperreal.corpus import EmptyCorpus
 
 # Cherrypy uses raise HTTPRedirect often, so this lint is just noise.
 # pylint: disable=raise-missing-from
@@ -69,114 +71,189 @@ class Cluster:
         feature_id=None,
         filter_cluster_id=None,
         exemplar_docs="30",
-        scoring="jaccard",
-        result_type=None,
+        snippet_window="10",
     ):
-        """
-        Render a view of a cluster as a set of ranked features and matching results.
+        """Display the features and docs from a single cluster of features."""
 
-        """
-        template = templates.get_template("cluster.html")
+        # This does need some refactoring work - there's too much complexity here
+        # This will require further design work on the querying and display API.
+        # pylint: disable=too-many-branches,too-many-statements,too-many-nested-blocks
+
+        idx = cherrypy.request.index
 
         cluster_id = int(cluster_id)
 
-        # Work out
-        other_clusters = cherrypy.request.index.cluster_ids
+        # Redirect to the index overview page to create a new model if no
+        # index has been created.
+        if not idx.cluster_ids:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
+
+        ## Cluster specific navigation
+        # Work out next/prev clusters for navigation in a ring
+        all_clusters = idx.cluster_ids
 
         try:
-            cluster_index = other_clusters.index(cluster_id)
+            cluster_index = all_clusters.index(cluster_id)
         except ValueError:
             raise cherrypy.HTTPError(404)
 
         # If we're at the start/end, wrap around to the end/start.
-        prev_cluster_id = other_clusters[cluster_index - 1]
-        next_cluster_id = other_clusters[
-            (cluster_index + 1) if cluster_index < (len(other_clusters) - 1) else 0
+        prev_cluster_id = all_clusters[cluster_index - 1]
+        next_cluster_id = all_clusters[
+            (cluster_index + 1) if cluster_index < (len(all_clusters) - 1) else 0
         ]
 
-        features = cherrypy.request.index.cluster_features(cluster_id)
-        n_features = len(features)
-        search_results = []
-        query = cherrypy.request.index.cluster_docs(cluster_id)
+        # Pinned clusters can't be changed, only unpinned
+        pinned = int(cluster_id in idx.pinned_cluster_ids)
 
-        # Default concordance features is everything in the cluster, unless other things
-        # are set?
-        concordance_features = [r[1:3] for r in features]
-        passage_query = [[f[0] for f in features]]
+        # Set defaults to be used if neither cluster/feature_id are provided. In this
+        # case there is no query to drive contextualisation, and no docs to display.
+        highlight_feature_id = None
+        query = idx.cluster_docs(cluster_id)
+
+        html_docs = []
+        matches = []
+        snippets = []
+        snippet_window = int(snippet_window)
+
+        # Assemble a sample of matching documents from the query (if present)
+        # A query can be either a single feature_id, or a single cluster_id, or the
+        # intersection of a feature and a cluster if both are specified.
+        # At the same time assemble the contextual features from the query for
+        # highlighting.
+
+        highlight_features = defaultdict(set)
+
+        for feature in idx.cluster_features(cluster_id):
+            field, value = feature[1:3]
+            highlight_features[field].add(value)
+
+        n_features = sum(len(values) for values in highlight_features.values())
 
         if feature_id is not None:
-            feature_id = int(feature_id)
-            query &= cherrypy.request.index[feature_id]
+            feature_id = highlight_feature_id = int(feature_id)
+            query &= idx[feature_id]
 
-            concordance_features.append(feature_id)
-            passage_query.append([feature_id])
+            field, value = idx.lookup_feature(feature_id)
+            highlight_features[field].add(value)
 
         if filter_cluster_id is not None:
             filter_cluster_id = int(filter_cluster_id)
-            query &= cherrypy.request.index.cluster_docs(filter_cluster_id)
+            cluster_docs = idx.cluster_docs(filter_cluster_id)
+            if query is None:
+                query = cluster_docs
+            else:
+                query &= cluster_docs
 
-            filter_features = cherrypy.request.index.cluster_features(filter_cluster_id)
-            concordance_features.extend([r[1:3] for r in filter_features])
-            passage_query.append([f[0] for f in filter_features])
+            for feature in idx.cluster_features(filter_cluster_id):
+                field, value = feature[1:3]
+                highlight_features[field].add(value)
 
-        sorted_features = list(
-            cherrypy.request.index.pivot_clusters_by_query(
-                query,
-                cluster_ids=[cluster_id],
-                top_k=n_features,
-                scoring=scoring,
+        # Sorted features for both display and driving edit navigation
+        clusters = list(
+            idx.pivot_clusters_by_query(
+                query, cluster_ids=[cluster_id], top_k=int(n_features)
             )
         )
-
-        # Make sure that there are actually matching features.
-        if sorted_features:
-            features = sorted_features[0][-1]
-
-        visible_features = [feature[0] for feature in features]
-
-        # Retrieve matching documents if we have a corpus to render them.
-        if cherrypy.request.index.corpus is not None:
-            if result_type == "concordance":
-                search_results = list(
-                    cherrypy.request.index.concordances(
-                        query,
-                        concordance_features,
-                        15,
-                        random_sample_size=int(exemplar_docs),
-                    )
-                )
-            if result_type == "passage":
-                passages = cherrypy.request.index.score_passages_dnf(passage_query, 25)
-                search_results = list(
-                    cherrypy.request.index.render_passages_table(
-                        passages, random_sample_size=int(exemplar_docs)
-                    )
-                )
-            else:
-                search_results = cherrypy.request.index.render_docs_html(
-                    query, random_sample_size=int(exemplar_docs)
-                )
-
         total_docs = len(query)
 
-        fields = [row[0] for row in cherrypy.request.index.indexed_field_summary()]
+        sampled_docs = idx.sample_bitmap(query, int(exemplar_docs))
 
-        pinned = int(cluster_id in cherrypy.request.index.pinned_cluster_ids)
+        for _, _, doc in idx.docs(sampled_docs):
 
-        return template.render(
-            cluster_id=cluster_id,
-            highlight_feature_id=feature_id,
-            features=features,
-            index_id=index_id,
-            cluster_score=None,
-            search_results=search_results,
-            result_type=result_type,
+            html_docs.append(idx.corpus.doc_to_html(doc))
+
+            doc_features = idx.corpus.doc_to_features(doc)
+
+            feature_matches = idx.match_doc_features(doc_features, highlight_features)
+
+            for field, values in feature_matches.items():
+                doc_field_values = doc_features[field]
+
+                # Find matching positions across all values in the field to generate
+                # unified concordances
+
+                field_positions = sorted(
+                    p for positions in values.values() for p in positions
+                )
+
+                if not field_positions:
+                    continue
+
+                # Join overlapping segments together into one - this isn't really a
+                # true 'concordance', but a blend between a concordance and a
+                # snippet.
+                starts = [max(0, field_positions[0] - snippet_window)]
+                ends = [field_positions[0] + snippet_window]
+
+                for position in field_positions[1:]:
+                    start = max(0, position - snippet_window)
+                    end = position + snippet_window
+
+                    # If this window overlaps with the previous window
+                    if start <= ends[-1]:
+                        ends[-1] = end
+
+                    else:
+                        starts.append(start)
+                        ends.append(end)
+
+                snippets.append(
+                    [
+                        idx.field_values[field].segment_to_html(
+                            doc_field_values,
+                            start,
+                            end,
+                            highlight=values,
+                        )
+                        for start, end in zip(starts, ends)
+                    ]
+                )
+
+                # Convert the matching feature to HTML representations as well.
+                matches.append(
+                    {
+                        field: sorted(
+                            idx.field_values[field].to_html(value)
+                            for value in values.keys()
+                        )
+                        for field, values in feature_matches.items()
+                    }
+                )
+
+        fields = idx.field_values.keys()
+
+        # Render all the feature values to HTML
+        clusters = [
+            (
+                cluster_id,
+                cluster_score,
+                [
+                    (feature_id, field, idx.field_values[field].to_html(value), score)
+                    for feature_id, field, value, score in features
+                ],
+            )
+            for cluster_id, cluster_score, features in clusters
+        ]
+
+        template = templates.get_template("cluster.html")
+
+        return template.generate(
+            clusters=clusters,
             total_docs=total_docs,
+            search_results=list(zip(html_docs, matches, snippets)),
+            # Design note: might be worth letting templates grab the request
+            # context, and avoid passing this around for everything that
+            # needs it?
+            index_id=index_id,
+            highlight_feature_id=highlight_feature_id,
+            fields=fields,
+            context="cluster",
+            # Cluster specific nav and editing
             prev_cluster_id=prev_cluster_id,
             next_cluster_id=next_cluster_id,
             pinned=pinned,
-            visible_features=visible_features,
-            fields=fields,
+            features=clusters[0][-1],
         )
 
     @cherrypy.expose
@@ -187,8 +264,9 @@ class Cluster:
         Currently this is limited to exact matches on a single value only.
 
         """
-
-        feature_id = cherrypy.request.index.lookup_feature_id((field, value))
+        idx = cherrypy.request.index
+        search_value = idx.field_values[field].from_str(value)
+        feature_id = idx.lookup_feature_id((field, search_value))
 
         raise cherrypy.HTTPRedirect(
             f"/index/{index_id}/cluster/{cluster_id}/?feature_id={feature_id}"
@@ -349,92 +427,150 @@ class Index:
         cluster_id=None,
         exemplar_docs="5",
         top_k_features="40",
-        scoring="jaccard",
-        result_type=None,
+        snippet_window="10",
     ):
         """Display an entire feature clustering defined on an index."""
-        template = templates.get_template("index.html")
 
-        search_results = []
-        total_docs = 0
-        query = None
-        highlight_cluster_id = None
-        highlight_feature_id = None
-        concordances = False
+        # This does need some refactoring work - there's too much complexity here
+        # This will require further design work on the querying and display API.
+        # pylint: disable=too-many-branches,too-many-statements,too-many-nested-blocks
 
+        idx = cherrypy.request.index
         # Redirect to the index overview page to create a new model if no
         # index has been created.
-        if not cherrypy.request.index.cluster_ids:
+        if not idx.cluster_ids:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
 
-        passage_query = []
+        # Set defaults to be used if neither cluster/feature_id are provided. In this
+        # case there is no query to drive contextualisation, and no docs to display.
+        highlight_cluster_id = None
+        highlight_feature_id = None
+        query = None
+        total_docs = 0
+        html_docs = []
+        matches = []
+        snippets = []
+        snippet_window = int(snippet_window)
+
+        # Assemble a sample of matching documents from the query (if present)
+        # A query can be either a single feature_id, or a single cluster_id, or the
+        # intersection of a feature and a cluster if both are specified.
+        # At the same time assemble the contextual features from the query for
+        # highlighting.
+
+        highlight_features = defaultdict(set)
 
         if feature_id is not None:
-            query = cherrypy.request.index[int(feature_id)]
-            highlight_feature_id = int(feature_id)
-            concordance_features = [highlight_feature_id]
-            passage_query.append([highlight_feature_id])
+            feature_id = highlight_feature_id = int(feature_id)
+            query = idx[feature_id]
 
-        elif cluster_id is not None:
-            cluster_docs = cherrypy.request.index.cluster_docs(int(cluster_id))
+            field, value = idx.lookup_feature(feature_id)
+            highlight_features[field].add(value)
 
+        if cluster_id is not None:
+            cluster_id = highlight_cluster_id = int(cluster_id)
+            cluster_docs = idx.cluster_docs(cluster_id)
             if query is None:
                 query = cluster_docs
             else:
                 query &= cluster_docs
 
-            highlight_cluster_id = int(cluster_id)
-            cluster_features = cherrypy.request.index.cluster_features(
-                highlight_cluster_id
-            )
-            concordance_features = [f[1:3] for f in cluster_features]
-            passage_query.append([f[0] for f in cluster_features])
+            for feature in idx.cluster_features(cluster_id):
+                field, value = feature[1:3]
+                highlight_features[field].add(value)
 
-        if query:
-            clusters = cherrypy.request.index.pivot_clusters_by_query(
-                query, scoring=scoring, top_k=int(top_k_features)
-            )
-
-            if cherrypy.request.index.corpus is not None:
-                if result_type == "concordance":
-                    search_results = list(
-                        cherrypy.request.index.concordances(
-                            query,
-                            concordance_features,
-                            15,
-                            random_sample_size=int(exemplar_docs),
-                        )
-                    )
-                if result_type == "passage":
-                    passages = cherrypy.request.index.score_passages_dnf(
-                        passage_query, 25
-                    )
-                    search_results = list(
-                        cherrypy.request.index.render_passages_table(
-                            passages, random_sample_size=int(exemplar_docs)
-                        )
-                    )
-                else:
-                    search_results = cherrypy.request.index.render_docs_html(
-                        query, random_sample_size=int(exemplar_docs)
-                    )
-
+        if query is not None:
+            clusters = idx.pivot_clusters_by_query(query, top_k=int(top_k_features))
             total_docs = len(query)
 
-        else:
-            clusters = cherrypy.request.index.top_cluster_features(
-                top_k=int(top_k_features)
-            )
-            total_docs = 0
+            sampled_docs = idx.sample_bitmap(query, int(exemplar_docs))
 
-        fields = [row[0] for row in cherrypy.request.index.indexed_field_summary()]
+            for _, _, doc in idx.docs(sampled_docs):
+
+                html_docs.append(idx.corpus.doc_to_html(doc))
+
+                doc_features = idx.corpus.doc_to_features(doc)
+
+                feature_matches = idx.match_doc_features(
+                    doc_features, highlight_features
+                )
+
+                for field, values in feature_matches.items():
+                    doc_field_values = doc_features[field]
+
+                    # Find matching positions across all values in the field to generate
+                    # unified concordances
+                    field_positions = sorted(
+                        p for positions in values.values() for p in positions
+                    )
+
+                    starts = ends = []
+
+                    if field_positions:
+                        # Join overlapping segments together into one - this isn't really a
+                        # true 'concordance', but a blend between a concordance and a
+                        # snippet.
+                        starts = [max(0, field_positions[0] - snippet_window)]
+                        ends = [field_positions[0] + snippet_window]
+
+                        for position in field_positions[1:]:
+                            start = max(0, position - snippet_window)
+                            end = position + snippet_window
+
+                            # If this window overlaps with the previous window
+                            if start <= ends[-1]:
+                                ends[-1] = end
+
+                            else:
+                                starts.append(start)
+                                ends.append(end)
+
+                    # Convert the matching feature to HTML representations as well.
+                    doc_matches = {
+                        field: sorted(
+                            idx.field_values[field].to_html(value)
+                            for value in values.keys()
+                        )
+                        for field, values in feature_matches.items()
+                    }
+
+                    matches.append(doc_matches)
+
+                    doc_snippets = [
+                        idx.field_values[field].segment_to_html(
+                            doc_field_values,
+                            start,
+                            end + 1,
+                            highlight=values,
+                        )
+                        for start, end in zip(starts, ends)
+                    ]
+                    snippets.append(doc_snippets)
+
+        else:
+            clusters = idx.top_cluster_features(top_k=int(top_k_features))
+
+        # Render all the feature values to HTML
+        clusters = (
+            (
+                cluster_id,
+                cluster_score,
+                [
+                    (feature_id, field, idx.field_values[field].to_html(value), score)
+                    for feature_id, field, value, score in features
+                ],
+            )
+            for cluster_id, cluster_score, features in clusters
+        )
+
+        fields = idx.field_values.keys()
+
+        template = templates.get_template("index.html")
 
         return template.generate(
             clusters=clusters,
             total_docs=total_docs,
-            search_results=search_results,
-            result_type=result_type,
-            concordances=concordances,
+            search_results=list(zip(html_docs, matches, snippets)),
             # Design note: might be worth letting templates grab the request
             # context, and avoid passing this around for everything that
             # needs it?
@@ -442,6 +578,7 @@ class Index:
             highlight_feature_id=highlight_feature_id,
             highlight_cluster_id=highlight_cluster_id,
             fields=fields,
+            context="index",
         )
 
     @cherrypy.expose
@@ -455,8 +592,9 @@ class Index:
         cluster view.
 
         """
-
-        feature_id = cherrypy.request.index.lookup_feature_id((field, value))
+        idx = cherrypy.request.index
+        search_value = idx.field_values[field].from_str(value)
+        feature_id = idx.lookup_feature_id((field, search_value))
 
         if cluster_id is not None:
             raise cherrypy.HTTPRedirect(
@@ -471,10 +609,11 @@ class Index:
         Show the details of the index, including indexed fields and associated cardinalities.
 
         """
+        idx = cherrypy.request.index
 
         template = templates.get_template("details.html")
-        current_clusters = len(cherrypy.request.index.cluster_ids)
-        field_summary = cherrypy.request.index.indexed_field_summary()
+        current_clusters = len(idx.cluster_ids)
+        field_summary = idx.indexed_field_summary()
 
         return template.render(
             field_summary=field_summary,
@@ -525,13 +664,14 @@ class Index:
         Note that this does not actually run any iterations of refinement.
 
         """
-        cherrypy.request.index.initialise_clusters(
+        idx = cherrypy.request.index
+        idx.initialise_clusters(
             n_clusters=int(clusters),
             min_docs=int(min_docs),
             include_fields=include_fields or None,
         )
 
-        cherrypy.request.index.refine_clusters(
+        idx.refine_clusters(
             iterations=int(iterations),
             minimum_cluster_features=int(minimum_cluster_features),
         )
@@ -606,7 +746,7 @@ class SingleIndexServer:
     def __init__(
         self,
         index_path,
-        corpus_class=None,
+        corpus_class=EmptyCorpus,
         corpus_args=None,
         corpus_kwargs=None,
         pool=None,

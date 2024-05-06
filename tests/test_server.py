@@ -18,7 +18,11 @@ import hyperreal
 
 servers = [
     # Index server with no associated corpus.
-    (None, None, pathlib.Path("tests", "index", "alice_index.db")),
+    (
+        None,
+        hyperreal.corpus.EmptyCorpus,
+        pathlib.Path("tests", "index", "alice_index.db"),
+    ),
     # PlainTextCorpus
     (
         pathlib.Path("tests", "corpora", "alice.db"),
@@ -48,7 +52,7 @@ def fixture_server(tmp_path, request):
         if corpus_path is not None:
             corp = source_corpus_class(corpus_path)
         else:
-            corp = None
+            corp = hyperreal.corpus.EmptyCorpus()
 
         idx = hyperreal.index.Index(index_path, corpus=corp, pool=pool)
         idx.initialise_clusters(8, min_docs=3)

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% from 'macros.html' import render_cluster, render_context_search, render_search_results %}
+{% from 'macros.html' import render_cluster, render_context_search, render_search_result %}
 
 {% block title %}Feature Clustering{% endblock %}
 
@@ -11,8 +11,9 @@
 {% endblock %}
 
 {% block content %}
-{{ render_context_search(index_id, fields) }}
 
+{% block context_edit %}
+{{ render_context_search(index_id, fields) }}
 <details>
     <summary>Edit Selected Clusters</summary>
     <form method="post" id="cluster_edit" action="/index/{{ index_id }}/cluster/delete">
@@ -26,22 +27,27 @@
     </form>
 </details>
 
+{% endblock %}
+
 <ul class="cluster-list">
     {% if search_results %}
     <li>
         <div class="cluster-header">
-            {% if search_results|length < total_docs %}Sample of {{ total_docs }} documents{% else %}All {{ total_docs }} matching documents.{% endif %}
+            Sample of {{ total_docs }} documents.
         </div>
 
-        {{ render_search_results(search_results, result_type) }}
+        <ul class="doc-list">
+        {% for (_, _, doc), matches, snippets in search_results %}
+            <li>{{ render_search_result(doc, matches, snippets) }}</li>
+        {% endfor %}
+        </ul>
 
     </li>
     {% endif %}
 
-
     {% for cluster_id, cluster_score, features in clusters %}
     <li>
-        {{ render_cluster(index_id, cluster_id, features, cluster_score, highlight_cluster_id, highlight_feature_id) }}
+        {{ render_cluster(index_id, cluster_id, features, cluster_score, highlight_cluster_id, highlight_feature_id, context=context) }}
     </li>
     {% endfor %}
 </ul>

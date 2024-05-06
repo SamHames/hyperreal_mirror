@@ -9,54 +9,12 @@ import logging
 import multiprocessing as mp
 
 import click
-import networkx as nx
 
 import hyperreal.corpus
 import hyperreal.index
 import hyperreal.server
 
 logging.basicConfig(level=logging.INFO)
-
-
-def make_csv_exporter(corpus_type):
-    """
-    Return a click annotated function for an exporter that takes three arguments.
-
-    The expected arguments are (in order):
-
-    1. The path to the file representing the corpus.
-    2. The path to the index database.
-    3. The path to the output file of the CSV export.
-
-    """
-
-    @click.argument("corpus_db", type=click.Path(exists=True, dir_okay=False))
-    @click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-    @click.argument("output_file", type=click.Path(dir_okay=False))
-    @click.option(
-        "--docs-per-cluster",
-        type=click.INT,
-        default=50,
-        help="The maximum number of documents to sample from each cluster. "
-        "If set to 0, all documents in clusters will be returned.",
-    )
-    def export_csv(corpus_db, index_db, output_file, docs_per_cluster):
-        """
-        Export a sample of documents from each cluster in the model.
-
-        """
-        if not hyperreal.index.Index.is_index_db(index_db):
-            raise ValueError(f"{index_db} is not a valid index file.")
-
-        corpus = corpus_type(corpus_db)
-        idx = hyperreal.index.Index(index_db, corpus=corpus)
-
-        cluster_samples, sample_clusters = idx.structured_doc_sample(
-            docs_per_cluster=docs_per_cluster
-        )
-        idx.export_document_sample(cluster_samples, sample_clusters, output_file)
-
-    return export_csv
 
 
 def make_two_file_indexer(corpus_type):
@@ -121,7 +79,7 @@ def make_two_file_indexer(corpus_type):
         with cf.ProcessPoolExecutor(workers, mp_context=mp_context) as pool:
             doc_index = hyperreal.index.Index(index_db, corpus=doc_corpus, pool=pool)
 
-            doc_index.index(
+            doc_index.rebuild(
                 doc_batch_size=doc_batch_size, index_positions=index_positions
             )
 
@@ -197,10 +155,6 @@ plaintext_corpus.command(name="index")(
     make_two_file_indexer(hyperreal.corpus.PlainTextSqliteCorpus)
 )
 
-plaintext_corpus.command(name="sample")(
-    make_csv_exporter(hyperreal.corpus.PlainTextSqliteCorpus)
-)
-
 
 @cli.group()
 def stackexchange_corpus():
@@ -261,10 +215,6 @@ def stackexchange_corpus_serve(corpus_db, index_db):
         engine = hyperreal.server.launch_web_server(index_server)
         engine.block()
 
-
-stackexchange_corpus.command(name="sample")(
-    make_csv_exporter(hyperreal.corpus.StackExchangeCorpus)
-)
 
 stackexchange_corpus.command(name="index")(
     make_two_file_indexer(hyperreal.corpus.StackExchangeCorpus)
@@ -359,7 +309,9 @@ def model(
     model with --restart.
 
     """
-    doc_index = hyperreal.index.Index(index_db, random_seed=random_seed)
+    doc_index = hyperreal.index.Index(
+        index_db, hyperreal.corpus.EmptyCorpus(), random_seed=random_seed
+    )
 
     # Check if any clusters exist.
     has_clusters = bool(doc_index.cluster_ids)
@@ -403,92 +355,3 @@ def model(
         group_test_batches=group_test_batches,
         group_test_top_k=group_test_top_k,
     )
-
-
-@cli.group()
-def export():
-    """Entry point for export functionality relating to an index."""
-
-
-@export.command(name="graph")
-@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-@click.argument("graph_file", type=click.Path(dir_okay=False))
-@click.option(
-    "--top-k-features",
-    type=click.INT,
-    default=5,
-    help="The number of top features to include in the node labels.",
-)
-@click.option(
-    "--include-field-in-label/--exclude-field-in-label",
-    default=True,
-    help="Include or exclude the field in node labels. This can be used "
-    "to exclude showing fields when you only have a single field in the model.",
-)
-def export_graph(index_db, graph_file, top_k_features, include_field_in_label):
-    """
-    Export the clustering in the given index into the given file as graphml.
-    """
-    if not hyperreal.index.Index.is_index_db(index_db):
-        raise ValueError(f"{index_db} is not a valid index file.")
-
-    mp_context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
-        idx = hyperreal.index.Index(index_db, pool=pool)
-        graph = idx.create_cluster_cooccurrence_graph(
-            top_k=top_k_features, include_field_in_label=include_field_in_label
-        )
-        nx.write_graphml(graph, graph_file)
-
-
-@export.command(name="clusters")
-@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-@click.argument("cluster_file", type=click.Path(dir_okay=False))
-@click.option(
-    "--top-k-features",
-    type=click.INT,
-    default=10,
-    help="The number of top features to include from each cluster."
-    "Setting this to 0 will export all features in each cluster.",
-)
-def export_clusters(index_db, cluster_file, top_k_features):
-    """
-    Export all cluster features in the model to the given csv file.
-    """
-    if not hyperreal.index.Index.is_index_db(index_db):
-        raise ValueError(f"{index_db} is not a valid index file.")
-
-    idx = hyperreal.index.Index(index_db)
-
-    with open(cluster_file, "w", encoding="utf-8") as output:
-        writer = csv.writer(output, dialect="excel", quoting=csv.QUOTE_ALL)
-        writer.writerow(("cluster_id", "feature_id", "field", "value", "docs_count"))
-
-        top_k = top_k_features or 2**62
-        features = idx.top_cluster_features(top_k=top_k)
-        for cluster_id, _, cluster_features in features:
-            for row in cluster_features:
-                writer.writerow([cluster_id, *row])
-
-
-@cli.command()
-@click.argument("index_db", type=click.Path(exists=True, dir_okay=False))
-def serve(index_db):
-    """
-    Serve the given index file.
-
-    Note that this method of serving will not provide access to the underlying
-    corpus of documents - this is useful for non-consumptive types of analysis.
-    If you want to view the underlying documents, see the serve subcommand for
-    the specific type of corpus you're interested in.
-
-    """
-
-    if not hyperreal.index.Index.is_index_db(index_db):
-        raise ValueError(f"{index_db} is not a valid index file.")
-
-    mp_context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
-        index_server = hyperreal.server.SingleIndexServer(index_db, pool=pool)
-        engine = hyperreal.server.launch_web_server(index_server)
-        engine.block()
