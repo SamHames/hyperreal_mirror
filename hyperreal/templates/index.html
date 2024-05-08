@@ -37,7 +37,7 @@
         </div>
 
         <ul class="doc-list">
-        {% for (_, _, doc), matches, snippets in search_results %}
+        {% for doc, matches, snippets in search_results %}
             <li>{{ render_search_result(doc, matches, snippets) }}</li>
         {% endfor %}
         </ul>
