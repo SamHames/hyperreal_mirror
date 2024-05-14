@@ -617,8 +617,10 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                             Id,
                             Title,
                             Body,
-                            -- Used to retrieve tags for the root question, as
-                            -- the tags are not present on answers, only questions.
+                            -- Used to retrieve both tags for the root
+                            -- question, and the Question asked for answers -
+                            -- as the these aren't present on answers, only
+                            -- the root question.
                             coalesce(ParentId, Id) as TagPostId,
                             coalesce(
                                 (
@@ -640,13 +642,24 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                     )
                 )[0]
 
+                doc["QuestionTitle"] = list(
+                    self.db.execute(
+                        """
+                        select Title
+                        from Post
+                        where (site_id, Id) = (:site_id, :TagPostId)
+                        """,
+                        doc,
+                    )
+                )[0]["Title"]
+
                 # Use the tags on the question, not the (absent) tags on the answer.
                 doc["Tags"] = {
                     r["Tag"]
                     for r in self.db.execute(
                         """
-                        select Tag 
-                        from PostTag 
+                        select Tag
+                        from PostTag
                         where (site_id, PostId) = (:site_id, :TagPostId)
                         """,
                         doc,
@@ -691,8 +704,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         return Markup(
             self.TEMPLATE.render(
                 base_fields=doc,
-                tags=doc["tags"],
-                user_comments=doc["user_comments"],
+                tags=doc["Tags"],
+                user_comments=doc["UserComments"],
             )
         )
 
