@@ -490,24 +490,19 @@ def test_field_intersection(tmp_path, pool):
 
     sx_corpus = hyperreal.corpus.StackExchangeCorpus(str(target_corpora_db))
 
-    sx_corpus.add_site_data(
-        str(data_path / "expat_sx" / "Posts.xml"),
-        str(data_path / "expat_sx" / "Comments.xml"),
-        str(data_path / "expat_sx" / "Users.xml"),
-        "https://expatriates.stackexchange.com",
-    )
+    sx_corpus.replace_sites_data(data_path / "chess.meta.stackexchange.com.7z")
 
     sx_idx = hyperreal.index.Index(str(target_index_db), pool=pool, corpus=sx_corpus)
     sx_idx.rebuild()
 
     queries = {
-        "visa": sx_idx[("Post", "visa")],
+        "moves": sx_idx[("Post", "moves")],
         "1st June 2020": sx_idx[("CreationDate", date(2020, 6, 1))],
     }
 
     _, _, intersections = sx_idx.intersect_queries_with_field(queries, "CreationYear")
 
-    assert all(c > 0 for c in intersections["visa"])
+    assert all(c > 0 for c in intersections["moves"])
 
     # the '1st June 2020' query should only have nonzero intersection with a
     # single year.

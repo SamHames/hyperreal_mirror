@@ -9,7 +9,10 @@ documents one at a time through generators.
 """
 
 import abc
+import logging
+import os
 import re
+import tempfile
 from collections import defaultdict
 from collections.abc import Hashable, Iterable, Mapping
 from html import escape
@@ -20,9 +23,12 @@ from dateutil.parser import isoparse
 from jinja2 import Template
 from lxml.html import fragment_fromstring
 from markupsafe import Markup
+from py7zr import SevenZipFile
 
 from hyperreal import utilities, value_handlers
 from hyperreal.db_utilities import connect_sqlite, dict_factory
+
+logger = logging.getLogger(__name__)
 
 Feature = tuple[str, Hashable]
 """
@@ -35,7 +41,7 @@ Examples of features could be:
 
 - The datetime a document was created:
     `('created_at', datetime(2024, 1, 1))`
-- A single word extracted from a text field: 
+- A single word extracted from a text field:
     `('text', 'cat')`
 - A numerical quantity, like the number of likes on a social media post:
     `('likes', 100)
@@ -62,7 +68,7 @@ the following requirements:
 An example DocFeatures could be:
 
 ```
-{   
+{
     # A singular value field.
     'creation_date': date(2024, 03, 01)',
 
@@ -309,10 +315,10 @@ class PlainTextSqliteCorpus(SqliteBackedCorpus):
 STACKEXCHANGE_HTML = """
 <details>
     <summary>
-        <em>{{ base_fields["QuestionTitle"] | e }}</em> - 
+        <em>{{ base_fields["QuestionTitle"] | e }}</em> -
         {{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}
     </summary>
-    
+
     <p>
         <small>
             <a href="{{ base_fields["LiveLink"] }}">Live Link</a>
@@ -387,18 +393,27 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         "CreationYear": value_handlers.DateHandler(),
     }
 
-    def add_site_data(self, posts_file, comments_file, users_file, site_url):
+    def replace_sites_data(self, *archive_files):
         """
-        Add the data for a specific stackexchange site to the model.
+        Add the data from the given stackexchange archive files to this corpus.
 
-        The site_url is used for differentiating sites, and constructing links
-        to relevant pages on the correct site.
+        The input files are the .7z files directly downloaded from
+        https://archive.org/download/stackexchange/, no additional processing
+        is needed.
 
-        Existing rows in the database will be replaced, so it is possible to
-        update with newer data, however if data is missing from the archive
-        dump that was present earlier, the state of the history may be
-        inconsistent. It may be better to recreate the entire state from
-        scratch in this case.
+        To handle StackOverflow, you will need to pass the following
+        files:
+
+        - stackoverflow.com-Posts.7z
+        - stackoverflow.com-Comments.7z
+        - stackoverflow.com-Users.7z
+
+        Note that you will also need ~200GiB of free disk space to handle
+        stackoverflow itself - all other sites will be significantly
+        smaller.
+
+        If the site has already been added, all existing posts will be deleted
+        and replaced with the content of the provided files.
 
         """
         self.db.execute("pragma journal_mode=WAL")
@@ -409,10 +424,30 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 site_url unique
             );
 
+            create table if not exists User(
+                AboutMe text,
+                CreationDate datetime,
+                Location text,
+                ProfileImageUrl text,
+                WebsiteUrl text,
+                AccountId integer,
+                Reputation integer,
+                Id integer,
+                Views integer,
+                UpVotes integer,
+                DownVotes integer,
+                DisplayName text,
+                LastAccessDate datetime,
+                site_id integer references Site,
+                primary key (site_id, Id)
+            );
+
             create table if not exists Post(
-                -- doc_id is a surrogate key necessary for indexing.
-                -- The natural key is (site_id, Id).
-                doc_id integer primary key,
+                -- doc_id is a surrogate key consisting of "site_id/Id"
+                -- this is necessary so that we can track document keys
+                -- consistently on rebuilding the index after updating site
+                -- data
+                doc_id primary key,
                 site_id integer references Site,
                 Id integer,
                 OwnerUserId integer,
@@ -447,24 +482,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             );
 
             create index if not exists post_comment on comment(site_id, PostId);
-
-            create table if not exists User(
-                AboutMe text,
-                CreationDate datetime,
-                Location text,
-                ProfileImageUrl text,
-                WebsiteUrl text,
-                AccountId integer,
-                Reputation integer,
-                Id integer,
-                Views integer,
-                UpVotes integer,
-                DownVotes integer,
-                DisplayName text,
-                LastAccessDate datetime,
-                site_id integer references Site,
-                primary key (site_id, Id)
-            );
+            create index if not exists site_post on Post(site_id, Id);
+            create index if not exists site_user on User(site_id, Id);
 
             create table if not exists PostTag(
                 site_id integer references Site,
@@ -480,6 +499,66 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         try:
             self.db.execute("begin")
 
+            to_process = []
+
+            # stackoverflow and only stackoverflow is split into multiple
+            # files, so we need to handle it specially.
+            stackoverflow_files = {
+                "Posts": "stackoverflow.com-Posts.7z",
+                "Comments": "stackoverflow.com-Comments.7z",
+                "Users": "stackoverflow.com-Users.7z",
+            }
+
+            seen_stackoverflow = set()
+
+            for file in set(archive_files):
+                file_locations = {
+                    "Posts": file,
+                    "Comments": file,
+                    "Users": file,
+                }
+
+                filename = os.path.basename(file)
+
+                # Special case stackoverflow by checking all the files are present
+                # at the end.
+                if filename in stackoverflow_files.values():
+                    seen_stackoverflow.add(filename)
+
+                url_candidate, extension = os.path.splitext(filename)
+                if extension != ".7z":
+                    raise ValueError(
+                        f"{file} does not seem like a valid stackexchange archive file"
+                    )
+
+                to_process.append(("https://" + url_candidate, file_locations))
+
+            if len(seen_stackoverflow) == 3:
+                to_process.append(("https://stackoverflow.com", stackoverflow_files))
+
+            elif len(seen_stackoverflow) > 0:
+                missing_files = [
+                    file
+                    for file in stackoverflow_files.values()
+                    if file not in seen_stackoverflow
+                ]
+                raise ValueError(
+                    "Missing stackoverflow files - please add "
+                    f"{missing_files} to process the full stackoverflow dataset."
+                )
+
+            for site_url, file_locations in to_process:
+                logger.info("Processing data for %s", site_url)
+                self._add_single_site(site_url, file_locations)
+
+            self.db.execute("commit")
+
+        except Exception:
+            self.db.execute("rollback")
+            raise
+
+    def _add_single_site(self, site_url, file_locations):
+        with tempfile.TemporaryDirectory() as temp_directory:
             # Process Posts, which includes both questions and answers.
             tag_splitter = re.compile("<|>|<>")
 
@@ -491,6 +570,15 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                     "select site_id from Site where site_url = ?", [site_url]
                 )
             )[0]["site_id"]
+
+            self.db.execute("delete from Post where site_id = ?", [site_id])
+            self.db.execute("delete from Comment where site_id = ?", [site_id])
+            self.db.execute("delete from User where site_id = ?", [site_id])
+
+            # Extract the posts file
+            with SevenZipFile(file_locations["Posts"], "r") as archive_file:
+                archive_file.extract(path=temp_directory, targets=["Posts.xml"])
+                posts_file = os.path.join(temp_directory, "Posts.xml")
 
             tree = ElementTree.iterparse(posts_file, events=("end",))
             post_types = {"1": "Question", "2": "Answer"}
@@ -506,11 +594,12 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 doc.update(elem.attrib)
                 doc["PostType"] = post_types[elem.attrib["PostTypeId"]]
                 doc["site_id"] = site_id
+                doc["doc_id"] = f"{site_id}/{doc['Id']}"
 
                 self.db.execute(
                     """
                     replace into post values (
-                        (select doc_id from Post where (site_id, Id) = (:site_id, :Id)),
+                        :doc_id,
                         :site_id,
                         :Id,
                         :OwnerUserId,
@@ -543,6 +632,12 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 # processed nodes in the tree.
                 elem.clear()
 
+            os.remove(posts_file)
+
+            with SevenZipFile(file_locations["Comments"], "r") as archive_file:
+                archive_file.extract(path=temp_directory, targets=["Comments.xml"])
+                comments_file = os.path.join(temp_directory, "Comments.xml")
+
             tree = ElementTree.iterparse(comments_file, events=("end",))
 
             for _, elem in tree:
@@ -566,6 +661,12 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                     doc,
                 )
                 elem.clear()
+
+            os.remove(comments_file)
+
+            with SevenZipFile(file_locations["Users"], "r") as archive_file:
+                archive_file.extract(path=temp_directory, targets=["Users.xml"])
+                users_file = os.path.join(temp_directory, "Users.xml")
 
             tree = ElementTree.iterparse(users_file, events=("end",))
 
@@ -597,11 +698,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 )
                 elem.clear()
 
-            self.db.execute("commit")
-
-        except Exception:
-            self.db.execute("rollback")
-            raise
+            os.remove(users_file)
 
     def docs(self, keys):
         self.db.execute("savepoint docs")

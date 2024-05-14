@@ -84,11 +84,8 @@ def test_sx_corpus(tmp_path):
     result = runner.invoke(
         cli.stackexchange_corpus,
         [
-            "add-site",
-            str(data_path / "expat_sx" / "Posts.xml"),
-            str(data_path / "expat_sx" / "Comments.xml"),
-            str(data_path / "expat_sx" / "Users.xml"),
-            "https://expatriates.stackexchange.com",
+            "replace-sites",
+            str(data_path / "chess.meta.stackexchange.com.7z"),
             str(target_corpora_db),
         ],
     )
@@ -110,7 +107,7 @@ def test_sx_corpus(tmp_path):
             "--clusters",
             "16",
             "--min-docs",
-            "10",
+            "5",
             "--include-field",
             "Post",
             "--include-field",

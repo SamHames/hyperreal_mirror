@@ -161,33 +161,26 @@ def stackexchange_corpus():
     """Entrypoint for all StackExchange related functionality."""
 
 
-@stackexchange_corpus.command(name="add-site")
-@click.argument("posts_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("comments_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("users_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("site_url", type=str)
+@stackexchange_corpus.command(name="replace-sites")
+@click.argument(
+    "archive_files",
+    type=click.Path(exists=True, dir_okay=False),
+    nargs=-1,
+)
 @click.argument("corpus_db", type=click.Path(dir_okay=False))
-def stackexchange_corpus_add_site(
-    posts_file, comments_file, users_file, site_url, corpus_db
-):
+def stackexchange_corpus_add_site(archive_files, corpus_db):
     """
-    Create a simple corpus database from the stackexchange XML data dumps.
+    Create a simple corpus database from the stackexchange 7z/XML data dumps.
 
     The data dumps for all sites can be found here:
     https://archive.org/download/stackexchange
 
-    Dumps from multiple sites can be added to the same corpus. The site_url
-    value is used to differentiate the source site, and to construct URLs to
-    link directly to live data - this should be the base URL of the site
-    associated with the dump, such as `https://stackoverflow.com` or
-    `https://travel.stackexchange.com`.
+    Dumps from multiple sites can be added to the same corpus in one go.
+    The site is inferred from the filename.
 
     """
-    click.echo(f"Adding {site_url} data into {corpus_db}.")
-
     doc_corpus = hyperreal.corpus.StackExchangeCorpus(corpus_db)
-
-    doc_corpus.add_site_data(posts_file, comments_file, users_file, site_url)
+    doc_corpus.replace_sites_data(*archive_files)
 
 
 @stackexchange_corpus.command(name="serve")
