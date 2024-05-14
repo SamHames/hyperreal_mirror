@@ -23,7 +23,6 @@ from dateutil.parser import isoparse
 from jinja2 import Template
 from lxml.html import fragment_fromstring
 from markupsafe import Markup
-from py7zr import SevenZipFile
 
 from hyperreal import utilities, value_handlers
 from hyperreal.db_utilities import connect_sqlite, dict_factory
@@ -416,6 +415,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
         and replaced with the content of the provided files.
 
         """
+
         self.db.execute("pragma journal_mode=WAL")
         self.db.executescript(
             """
@@ -558,6 +558,14 @@ class StackExchangeCorpus(SqliteBackedCorpus):
             raise
 
     def _add_single_site(self, site_url, file_locations):
+
+        try:
+            from py7zr import SevenZipFile
+        except ImportError:
+            raise ImportError(
+                "The py7zr package needs to be installed for this functionality."
+            )
+
         with tempfile.TemporaryDirectory() as temp_directory:
             # Process Posts, which includes both questions and answers.
             tag_splitter = re.compile("<|>|<>")
