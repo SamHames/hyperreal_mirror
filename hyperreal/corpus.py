@@ -559,12 +559,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
     def _add_single_site(self, site_url, file_locations):
 
+        # pylint: disable=import-outside-toplevel
         try:
             from py7zr import SevenZipFile
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "The py7zr package needs to be installed for this functionality."
-            )
+            ) from exc
 
         with tempfile.TemporaryDirectory() as temp_directory:
             # Process Posts, which includes both questions and answers.

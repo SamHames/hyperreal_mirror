@@ -507,3 +507,18 @@ def test_field_intersection(tmp_path, pool):
     # the '1st June 2020' query should only have nonzero intersection with a
     # single year.
     assert sum(1 for c in intersections["1st June 2020"] if c > 0) == 1
+
+
+def test_migration_warning(tmp_path):
+    """Test that an appropriate warning is raised for old schema versions."""
+
+    corpus_path = pathlib.Path("tests", "corpora", "alice.db")
+    corp = hyperreal.corpus.PlainTextSqliteCorpus(str(corpus_path))
+
+    random_index = tmp_path / str(uuid.uuid4())
+    shutil.copy(
+        pathlib.Path("tests", "index", "alice_index_old_schema.db"), random_index
+    )
+
+    with pytest.raises(hyperreal._index_schema.MigrationError):
+        hyperreal.index.Index(str(random_index), corpus=corp)
