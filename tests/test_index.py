@@ -521,4 +521,4 @@ def test_migration_warning(tmp_path):
     )
 
     with pytest.raises(hyperreal._index_schema.MigrationError):
-        idx = hyperreal.index.Index(str(random_index), corpus=corp)
+        hyperreal.index.Index(str(random_index), corpus=corp)

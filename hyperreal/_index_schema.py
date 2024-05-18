@@ -1,19 +1,17 @@
 """
-_schema.py: used for managing the schema of the index database.
+_index_schema.py: used for managing the schema of the index database.
 
-Migrations are handled as follows:
+Migrations are managed as a linear set of steps that are run sequentially. Schema
+versions consist of one or more steps in this sequence. Migrating from an old version
+to the current version requires looking up the sequence of steps up til that version
+in SCHEMA_VERSION_STEPS, then running all of the steps after that one.
 
-1. The CURRENT_SCHEMA script always represents the current schema of the
-database, associated with CURRENT_SCHEMA_VERSION.
-2. The migrations dict maps earlier application versions to:
-    - a sequence of statements to be run before applying CURRENT_SCHEMA
-    - a sequence of statements to be run after applying CURRENT_SCHEMA
+Each step can be either a str or a callable that takes a db connection as an argument.
+Strings will be treated as SQL statements and executed as is, callables will be called
+with the database connection as the only argument.
+
 
 """
-
-# Some parts of this need to be rerun during normal indexing, so no
-# point checking for duplication.
-# pylint: disable=duplicate-code
 
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
