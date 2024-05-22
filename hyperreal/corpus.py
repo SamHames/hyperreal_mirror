@@ -503,13 +503,13 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
             # stackoverflow and only stackoverflow is split into multiple
             # files, so we need to handle it specially.
-            stackoverflow_files = {
-                "Posts": "stackoverflow.com-Posts.7z",
-                "Comments": "stackoverflow.com-Comments.7z",
-                "Users": "stackoverflow.com-Users.7z",
+            stackoverflow_filenames = {
+                "stackoverflow.com-Posts.7z": "Posts",
+                "stackoverflow.com-Comments.7z": "Comments",
+                "stackoverflow.com-Users.7z": "Users",
             }
 
-            seen_stackoverflow = set()
+            seen_stackoverflow = {}
 
             for file in set(archive_files):
                 file_locations = {
@@ -519,11 +519,12 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 }
 
                 filename = os.path.basename(file)
-
-                # Special case stackoverflow by checking all the files are present
-                # at the end.
-                if filename in stackoverflow_files.values():
-                    seen_stackoverflow.add(filename)
+                # Special case stackoverflow by checking all the files are present at
+                # the end. Don't process this particular file if it is stackoverflow
+                # data.
+                if filename in stackoverflow_filenames:
+                    seen_stackoverflow[stackoverflow_filenames[filename]] = file
+                    continue
 
                 url_candidate, extension = os.path.splitext(filename)
                 if extension != ".7z":
@@ -534,12 +535,12 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                 to_process.append(("https://" + url_candidate, file_locations))
 
             if len(seen_stackoverflow) == 3:
-                to_process.append(("https://stackoverflow.com", stackoverflow_files))
+                to_process.append(("https://stackoverflow.com", seen_stackoverflow))
 
             elif len(seen_stackoverflow) > 0:
                 missing_files = [
                     file
-                    for file in stackoverflow_files.values()
+                    for file in stackoverflow_filenames
                     if file not in seen_stackoverflow
                 ]
                 raise ValueError(

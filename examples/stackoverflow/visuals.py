@@ -25,7 +25,7 @@ if __name__ == "__main__":
     leather.theme.title_color = "black"
 
     corp = corpus.StackExchangeCorpus("data/stackoverflow.db")
-    idx = index.Index("data/stackoverflow_index.db")
+    idx = index.Index("data/stackoverflow_index.db", corpus=corp)
 
     # Top tags in the dataset
     tag_counts = list(

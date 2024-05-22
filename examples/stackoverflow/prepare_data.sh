@@ -1,41 +1,37 @@
 # Download and prepare stackoverflow data for analysis
 #
-# Requirements: 7zz, python
+# Requirements: python, wget
 #
-# This script will need around ~300GiB of hard drive space to run.
+# Assume you will need around ~200GiB of hard drive space to run.
 #
+
+set -e
 
 # Download archive dumps
-mkdir data
-wget -c -N -O data/Posts.7z \
+mkdir -p data
+wget -c -N -P data/ \
+	https://archive.org/download/stackexchange/stackoverflow.com-Users.7z
+wget -c -N -P data/ \
+	https://archive.org/download/stackexchange/stackoverflow.com-Comments.7z
+wget -c -N -P data/ \
 	https://archive.org/download/stackexchange/stackoverflow.com-Posts.7z
 	
-wget -c -N -O data/Comments.7z \
-	https://archive.org/download/stackexchange/stackoverflow.com-Comments.7z
-	
-wget -c -N -O data/Users.7z \
-	https://archive.org/download/stackexchange/stackoverflow.com-Users.7z
-
-# Extract data
-7zz x data/Posts.7z -odata
-7zz x data/Comments.7z -odata
-7zz x data/Users.7z -odata
 
 # Setup a python environment for this experiment
 python -m venv stackoverflow_analysis
 source stackoverflow_analysis/bin/activate
 
-pip install hyperreal[stackexchange] leather tablib[html]
+wget https://hyperreal.app/tarball -O hyperreal.tar.gz
+pip install ./hyperreal.tar.gz[stackexchange] leather tablib[html]
 
-hyperreal stackexchange-corpus add-site \
-	data/Posts.xml \
-	data/Comments.xml \
-	data/Users.xml \
-	https://stackoverflow.com \
+hyperreal stackexchange-corpus replace-sites \
+	data/stackoverflow.com-Posts.7z \
+	data/stackoverflow.com-Comments.7z \
+	data/stackoverflow.com-Users.7z \
 	data/stackoverflow.db
 
 hyperreal stackexchange-corpus index \
-	--doc-batch-size 200000 \
+	--doc-batch-size 50000 \
 	data/stackoverflow.db \
 	data/stackoverflow_index.db
 
