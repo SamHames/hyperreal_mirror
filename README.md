@@ -1,15 +1,26 @@
-# Hyperreal
+# About #
+
+# About
 
 Hyperreal is a Python tool for interactive qualitative analysis of large
-collections of documents.
+collections of documents. Hyperreal builds on ideas from topic modelling, corpus linguistics and full text search. The aim is to enable new kinds of qualitative analysis workflows for amounts of data that would otherwise be too big to approach using existing approaches. It is designed to work with very large collections with only modest resources: interactive performance is always a development priority. 
 
+This library allows you to take a large collection of documents such as the 55 million questions and answers from [Stack Overflow](https://stackoverflow.com) and:
 
-## Requirements
+1. Create a searchable index of the content across many different fields, allowing you pay attention to the different ways a complex platform can be used.
+2. Use a text analytics algorithm to create an exploratory structure (simple clusters of features) for understanding this large dataset in context.
+3. Use the software and web interface to interactively query and display matching documents and parts of documents for each of the individual feature clusters.
+4. Edit the resulting clusters of features to begin addressing your research question by aligning your reading of the content with the query used to retrieve it.
+
+Hyperreal aims to enables fine grained control over how documents are indexed, and, unlike other libraries, enables fine-grained control over how they are *displayed* in different contexts. Reading documents in context is a core concern.
+
+See [A Recent History of Python Through Stack Overflow Questions and Answers](https://www.youtube.com/watch?v=scpjoqtgrtE) for an overview of how this can be used in practise.
+
+## Quickstart
+
+### Installation
 
 Hyperreal requires the installation of [the Python programming language](https://www.python.org/downloads/).
-
-
-## Installation
 
 Hyperreal can be installed using Pip from the command line (
 [Windows](https://learn.openwaterfoundation.org/owf-learn-windows-shell/introduction/introduction/#windows-command-shell),
@@ -20,7 +31,7 @@ by running the following commands:
 python -m pip install hyperreal
 ```
 
-## Usage
+### Usage
 
 Hyperreal can be used in three different ways to flexibly support different
 use cases:
@@ -35,7 +46,7 @@ allows for quick and repeatable experimentation and automation for standard
 data types - for example if you often work with StackExchange data the command line
 will allow you to rapidly work with many different StackExchange data collections.
 The web application is currently focused solely on creating and interactive
-editing of models.
+editing of models built on top of existing indexes.
 
 
 ### Command Line
@@ -52,7 +63,7 @@ following resources useful:
 - [Open Water Foundation resources for Windows](https://learn.openwaterfoundation.org/owf-learn-windows-shell/)
 
 ```
-# Create a corpus database from a plaintext file
+# Create a corpus database from a plaintext file in the current working directory
 hyperreal plaintext-corpus create corpus.txt corpus.db
 
 # Create an index from the corpus
@@ -72,8 +83,7 @@ hyperreal plaintext-corpus serve corpus.db corpus_index.db
 
 This example script performs the same steps as the command line example.
 
-
-``` python
+```python
 
 from hyperreal import corpus, index
 
@@ -122,32 +132,5 @@ for cluster_detail in idx.pivot_clusters_by_query(query, top_k=10):
 # This will show the top 10 features for a selected set of cluster_ids.
 for cluster_detail in idx.pivot_clusters_by_query(query, cluster_ids=[3,5,7], top_k=10):
     print(cluster_detail)
-
-```
-
-
-## Development
-
-### Installation
-
-To install the development version:
-
-1. Clone the repository using git.
-2. From the cloned repository, use pip for an editable install:
-
-    `pip install -e .`
-
-### Running Tests
-
-The full test suite and other checks are orchestrated via tox:
-
-```
-python -m pip install -e .[test]
-
-# To run just the testsuite
-pytest
-
-# To run everything, including code formatting via black and check coverage
-tox
 
 ```
