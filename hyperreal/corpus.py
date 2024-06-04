@@ -570,7 +570,7 @@ class StackExchangeCorpus(SqliteBackedCorpus):
 
         with tempfile.TemporaryDirectory() as temp_directory:
             # Process Posts, which includes both questions and answers.
-            tag_splitter = re.compile("<|>|<>")
+            tag_splitter = re.compile(r"<|>|<>|\|")
 
             self.db.execute(
                 "insert or ignore into Site(site_url) values(?)", [site_url]
