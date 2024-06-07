@@ -196,24 +196,28 @@ h1 {
     margin-right: 1rem;
 }
 
-dt {
+.matching-features > dt {
     grid-column-start: 1;
     text-align: right;
     font-weight: bold ;
 }
 
-dd {
+.matching-features > dd {
     grid-column-start: 2;
     margin: 0 0.5em;
 }
 
-dt::after {
+.matching-features > dt::after {
     content: ":";
 }
 
-dl {
+.matching-features {
   display: grid;
   grid-template-columns: max-content auto;
+}
+
+.document {
+    max-width: 100%;
 }
 
 
