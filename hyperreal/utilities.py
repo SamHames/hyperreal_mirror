@@ -154,7 +154,6 @@ def expand_positions_window(positions, doc_boundaries, window_size):
     Takes into account the document boundaries.
 
     """
-    # pylint: disable=possibly-used-before-assignment
 
     if not positions:
         return BitMap()

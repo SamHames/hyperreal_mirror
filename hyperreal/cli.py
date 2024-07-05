@@ -247,14 +247,6 @@ stackexchange_corpus.command(name="index")(
     "refinement will terminate early.",
 )
 @click.option(
-    "--move-acceptance-probability",
-    default=0.5,
-    type=click.FloatRange(0, 1),
-    help="The random chance of actually executing a possible move. "
-    "Smaller values will take more iterations to converge, large "
-    "values might be unstable.",
-)
-@click.option(
     "--random-seed",
     default=None,
     type=int,
@@ -290,7 +282,6 @@ def model(
     include_field,
     random_seed,
     tolerance,
-    move_acceptance_probability,
     minimum_cluster_features,
     group_test_batches,
     group_test_top_k,
@@ -343,7 +334,6 @@ def model(
         iterations=iterations,
         target_clusters=clusters,
         tolerance=tolerance,
-        move_acceptance_probability=move_acceptance_probability,
         minimum_cluster_features=minimum_cluster_features,
         group_test_batches=group_test_batches,
         group_test_top_k=group_test_top_k,
