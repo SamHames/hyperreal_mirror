@@ -1472,7 +1472,13 @@ class Index:
                 move_acceptance_probability = (current_cluster_len - 1) / (
                     to_cluster_len + current_cluster
                 )
-                # Note that we're squaring the probability here
+                # Note that we're squaring the probability here - this makes moves from
+                # smaller to larger clusters much less likely to be accepted, without
+                # affecting moves from larger to smaller clusters too much. This makes
+                # the algorithm converge slower overall, but prevents the tail of
+                # clusters with fewer features from being absorbed into a single large
+                # cluster. There might be better ways to address this cluster size
+                # desire in the objective, but this will do for now.
                 accept = self.random.random() < (move_acceptance_probability**2)
 
                 # Handle dissolving clusters
