@@ -5,6 +5,7 @@ Cherrypy based webserver for serving an index (or in future) a set of indexes.
 
 import csv
 import io
+import pkg_resources
 from collections import defaultdict
 
 import cherrypy
@@ -816,7 +817,13 @@ def launch_web_server(index_server, auto_reload=False, port=8080):
                 "tools.response_headers.headers": [
                     ("Connection", "close"),
                 ],
-            }
+            },
+            "/static": {
+                "tools.staticdir.on": True,
+                "tools.staticdir.dir": pkg_resources.resource_filename(
+                    "hyperreal", "static/"
+                ),
+            },
         },
     )
     cherrypy.tree.mount(
