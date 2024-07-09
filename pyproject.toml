@@ -22,7 +22,7 @@ dependencies = [
   "python-dateutil>=2.8.0",
   "lxml",
 ]
-version="0.6.1"
+version="0.7.0.dev1"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "tox", "requests", "pylint", "isort"]
