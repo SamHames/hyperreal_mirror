@@ -1230,6 +1230,7 @@ class Index:
         """
         Find the approximate next nearest cluster for each feature in this clustering.
         """
+
         cluster_ids = list(cluster_feature.keys())
         self.random.shuffle(cluster_ids)
 
@@ -1298,7 +1299,6 @@ class Index:
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
         tolerance: float = 0.05,
-        move_acceptance_probability: float = 0.5,
         group_test_batches: Optional[int] = None,
         group_test_top_k: int = 2,
     ) -> tuple[dict[int, set[int]], set[int]]:
@@ -1335,12 +1335,6 @@ class Index:
         early. The default is set at 0.05 - the model is considered
         converged if less than 5% of the features have moved during an
         iteration.
-
-        move_acceptance_probability: the probability a move that is estimated to
-        improve the score will be accepted. This interacts with the top_k
-        parameter - the top_k possible moves will be processed in order from
-        best move to worst move. A lower move_acceptance_probability and a larger
-        top_k result in less greedy exploration of the solution space.
 
         top_k: the number of nearest neighbour clusters to consider as move
         candidates.
@@ -1470,7 +1464,22 @@ class Index:
                 _, to_cluster = best_moves[feature_id][0]
                 current_cluster = feature_cluster[feature_id]
 
-                accept = self.random.random() < move_acceptance_probability
+                to_cluster_len = len(cluster_feature[to_cluster])
+                current_cluster_len = len(cluster_feature[current_cluster])
+
+                # Accept moves from clusters with many to few features with high prob,
+                # accept moves from clusters with few to many feature with low prob.
+                move_acceptance_probability = (current_cluster_len - 1) / (
+                    to_cluster_len + current_cluster
+                )
+                # Note that we're squaring the probability here - this makes moves from
+                # smaller to larger clusters much less likely to be accepted, without
+                # affecting moves from larger to smaller clusters too much. This makes
+                # the algorithm converge slower overall, but prevents the tail of
+                # clusters with fewer features from being absorbed into a single large
+                # cluster. There might be better ways to address this cluster size
+                # desire in the objective, but this will do for now.
+                accept = self.random.random() < (move_acceptance_probability**2)
 
                 # Handle dissolving clusters
                 if current_cluster in dissolve_cluster_ids:
@@ -1534,7 +1543,6 @@ class Index:
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
         tolerance: float = 0.05,
-        move_acceptance_probability: float = 0.5,
         group_test_batches: Optional[int] = None,
         group_test_top_k: int = 2,
     ):
@@ -1590,7 +1598,7 @@ class Index:
                 target_clusters -= 1
 
         if group_test_batches is None:
-            group_test_batches = math.ceil(len(cluster_feature) * 0.1)
+            group_test_batches = math.ceil(len(cluster_feature) ** 0.5)
 
         cluster_feature, new_cluster_ids = self._refine_feature_groups(
             cluster_feature,
@@ -1602,7 +1610,6 @@ class Index:
             tolerance=tolerance,
             group_test_top_k=group_test_top_k,
             group_test_batches=group_test_batches,
-            move_acceptance_probability=move_acceptance_probability,
         )
 
         # Map new_cluster_ids generated to actual globally unique IDs.

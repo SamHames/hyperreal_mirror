@@ -22,14 +22,15 @@ dependencies = [
   "python-dateutil>=2.8.0",
   "lxml",
 ]
-version="0.5.0.post0"
+version="0.7.0.dev1"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "tox", "requests", "pylint", "isort"]
 stackexchange = ["py7zr>=0.21.0"]
 
 [project.urls]
-Repository = "https://github.com/SamHames/hyperreal/"
+Repository = "https://hyperreal.app"
+Homepage = "https://hyperreal.app"
 
 [project.scripts]
 hyperreal = "hyperreal.cli:cli"

@@ -255,6 +255,7 @@ class Cluster:
             next_cluster_id=next_cluster_id,
             pinned=pinned,
             features=clusters[0][-1],
+            cluster_id=cluster_id,
         )
 
     @cherrypy.expose
