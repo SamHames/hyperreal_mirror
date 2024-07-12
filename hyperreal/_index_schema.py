@@ -18,28 +18,23 @@ with the database connection as the only argument.
 MAGIC_APPLICATION_ID = 715973853
 CURRENT_SCHEMA_VERSION = 10
 
-# This maps schema versions to offsets in the list of migration steps to take.
-# The keys correspond to versions that have been recorded in pragma user_version;
-SCHEMA_VERSION_STEPS = {0: 0, 10: 17}
-
-MIGRATION_STEPS = [
-    # 0
+# There's one block of statements per schema_version number - each of these is basically
+# the string of statements needed to migrate to the final version in the query.
+# The pragma schema_version statement at the end records the actual final version.
+initial_migration_steps = [
     "pragma application_id = 715973853",
-    # 1
     """
     create table if not exists settings (
         key primary key,
         value
     )
     """,
-    # 2
     """
     create table if not exists doc_key (
         doc_id integer primary key,
         doc_key unique
     )
     """,
-    # 3
     """
     create table if not exists inverted_index (
         feature_id integer primary key,
@@ -50,7 +45,6 @@ MIGRATION_STEPS = [
         unique (field, value)
     )
     """,
-    # 4
     """
     create table if not exists position_doc_map (
         field text not null,
@@ -62,7 +56,6 @@ MIGRATION_STEPS = [
         primary key (field, first_doc_id)
     )
     """,
-    # 5
     """
     create table if not exists position_index (
         feature_id references inverted_index on delete cascade,
@@ -72,7 +65,6 @@ MIGRATION_STEPS = [
         primary key (feature_id, first_doc_id)
     )
     """,
-    # 6
     """
     create table if not exists field_summary (
         field text primary key,
@@ -82,15 +74,12 @@ MIGRATION_STEPS = [
         position_count
     )
     """,
-    # 7
     """
     create index if not exists docs_counts on inverted_index(docs_count);
     """,
-    # 8
     """
     create index if not exists field_docs_counts on inverted_index(field, docs_count);
     """,
-    # 9
     """
     -- The summary table for clusters,
     -- and the materialised results of the query and document counts.
@@ -106,7 +95,6 @@ MIGRATION_STEPS = [
         pinned bool default 0
     );
     """,
-    # 10
     """
     create table if not exists feature_cluster (
         feature_id integer primary key references inverted_index(feature_id) on delete cascade,
@@ -116,14 +104,12 @@ MIGRATION_STEPS = [
         pinned bool default 0
     )
     """,
-    # 11
     """
     create index if not exists cluster_features on feature_cluster(
         cluster_id,
         docs_count
     )
     """,
-    # 12
     """
     -- Used to track when clusters have changed, to mark that housekeeping
     -- functions need to run. Previously a more complex set of triggers was used,
@@ -133,7 +119,6 @@ MIGRATION_STEPS = [
         cluster_id integer primary key references cluster on delete cascade
     )
     """,
-    # 13
     """
     create trigger if not exists insert_feature_checks before insert on feature_cluster
         begin
@@ -143,7 +128,6 @@ MIGRATION_STEPS = [
             insert or ignore into changed_cluster(cluster_id) values (new.cluster_id);
         end;
     """,
-    # 14
     """
     create trigger if not exists update_feature_checks before update on feature_cluster
         when old.cluster_id != new.cluster_id
@@ -158,7 +142,6 @@ MIGRATION_STEPS = [
                 values (new.cluster_id), (old.cluster_id);
         end;
     """,
-    # 15
     """
     create trigger if not exists delete_feature_checks before delete on feature_cluster
         begin
@@ -169,9 +152,13 @@ MIGRATION_STEPS = [
         end;
 
     """,
-    # 16
     "pragma user_version = 10",
 ]
+
+
+# This maps schema versions to offsets in the list of migration steps to take.
+# The keys correspond to versions that have been recorded in pragma user_version;
+SCHEMA_VERSION_STEPS = {0: initial_migration_steps}
 
 
 class MigrationError(ValueError):
@@ -197,22 +184,27 @@ def migrate(db):
             "version 0.5.0 and migrate there first."
         )
 
-    to_run = MIGRATION_STEPS[SCHEMA_VERSION_STEPS[db_version] :]
-
     db.execute("begin")
-    try:
-        for step in to_run:
-            if isinstance(step, str):
-                db.execute(step)
-            elif callable(step):
-                step(db)
-            else:
-                raise TypeError("Step must be a string or callable.")
 
-        db.execute("commit")
+    while db_version != CURRENT_SCHEMA_VERSION:
 
-    except Exception:
-        db.execute("rollback")
-        raise
+        to_run = SCHEMA_VERSION_STEPS[db_version]
+
+        try:
+            for step in to_run:
+                if isinstance(step, str):
+                    db.execute(step)
+                elif callable(step):
+                    step(db)
+                else:
+                    raise TypeError("Step must be a string or callable.")
+
+        except Exception:
+            db.execute("rollback")
+            raise
+
+        db_version = list(db.execute("pragma user_version"))[0][0]
+
+    db.execute("commit")
 
     return True
