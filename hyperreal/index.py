@@ -242,12 +242,11 @@ class Index:
         self.corpus.close()
 
     @atomic()
-    def __getitem__(self, key: FeatureKeyOrId) -> BitMap:
+    def __getitem__(self, key: FeatureKey) -> BitMap:
         """
         Retrieve the set of documents matching a literal feature from the index.
 
-        A feature is represented as either a integer `feature_id` or a tuple
-        of `("field_name", value)`.
+        A feature is represented as a tuple of `("field_name", value)`.
 
         Note that an exception will be raised if the field doesn't exist, but not
         if the value doesn't exist on a valid field. If the value doesn't exist on a
@@ -255,18 +254,7 @@ class Index:
 
         """
 
-        if isinstance(key, int):
-            try:
-                return list(
-                    self.db.execute(
-                        "select doc_ids from inverted_index where feature_id = ?",
-                        [key],
-                    )
-                )[0][0]
-            except IndexError:
-                return BitMap()
-
-        elif isinstance(key, tuple):
+        if isinstance(key, tuple):
             try:
                 field, value = key
 
@@ -289,9 +277,7 @@ class Index:
                 return BitMap()
 
         else:
-            raise ValueError(
-                "Must provide an integer feature_id or a ('field', value) pair."
-            )
+            raise ValueError("Must provide a ('field', value) pair.")
 
     def rebuild(
         self,
@@ -418,8 +404,7 @@ class Index:
 
             self.logger.info("Batches complete - merging into main index.")
 
-            # Now merge back to the original index, preserving feature_ids
-            # if this is a reindex operation.
+            # Now merge back to the original index
             self.db.execute("attach ? as tempindex", [temp_index])
             detach = True
 
@@ -1079,9 +1064,9 @@ class Index:
 
         """
 
-        feature_ids = [r[0] for r in self.cluster_features(cluster_id)]
+        features = [r[0] for r in self.cluster_features(cluster_id)]
 
-        return self.union_bitslice(feature_ids)
+        return self.union_bitslice(features)
 
     def cluster_docs(self, cluster_id: int) -> AbstractBitMap:
         """Return the bitmap of documents covered by this cluster."""
@@ -1249,7 +1234,7 @@ class Index:
         """
         Low level function for iteratively refining a feature clustering.
 
-        cluster_features is a mapping from a cluster_key to a set of feature_ids.
+        cluster_features is a mapping from a cluster_key to a set of features.
 
         This is most useful if you want to explore specific clustering
         approaches without the constraint of the saved clusters.
@@ -1302,9 +1287,9 @@ class Index:
         }
 
         feature_cluster = {
-            feature_id: cluster_id
+            feature: cluster_id
             for cluster_id, features in cluster_feature.items()
-            for feature_id in features
+            for feature in features
         }
 
         feature_list = list(feature_cluster)
@@ -1331,8 +1316,8 @@ class Index:
             }
             cluster_feature[new_cluster_id] = split
             cluster_feature[largest_cluster] -= split
-            for feature_id in split:
-                feature_cluster[feature_id] = new_cluster_id
+            for feature in split:
+                feature_cluster[feature] = new_cluster_id
 
         assigned_cluster_ids = set(cluster_feature)
 
@@ -1384,9 +1369,9 @@ class Index:
 
             self.random.shuffle(feature_list)
 
-            for feature_id in feature_list:
-                _, to_cluster = best_moves[feature_id][0]
-                current_cluster = feature_cluster[feature_id]
+            for feature in feature_list:
+                _, to_cluster = best_moves[feature][0]
+                current_cluster = feature_cluster[feature]
 
                 to_cluster_len = len(cluster_feature[to_cluster])
                 current_cluster_len = len(cluster_feature[current_cluster])
@@ -1433,9 +1418,9 @@ class Index:
                 if accept:
                     actual_moves += 1
 
-                    cluster_feature[current_cluster].discard(feature_id)
-                    cluster_feature[to_cluster].add(feature_id)
-                    feature_cluster[feature_id] = to_cluster
+                    cluster_feature[current_cluster].discard(feature)
+                    cluster_feature[to_cluster].add(feature)
+                    feature_cluster[feature] = to_cluster
                     changed_clusters.add(to_cluster)
                     changed_clusters.add(current_cluster)
 
@@ -1607,7 +1592,7 @@ class Index:
         )
 
         # Note that the data here may not have been committed yet, so we have
-        # to read and pass the feature_ids to the background ourselves.
+        # to read and pass the features to the background ourselves.
         for cluster_id, query, weight in self.pool.map(_union_query, bg_args):
             self.db.execute(
                 """
