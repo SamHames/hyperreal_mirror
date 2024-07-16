@@ -18,7 +18,7 @@ import os
 import random
 import sqlite3
 import tempfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from functools import wraps
 from typing import Any, Hashable, Optional, Union
 
@@ -270,10 +270,10 @@ class Index:
             try:
                 field, value = key
 
-                if field not in self.field_values:
-                    raise KeyError(f"Field {field} does not exist on this index.")
-
-                indexed_value = self.field_values[field].to_index(value)
+                # It would be more natural to check in, but there might be cases when
+                # fields need to be generated on demand - such as for the EmptyCorpus
+                converter = self.field_values[field]
+                indexed_value = converter.to_index(value)
 
                 return list(
                     self.db.execute(
@@ -292,39 +292,6 @@ class Index:
             raise ValueError(
                 "Must provide an integer feature_id or a ('field', value) pair."
             )
-
-    def lookup_feature(self, feature_id: int) -> tuple[str, Any]:
-        """Lookup the (field, value) for this feature by feature_id."""
-
-        results = list(
-            self.db.execute(
-                "select field, value from inverted_index where feature_id = ?",
-                [feature_id],
-            )
-        )
-
-        if results:
-            field, value = results[0]
-            return field, self.field_values[field].from_index(value)
-
-        raise KeyError(f"Feature with id '{feature_id}' not found.")
-
-    def lookup_feature_id(self, key: tuple[str, Any]) -> int:
-        """Lookup the feature_id for this feature"""
-
-        field, value = key
-        indexed_value = self.field_values[field].to_index(value)
-        results = list(
-            self.db.execute(
-                "select feature_id from inverted_index where (field, value) = (?, ?)",
-                (field, indexed_value),
-            )
-        )
-
-        if results:
-            return results[0][0]
-
-        raise KeyError(f"Feature with key '{key}' not found.")
 
     def rebuild(
         self,
@@ -440,19 +407,10 @@ class Index:
 
             self.logger.info("Waiting for batches to complete.")
 
-            # Zero out existing features, but don't reassign them
-            self.db.execute(
-                """
-                update inverted_index set
-                    docs_count = 0,
-                    doc_ids = ?1
-                """,
-                [BitMap()],
-            )
-
-            # Zero out positional information
+            # Drop existing index tables
             self.db.execute("delete from position_doc_map")
             self.db.execute("delete from position_index")
+            self.db.execute("delete from inverted_index")
 
             # Make sure all of the batches have completed.
             for f in cf.as_completed(futures):
@@ -476,13 +434,8 @@ class Index:
             # Actually populate the new values - inverted index
             self.db.execute(
                 """
-                replace into inverted_index(feature_id, field, value, docs_count, doc_ids)
+                replace into inverted_index(field, value, docs_count, doc_ids)
                     select
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (iis.field, iis.value)
-                        ) as feature_id,
                         field,
                         value,
                         sum(docs_count) as docs_count,
@@ -490,27 +443,25 @@ class Index:
                     from inverted_index_segment iis
                     group by field, value
                     -- Order is an insert optimisation and not strictly necessary
-                    order by feature_id, field, value
+                    order by field, value
                 """
             )
 
             # Position index
             self.db.execute(
                 """
-                insert into position_index(feature_id, first_doc_id, position_count, positions)
+                INSERT into position_index
+                    (field, value , first_doc_id, position_count, positions)
                     select
-                        (
-                            select feature_id
-                            from inverted_index ii
-                            where (ii.field, ii.value) = (iis.field, iis.value)
-                        ) as feature_id,
+                        field,
+                        value,
                         first_doc_id,
                         position_count,
                         positions
                     from inverted_index_segment iis
                     where position_count > 0
                     -- Order is an insert optimisation and not strictly necessary
-                    order by feature_id, first_doc_id
+                    order by field, value, first_doc_id
                 """
             )
 
@@ -529,7 +480,9 @@ class Index:
                     docs_count = (
                         select docs_count
                         from inverted_index ii
-                        where ii.feature_id = feature_cluster.feature_id
+                        where (ii.field, ii.value) = (
+                            feature_cluster.field, feature_cluster.value
+                        )
                     )
                 """
             )
@@ -548,7 +501,6 @@ class Index:
                         (
                             select sum(position_count)
                             from position_index
-                            inner join inverted_index using(feature_id)
                             where field = ii.field
                         ),
                         0
@@ -563,10 +515,8 @@ class Index:
                 "insert into changed_cluster select cluster_id from cluster"
             )
 
-            self.db.execute("commit")
-
-            self.db.execute("begin")
             self._update_changed_clusters()
+
             self.db.execute("commit")
 
         except Exception:
@@ -814,31 +764,32 @@ class Index:
         else:
             self.db.execute("insert into include_field select field from field_summary")
 
-        feature_ids = list(
+        features = list(
             self.db.execute(
                 """
                 select
-                    feature_id,
+                    field,
+                    value,
                     docs_count
                 from inverted_index
                 inner join include_field using(field)
                 where docs_count >= ?
                 -- Note: specify the ordering to ensure reproducibility, as these
                 -- results will be shuffled.
-                order by feature_id
+                order by field, value
                 """,
                 [min_docs],
             )
         )
 
-        self.random.shuffle(feature_ids)
+        self.random.shuffle(features)
 
-        clusters = ((i, feature_ids[i::n_clusters]) for i in range(n_clusters))
+        clusters = ((i, features[i::n_clusters]) for i in range(n_clusters))
 
         self.db.executemany(
             """
-            insert into feature_cluster(cluster_id, feature_id, docs_count)
-                values(?, ?, ?)
+            insert into feature_cluster(cluster_id, field, value, docs_count)
+                values(?, ?, ?, ?)
             """,
             (
                 (cluster_id, *feature)
@@ -879,14 +830,17 @@ class Index:
         return merge_cluster_id
 
     @atomic(writes=True)
-    def delete_features(self, feature_ids):
+    def delete_features(self, features):
         """Delete the given features from the model."""
         self.db.executemany(
-            "delete from feature_cluster where feature_id=?",
-            [[f] for f in feature_ids],
+            "delete from feature_cluster where (field, value)= (?, ?)",
+            (
+                (field, self.field_values[field].to_index(value))
+                for field, value in features
+            ),
         )
 
-        self.logger.info(f"Delete features {feature_ids}.")
+        self.logger.info(f"Delete features {features}.")
 
     def next_cluster_id(self):
         """Return a new cluster_id, higher than anything already assigned."""
@@ -903,54 +857,48 @@ class Index:
         return next_cluster_id
 
     @atomic(writes=True)
-    def create_cluster_from_features(self, feature_ids):
+    def create_cluster_from_features(self, features):
         """
         Create a new cluster from the provided set of features.
 
-        The features must exist in the index.
+        The features need not exist in the index, but won't do anything otherwise.
 
         """
 
         next_cluster_id = self.next_cluster_id()
 
+        index_features = [
+            (field, self.field_values[field].to_index(value), next_cluster_id)
+            for field, value in features
+        ]
+
         self.db.executemany(
             """
-            insert or ignore into feature_cluster(feature_id, cluster_id, docs_count)
+            insert or ignore into feature_cluster(field, value, cluster_id, docs_count)
                 values (
                     ?1,
                     ?2,
+                    ?3,
                     (
-                        select docs_count from inverted_index where feature_id = ?1
+                        select coalesce(docs_count, 0) from inverted_index 
+                        where (field, value) = (?1, ?2)
                     )
                 )
             """,
-            [(f, next_cluster_id) for f in feature_ids],
+            index_features,
         )
 
         self.db.executemany(
-            "update feature_cluster set cluster_id = ? where feature_id = ?",
-            [(next_cluster_id, f) for f in feature_ids],
+            """
+            update feature_cluster set cluster_id = ?3 
+            where (field, value) = (?1, ?2)
+            """,
+            index_features,
         )
 
-        self.logger.info(f"Created cluster {next_cluster_id} from {feature_ids}.")
+        self.logger.info(f"Created cluster {next_cluster_id} from {features}.")
 
         return next_cluster_id
-
-    @atomic(writes=True)
-    def pin_features(self, feature_ids: Sequence[int], pinned: bool = True):
-        """
-        Pin (or unpin) the given features.
-
-        Pinning a feature prevents it from being moved during the clustering
-        feature. This can be used to preserve interesting combinations of
-        features together in the same cluster.
-
-        """
-
-        self.db.executemany(
-            "update feature_cluster set pinned = ? where feature_id = ?",
-            ((pinned, f) for f in feature_ids),
-        )
 
     @atomic(writes=True)
     def pin_clusters(self, cluster_ids: Sequence[int], pinned: bool = True):
@@ -1085,18 +1033,16 @@ class Index:
 
         """
         cluster_features = [
-            (*row[:2], self.field_values[row[1]].from_index(row[2]), row[3])
+            ((row[0], self.field_values[row[0]].from_index(row[1])), row[2])
             for row in self.db.execute(
                 """
                 select
-                    feature_id,
                     field,
                     value,
                     -- Note that docs_count is denormalised to allow
                     -- a per cluster sorting of document count.
                     fc.docs_count
                 from feature_cluster fc
-                inner join inverted_index ii using(feature_id)
                 where cluster_id = ?
                 order by fc.docs_count desc
                 limit ?
@@ -1221,7 +1167,6 @@ class Index:
     def _find_best_moves(
         self,
         cluster_feature: dict[int, set[int]],
-        movable_features=None,
         group_test_top_k=1,
         group_test_batches=None,
         probe_query=None,
@@ -1234,7 +1179,7 @@ class Index:
         cluster_ids = list(cluster_feature.keys())
         self.random.shuffle(cluster_ids)
 
-        movable_features = movable_features or set.union(*cluster_feature.values())
+        movable_features = set.union(*cluster_feature.values())
 
         if group_test_batches and group_test_batches > len(cluster_ids) / 2:
             group_test_batches = None
@@ -1295,7 +1240,6 @@ class Index:
         cluster_feature: dict[int, set[int]],
         iterations: int = 10,
         minimum_cluster_features: int = 1,
-        pinned_features: Optional[Iterable[int]] = None,
         probe_query: Optional[AbstractBitMap] = None,
         target_clusters: Optional[int] = None,
         tolerance: float = 0.05,
@@ -1314,8 +1258,6 @@ class Index:
         a different number of clusters than in cluster_feature - the clustering
         will be adjusted to the target. The newly generated IDs will be returned
         along with the new feature clustering.
-
-        Pinned features will not be considered as candidates for moving.
 
         If a probe_query is provided, it will be intersected with all features
         for clustering: this is used to generate a clustering for a subset of
@@ -1365,23 +1307,8 @@ class Index:
             for feature_id in features
         }
 
-        pinned_features = set(pinned_features) if pinned_features else set()
-        # The set of clusters with pinned features - these will be used to
-        # avoid interfering with pinned features when dividing or dissolving
-        # clusters.
-        clusters_with_pinned_features = {
-            cluster_id
-            for cluster_id, features in cluster_feature.items()
-            if features & pinned_features
-        }
-        movable_features = {
-            f
-            for features in cluster_feature.values()
-            for f in features
-            if f not in pinned_features
-        }
-
-        movable_feature_list = list(movable_features)
+        feature_list = list(feature_cluster)
+        n_features = len(feature_cluster)
 
         changed_clusters = set(cluster_feature)
 
@@ -1400,7 +1327,7 @@ class Index:
             split = {
                 feature
                 for feature in largest_cluster_features
-                if self.random.random() < 0.5 and feature not in pinned_features
+                if self.random.random() < 0.5
             }
             cluster_feature[new_cluster_id] = split
             cluster_feature[largest_cluster] -= split
@@ -1422,7 +1349,6 @@ class Index:
                 cluster_feature,
                 group_test_top_k=group_test_top_k,
                 group_test_batches=group_test_batches,
-                movable_features=movable_features,
                 probe_query=probe_query,
             )
 
@@ -1440,8 +1366,6 @@ class Index:
                 dissolve_cluster_order = sorted(
                     (cluster_obj, cluster_id)
                     for cluster_id, cluster_obj in cluster_feature.items()
-                    # Don't dissolve any cluster with a pinned feature
-                    if cluster_id not in clusters_with_pinned_features
                 )
                 dissolve_cluster_ids = set(
                     cluster_id for _, cluster_id in dissolve_cluster_order[:n_dissolve]
@@ -1458,9 +1382,9 @@ class Index:
             actual_moves = 0
             changed_clusters = set()
 
-            self.random.shuffle(movable_feature_list)
+            self.random.shuffle(feature_list)
 
-            for feature_id in movable_feature_list:
+            for feature_id in feature_list:
                 _, to_cluster = best_moves[feature_id][0]
                 current_cluster = feature_cluster[feature_id]
 
@@ -1526,7 +1450,7 @@ class Index:
             )
 
             if not dissolve_cluster_ids:
-                if (possible_moves / len(movable_features)) < tolerance:
+                if (possible_moves / n_features) < tolerance:
                     self.logger.info(
                         "Terminating refinement due to small number of feature moves."
                     )
@@ -1566,22 +1490,11 @@ class Index:
             )
 
         # Establish forward reverse mappings of features to clusters and vice versa.
-        cluster_feature = collections.defaultdict(set)
-        pinned_features = set()
 
-        for feature_id, cluster_id, pinned in self.db.execute(
-            """
-            select
-                feature_id,
-                cluster_id,
-                feature_cluster.pinned
-            from feature_cluster
-            """
-        ):
-            if cluster_id in cluster_ids:
-                cluster_feature[cluster_id].add(feature_id)
-                if pinned:
-                    pinned_features.add(feature_id)
+        cluster_feature = {
+            cluster_id: set(f[0] for f in self.cluster_features(cluster_id))
+            for cluster_id in cluster_ids
+        }
 
         # Set target clusters to the current number of clusters, or the
         # provided value. But we also need to account for pinned clusters in
@@ -1603,7 +1516,6 @@ class Index:
         cluster_feature, new_cluster_ids = self._refine_feature_groups(
             cluster_feature,
             iterations=iterations,
-            pinned_features=pinned_features,
             minimum_cluster_features=minimum_cluster_features,
             probe_query=probe_query,
             target_clusters=target_clusters,
@@ -1641,12 +1553,12 @@ class Index:
         """
         self.db.executemany(
             """
-            update feature_cluster set cluster_id = ?1 where feature_id = ?2
+            update feature_cluster set cluster_id = ?1 where (field, value) = (?2, ?3)
             """,
             (
-                (cluster_id, feature_id)
+                (cluster_id, field, self.field_values[field].to_index(value))
                 for cluster_id, features in cluster_feature.items()
-                for feature_id in features
+                for field, value in features
             ),
         )
 
@@ -1680,10 +1592,10 @@ class Index:
                 self,
                 cluster_param[0],
                 [
-                    row[0]
-                    for row in self.db.execute(
+                    (field, self.field_values[field].from_index(value))
+                    for field, value in self.db.execute(
                         """
-                        select feature_id
+                        select field, value
                         from feature_cluster
                         where cluster_id = ?
                         """,
@@ -1709,22 +1621,6 @@ class Index:
         self.db.execute("delete from changed_cluster")
 
     @atomic()
-    def _or_partition_positions(self, features):
-        # Make sure that all of the features are from the same field.
-        fields_covered = set()
-        query_features = set()
-
-        for f in features:
-            if isinstance(f, int):
-                fields_covered.add(self.lookup_feature(f)[0])
-                query_features.add(f)
-            elif isinstance(f, tuple):
-                fields_covered.add(f[0])
-                query_features.add(self.lookup_feature_id(f))
-            else:
-                raise TypeError(f"Unsupported feature {f}.")
-
-    @atomic()
     def field_proximity_query(
         self, field, value_clauses: list[list], window_size: int
     ) -> BitMap():
@@ -1737,12 +1633,6 @@ class Index:
 
         """
 
-        # Convert values to feature_ids
-        clause_feature_ids = [
-            [self.lookup_feature_id((field, value)) for value in clause]
-            for clause in value_clauses
-        ]
-
         futures = set()
 
         for first_doc_id in self._field_partitions(field):
@@ -1751,7 +1641,7 @@ class Index:
                     _field_proximity_query,
                     self,
                     field,
-                    clause_feature_ids,
+                    value_clauses,
                     first_doc_id,
                     window_size,
                 )
@@ -1795,24 +1685,24 @@ class Index:
         }
 
     @atomic()
-    def _union_position_query(self, first_doc_id, features):
+    def _union_position_query(self, field, first_doc_id, values):
         positions = BitMap()
 
-        for feature_id in features:
-            positions |= self._get_partition_positions(first_doc_id, feature_id)
+        for value in values:
+            positions |= self._get_partition_positions(field, first_doc_id, value)
 
         return positions
 
-    def _get_partition_positions(self, first_doc_id, feature_id):
+    def _get_partition_positions(self, field, first_doc_id, value):
         positions = list(
             self.db.execute(
                 """
-            select
-                positions
-            from position_index
-            where (feature_id, first_doc_id) = (?, ?)
-            """,
-                [feature_id, first_doc_id],
+                select
+                    positions
+                from position_index
+                where (field, value, first_doc_id) = (?, ?, ?)
+                """,
+                [field, self.field_values[field].to_index(value), first_doc_id],
             )
         )
         if positions:
@@ -2019,35 +1909,68 @@ def _calculate_query_cluster_cooccurrence(idx, key, query, cluster_ids):
     return key, weights
 
 
+class _SortableFeatureSimilarity(tuple):
+    """
+    A slight customisation of tuple to sort only on the numerical values not features.
+
+    This means the sort isn't stable, but also means we don't have to worry about
+    comparing incomparable values across different fields to break ties.
+
+    This is necessary because you can't pass a custom comparison key function to
+    heapq.heappushpop.
+
+    """
+
+    def __lt__(self, other):
+        return self[0] < other[0]
+
+
 def _pivot_cluster_features_by_query_jaccard(
     idx, query, cluster_id, top_k, cluster_inter
 ):
+
     with idx:
-        results = [(0, -1, "", "")] * top_k
+        results = [((-1, -math.inf), (-1, -1))] * top_k
 
         q = len(query)
 
         features = (
-            (min(f[-1], cluster_inter) / (q + f[-1] - min(f[-1], cluster_inter)), *f)
+            _SortableFeatureSimilarity(
+                (
+                    min(f[-1], cluster_inter) / (q + f[-1] - min(f[-1], cluster_inter)),
+                    *f,
+                )
+            )
             for f in idx.cluster_features(cluster_id)
         )
 
         search_order = sorted(features, reverse=True)
 
-        for max_threshold, f_id, field, value, _ in search_order:
+        for max_threshold, feature, _ in search_order:
             # Early break if the length threshold can't be reached.
-            if max_threshold < results[0][0]:
+            if max_threshold < results[0][0][0]:
                 break
 
+            feature_docs = idx[feature]
+
             heapq.heappushpop(
-                results, (query.jaccard_index(idx[f_id]), f_id, field, value)
+                results,
+                # We'll break ties in the direction of smaller intersections.
+                # This still isn't a perfectly stable sort though.
+                _SortableFeatureSimilarity(
+                    (
+                        (
+                            query.jaccard_index(feature_docs),
+                            -query.intersection_cardinality(feature_docs),
+                        ),
+                        feature,
+                    )
+                ),
             )
 
-        results = sorted(
-            ((*r[1:], r[0]) for r in results if r[0] > 0),
-            reverse=True,
-            key=lambda r: r[3],
-        )
+        # Not completely deterministic ordering: we don't want to sort by arbitrary
+        # and potentially unsortable features, so just use the similarity score alone.
+        results = [(r[1], r[0][0]) for r in sorted(results, reverse=True)]
 
         # Finally compute the similarity of the query with the cluster.
         similarity = query.jaccard_index(idx.cluster_docs(cluster_id))
@@ -2064,9 +1987,9 @@ def measure_feature_contribution_to_cluster(
 ) -> tuple[
     Any,
     float,
-    array.array("q"),
+    list[tuple[str, Hashable]],
     array.array("d"),
-    array.array("q"),
+    list[tuple[str, Hashable]],
     array.array("d"),
 ]:
     """
@@ -2098,9 +2021,9 @@ def measure_feature_contribution_to_cluster(
             return (
                 group_key,
                 0,
-                array.array("q"),
+                [],
                 array.array("d"),
-                array.array("q"),
+                [],
                 array.array("d"),
             )
 
@@ -2128,13 +2051,13 @@ def measure_feature_contribution_to_cluster(
         # each feature (alone) from the current cluster. Note: using an array
         # to only manage two objects worth of de/serialisation
 
-        remove_feature = array.array("q", feature_group)
+        remove_feature = list(feature_group)
         remove_delta = array.array("d", (0 for _ in remove_feature))
 
         # Features that are already in the cluster, so we need to calculate a remove operator.
         # Effectively we're counting the negative of the score for removing that feature
         # as the effect of adding it to the cluster.
-        for i, feature in enumerate(remove_feature):
+        for i, feature in enumerate(feature_group):
             docs = idx[feature]
 
             if probe_query:
@@ -2167,7 +2090,7 @@ def measure_feature_contribution_to_cluster(
             remove_delta[i] = delta
 
         # PHASE 3: Incremental delta from adding new features to the cluster.
-        add_feature = array.array("q", sorted(add_features - feature_group))
+        add_feature = list(add_features - feature_group)
         add_delta = array.array("d", (0 for _ in add_feature))
 
         # All tokens that are adds (not already in the cluster)
@@ -2199,21 +2122,21 @@ def measure_feature_contribution_to_cluster(
 
 
 def _union_query(args):
-    idx, query_key, feature_ids = args
+    idx, query_key, features = args
 
     with idx:
         query = BitMap()
         weight = 0
 
-        for feature_id in feature_ids:
-            docs = idx[feature_id]
+        for feature in features:
+            docs = idx[feature]
             query |= docs
             weight += len(docs)
 
     return query_key, query, weight
 
 
-def _field_proximity_query(idx, field, clause_feature_ids, first_doc_id, window_size):
+def _field_proximity_query(idx, field, value_clauses, first_doc_id, window_size):
     """
     Return documents where values occur near each other in a field.
 
@@ -2226,18 +2149,18 @@ def _field_proximity_query(idx, field, clause_feature_ids, first_doc_id, window_
 
         _, doc_ids, doc_boundaries = idx._get_partition_header(field, first_doc_id)
 
-        positions = idx._union_position_query(first_doc_id, clause_feature_ids[0])
+        positions = idx._union_position_query(field, first_doc_id, value_clauses[0])
         valid_window = utilities.expand_positions_window(
             positions, doc_boundaries, window_size
         )
 
-        for clause in clause_feature_ids[1:]:
+        for clause in value_clauses[1:]:
 
             # Keep only the union positions that actually intersect with the
             # existing window - these are the starts and ends of spans that
             # can satisfy the spacing criteria.
             clause_positions = (
-                idx._union_position_query(first_doc_id, clause) & valid_window
+                idx._union_position_query(field, first_doc_id, clause) & valid_window
             )
 
             # Early termination if there's no matches at any point during a clause.

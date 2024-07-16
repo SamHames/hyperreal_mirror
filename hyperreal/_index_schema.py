@@ -16,7 +16,7 @@ with the database connection as the only argument.
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 # There's one block of statements per schema_version number - each of these is basically
 # the string of statements needed to migrate to the final version in the query.
@@ -156,9 +156,124 @@ initial_migration_steps = [
 ]
 
 
+# Remove feature IDs from the schema - only ever use concrete (field, value) pairs
+# to refer to the schema.
+drop_feature_ids = [
+    # Migrate feature_cluster, making sure to recreate the appropriate triggers and
+    # indexes afterwards.
+    """
+    CREATE table new_feature_cluster (
+        field text,
+        value,
+        cluster_id integer references cluster(cluster_id) on delete cascade,
+        docs_count integer,
+        primary key (field, value)
+    )
+    """,
+    """
+    INSERT into new_feature_cluster
+        select
+            field,
+            value,
+            cluster_id,
+            ii.docs_count
+        from feature_cluster
+        inner join inverted_index ii using(feature_id)
+    """,
+    "DROP table feature_cluster",
+    "ALTER table new_feature_cluster rename to feature_cluster",
+    """
+    CREATE index if not exists cluster_features on feature_cluster(
+        cluster_id,
+        docs_count
+    )
+    """,
+    """
+    CREATE trigger if not exists insert_feature_checks before insert on feature_cluster
+        begin
+            -- Make sure the cluster exists in the tracking table for foreign key
+            -- relationships
+            insert or ignore into cluster(cluster_id) values (new.cluster_id);
+            -- Make sure that the new cluster is marked as changed so it can be
+            -- summarised
+            insert or ignore into changed_cluster(cluster_id) values (new.cluster_id);
+        end;
+    """,
+    """
+    CREATE trigger if not exists update_feature_checks before update on feature_cluster
+        when old.cluster_id != new.cluster_id
+        begin
+            -- Make sure the new cluster exists in the tracking table for foreign
+            -- key relationships
+            insert or ignore into cluster(cluster_id) values (new.cluster_id);
+
+            -- Make sure that the new and old clusters are marked as changed
+            -- so it can be summarised
+            insert or ignore into changed_cluster(cluster_id)
+                values (new.cluster_id), (old.cluster_id);
+        end;
+    """,
+    """
+    CREATE trigger if not exists delete_feature_checks before delete on feature_cluster
+        begin
+            -- Make sure that the new and old clusters are marked as changed
+            -- so it can be summarised
+            insert or ignore into changed_cluster(cluster_id)
+                values (old.cluster_id);
+        end;
+    """,
+    # Migrate positions and inverted index.
+    """
+    CREATE table if not exists new_inverted_index (
+        field text not null,
+        value not null,
+        docs_count integer not null,
+        doc_ids roaring_bitmap not null,
+        primary key (field, value)
+    ) without rowid
+    """,
+    """
+    INSERT into new_inverted_index
+        select field, value, docs_count, doc_ids
+        from inverted_index
+        order by field, value
+    """,
+    """
+    CREATE table if not exists new_position_index (
+        field text,
+        value,
+        first_doc_id integer,
+        position_count integer,
+        positions roaring_bitmap,
+        foreign key (field, value) references new_inverted_index,
+        primary key (field, value, first_doc_id)
+    ) without rowid
+    """,
+    # pylint: disable=duplicate-code
+    """
+    INSERT into new_position_index
+        select 
+            field, 
+            value,
+            first_doc_id,
+            position_count, 
+            positions
+        from position_index
+        inner join inverted_index using(feature_id)
+        order by field, value, first_doc_id
+    """,
+    # pylint: enable=duplicate-code
+    "DROP table position_index",
+    "ALTER table new_position_index rename to position_index",
+    "DROP table inverted_index",
+    "ALTER table new_inverted_index rename to inverted_index",
+    "pragma user_version = 11",
+]
+
+
 # This maps schema versions to offsets in the list of migration steps to take.
 # The keys correspond to versions that have been recorded in pragma user_version;
-SCHEMA_VERSION_STEPS = {0: initial_migration_steps}
+SCHEMA_VERSION_STEPS = {0: initial_migration_steps, 10: drop_feature_ids}
 
 
 class MigrationError(ValueError):
@@ -206,5 +321,8 @@ def migrate(db):
         db_version = list(db.execute("pragma user_version"))[0][0]
 
     db.execute("commit")
+
+    # Only run after a migration - we can't run this during the open transaction either.
+    db.execute("vacuum")
 
     return True

@@ -1,9 +1,9 @@
-{% macro render_feature(index_id, cluster_id, feature_id, field, value, score, context, highlight_feature_id=None) %}
+{% macro render_feature(index_id, cluster_id, field, value, score, context, highlight=False) %}
 <div>
-    <a href="/index/{{ index_id }}/{{ 'cluster/{}/'.format(cluster_id) if context =='cluster' }}?feature_id={{ feature_id }}">
+    <a href="/index/{{ index_id }}/{{ 'cluster/{}/'.format(cluster_id) if context =='cluster' }}?f={{ field }}&v={{ value }}">
         <div class="feature">
             <span class="field">{{ field }}</span>
-            <div class="value{% if feature_id == highlight_feature_id %} highlight{% endif %}">{{ value }}</div>
+            <div class="value{% if highlight %} highlight{% endif %}">{{ value }}</div>
             <span class="score">{{ ("{:.2e}").format(score) }}</span>
         </div>
     </a>
@@ -11,27 +11,23 @@
 {%- endmacro %}
 
 
-
-
-
-
-{% macro render_cluster(index_id, cluster_id, features, cluster_score=None, highlight_cluster_id=None, highlight_feature_id=None, context='index') -%}
+{% macro render_cluster(index_id, cluster_id, features, cluster_score=None, highlight_cluster_id=None, highlight_feature=None, context='index') -%}
 <div class="feature-cluster">
     <div class="cluster-header {% if cluster_id == highlight_cluster_id %}highlight{% endif %}">
         Cluster {{ cluster_id }} {% if cluster_score is not none %}- {{ "{:.2e}".format(cluster_score) }}{% endif %}
     </div>
     <ul class="compact-cluster">
-        {% for feature_id, field, value, score in features %}
+        {% for (field, value), score in features %}
         <li >
-            {{ render_feature(index_id, cluster_id, feature_id, field, value, score, context, highlight_feature_id=highlight_feature_id)}}
+            {{ render_feature(index_id, cluster_id, field, value, score, context)}}
         </li>
         {% endfor %}
     </ul>
 
     {% if context == "index" %}
     <div class="cluster-footer">
-        {% if highlight_feature_id is not none %}
-        <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}/?feature_id={{ highlight_feature_id }}">Intersect selected feature</a>
+        {% if highlight_feature is not none %}
+        <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}/?f={{ highlight_feature[0] }}&v={{ highlight_feature[1] }}">Intersect selected feature</a>
         {% elif highlight_cluster_id is not none %}
         <a href="/index/{{ index_id }}/cluster/{{ cluster_id }}/?filter_cluster_id={{ highlight_cluster_id }}">Intersect selected cluster</a>
         {% else %}
@@ -45,25 +41,6 @@
     </div>
     {% endif %}
 </div>
-{%- endmacro %}
-
-{% macro render_context_search(index_id, fields, cluster_id=None) -%}
-<div class="feature-search">
-    <form method="get" action="/index/{{ index_id }}/search">
-        <label for="target_field">Search field:</label>
-        <select name="field" id="target_field">
-            {% for field in fields %}
-            <option value="{{ field }}">{{ field }}</option>
-            {% endfor %}
-        </select>
-        <label for="site-search">for</label>
-        <input type="search" id="target_value" name="value" />
-        <button type="submit">Search</button>
-        {% if cluster_id %}
-        <input type="hidden" name="cluster_id" value="{{ cluster_id }}"/>
-        {% endif %}
-    </form>
-</div> 
 {%- endmacro %}
 
 

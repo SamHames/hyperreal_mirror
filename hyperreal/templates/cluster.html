@@ -5,7 +5,19 @@
 {% block title %}Cluster {{ cluster_id }}{% endblock %}
 
 {% block context_edit %}
-{{ render_context_search(index_id, fields, cluster_id=cluster_id) }}
+<div class="feature-search">
+    <form method="get" action="/index/{{ index_id }}/cluster/{{ cluster_id }}">
+        <label for="target_field">Search field:</label>
+        <select name="f" id="target_field">
+            {% for field in fields %}
+            <option value="{{ field }}">{{ field }}</option>
+            {% endfor %}
+        </select>
+        <label for="site-search">for</label>
+        <input type="search" id="target_value" name="v" />
+        <button type="submit">Search</button>
+    </form>
+</div> 
 
 <ul class="nav-links">
     <li><a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">Cluster Overview</a></li>
@@ -35,7 +47,7 @@
             <label for="feature_selection">Choose features:</label>
             <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
             <select name="feature_id" id="feature_selection" multiple>
-                {% for feature_id, field, value, count in features %}
+                {% for (field, value), count in features %}
                 <option value="{{ feature_id }}">{{ field }}: {{ value }}</option>
                 {% endfor %}
             </select>

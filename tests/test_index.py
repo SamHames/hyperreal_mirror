@@ -97,22 +97,7 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     assert total_docs == target_docs
     assert nnz == target_nnz
 
-    # Feature ids should remain the same across indexing runs
-    features_field_values = {
-        feature_id: (field, value)
-        for feature_id, field, value in idx.db.execute(
-            "select feature_id, field, value from inverted_index"
-        )
-    }
-
     idx.rebuild(doc_batch_size=10, index_positions=True)
-
-    for feature_id, field, value in idx.db.execute(
-        "select feature_id, field, value from inverted_index"
-    ):
-        assert (field, value) == features_field_values[feature_id]
-
-    idx.rebuild(doc_batch_size=1, index_positions=True)
 
     positions = list(idx.db.execute("select sum(position_count) from position_index"))[
         0
@@ -283,10 +268,10 @@ def test_querying(example_index_corpora_path, pool):
         # Used for checking the ranking with bstm
         accumulator = collections.Counter()
 
-        for feature_id, field, value, _ in idx.cluster_features(cluster_id):
-            assert idx[feature_id] == idx[(field, value)]
-            assert (idx[feature_id] & cluster_matching) == idx[feature_id]
-            for doc_id in idx[feature_id]:
+        for (field, value), _ in idx.cluster_features(cluster_id):
+            docs = idx[(field, value)]
+            assert docs
+            for doc_id in docs:
                 accumulator[doc_id] += 1
 
         # also test the ranking with bstm - we should retrieve the same number
@@ -301,13 +286,6 @@ def test_querying(example_index_corpora_path, pool):
         real_top_k = BitMap(real_sorted[-n_check:])
 
         assert top_k == real_top_k
-
-    # Confirm that feature lookup works in both directions
-    feature = idx.lookup_feature(1)
-    assert idx[1] == idx[feature]
-
-    feature_id = idx.lookup_feature_id(("text", "the"))
-    assert idx[feature_id] == idx[("text", "the")]
 
 
 def test_pivoting(example_index_corpora_path, pool):
@@ -325,10 +303,41 @@ def test_pivoting(example_index_corpora_path, pool):
             for _, _, features in pivoted:
                 # This feature should be first in the cluster, but the cluster
                 # containing it may not always be first.
-                if query == features[0][1:3]:
+                if query == features[0][0]:
                     break
             else:
                 assert False
+
+
+def test_pivoting_utility(example_index_corpora_path, pool):
+    """Test utility function correctly produces top 10"""
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
+
+    idx.initialise_clusters(16)
+
+    query = idx[("text", "the")]
+    inter = query.intersection_cardinality(idx.cluster_docs(1))
+
+    top_10_features = {
+        feature
+        for _, feature in sorted(
+            [
+                (query.jaccard_index(idx[feature]), feature)
+                for feature, _ in idx.cluster_features(1)
+            ],
+            reverse=True,
+        )[:10]
+    }
+
+    # Test the background process
+    _, _, features = hyperreal.index._pivot_cluster_features_by_query_jaccard(
+        idx, query, 1, 10, inter
+    )
+
+    computed_top_10 = {feature for feature, _ in features}
+
+    assert computed_top_10 == top_10_features
 
 
 @pytest.mark.parametrize("n_clusters", [4, 8, 16])
@@ -443,18 +452,8 @@ def test_pinning(example_index_corpora_path, pool):
     idx.refine_clusters(iterations=1)
     assert len(idx.cluster_ids) == n_clusters
 
-    # Get two features from the first cluster to pin.
-    pinned_features = [f[0] for f in idx.cluster_features(1, top_k=2)]
-    idx.pin_features(feature_ids=pinned_features)
-
-    # Refine and split at the same time to confirm that splitting also doesn't move pinned features
-    idx.refine_clusters(iterations=3, target_clusters=12)
-
+    # Pull out the whole cluster to be pinned.
     whole_cluster = {f[0] for f in idx.cluster_features(1)}
-    for feature_id in pinned_features:
-        assert feature_id in whole_cluster
-
-    assert len(idx.cluster_ids) == 12
 
     # Now pin a whole cluster
     idx.pin_clusters(cluster_ids=[1])

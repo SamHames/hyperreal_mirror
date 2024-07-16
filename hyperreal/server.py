@@ -68,7 +68,8 @@ class Cluster:
         self,
         index_id,
         cluster_id,
-        feature_id=None,
+        f=None,
+        v=None,
         filter_cluster_id=None,
         exemplar_docs="30",
         snippet_window="10",
@@ -106,9 +107,9 @@ class Cluster:
         # Pinned clusters can't be changed, only unpinned
         pinned = int(cluster_id in idx.pinned_cluster_ids)
 
-        # Set defaults to be used if neither cluster/feature_id are provided. In this
+        # Set defaults to be used if neither cluster/feature are provided. In this
         # case there is no query to drive contextualisation, and no docs to display.
-        highlight_feature_id = None
+        highlight_feature = None
         query = idx.cluster_docs(cluster_id)
 
         html_docs = []
@@ -117,25 +118,27 @@ class Cluster:
         snippet_window = int(snippet_window)
 
         # Assemble a sample of matching documents from the query (if present)
-        # A query can be either a single feature_id, or a single cluster_id, or the
+        # A query can be either a single feature, or a single cluster_id, or the
         # intersection of a feature and a cluster if both are specified.
         # At the same time assemble the contextual features from the query for
         # highlighting.
 
         highlight_features = defaultdict(set)
 
-        for feature in idx.cluster_features(cluster_id):
-            field, value = feature[1:3]
+        for (field, value), _ in idx.cluster_features(cluster_id):
             highlight_features[field].add(value)
 
         n_features = sum(len(values) for values in highlight_features.values())
 
-        if feature_id is not None:
-            feature_id = highlight_feature_id = int(feature_id)
-            query &= idx[feature_id]
+        if f is not None and v is not None:
+            value = idx.field_values[f].from_str(v)
+            feature = (f, value)
+            # This will be embedded directly into the template as a URL.
+            highlight_feature = (f, v)
 
-            field, value = idx.lookup_feature(feature_id)
-            highlight_features[field].add(value)
+            query &= idx[feature]
+
+            highlight_features[f].add(value)
 
         if filter_cluster_id is not None:
             filter_cluster_id = int(filter_cluster_id)
@@ -229,8 +232,8 @@ class Cluster:
                 cluster_id,
                 cluster_score,
                 [
-                    (feature_id, field, idx.field_values[field].to_html(value), score)
-                    for feature_id, field, value, score in features
+                    ((field, idx.field_values[field].to_html(value)), score)
+                    for (field, value), score in features
                 ],
             )
             for cluster_id, cluster_score, features in clusters
@@ -246,7 +249,7 @@ class Cluster:
             # context, and avoid passing this around for everything that
             # needs it?
             index_id=index_id,
-            highlight_feature_id=highlight_feature_id,
+            highlight_feature=highlight_feature,
             fields=fields,
             context="cluster",
             # Cluster specific nav and editing
@@ -424,7 +427,8 @@ class Index:
     def index(
         self,
         index_id,
-        feature_id=None,
+        f=None,
+        v=None,
         cluster_id=None,
         exemplar_docs="5",
         top_k_features="40",
@@ -442,10 +446,10 @@ class Index:
         if not idx.cluster_ids:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
 
-        # Set defaults to be used if neither cluster/feature_id are provided. In this
+        # Set defaults to be used if neither cluster/feature are provided. In this
         # case there is no query to drive contextualisation, and no docs to display.
         highlight_cluster_id = None
-        highlight_feature_id = None
+        highlight_feature = None
         query = None
         total_docs = 0
         html_docs = []
@@ -454,19 +458,22 @@ class Index:
         snippet_window = int(snippet_window)
 
         # Assemble a sample of matching documents from the query (if present)
-        # A query can be either a single feature_id, or a single cluster_id, or the
+        # A query can be either a single feature, or a single cluster_id, or the
         # intersection of a feature and a cluster if both are specified.
         # At the same time assemble the contextual features from the query for
         # highlighting.
 
         highlight_features = defaultdict(set)
 
-        if feature_id is not None:
-            feature_id = highlight_feature_id = int(feature_id)
-            query = idx[feature_id]
+        if f is not None and v is not None:
+            value = idx.field_values[f].from_str(v)
+            feature = (f, value)
+            # This will be embedded directly into the template as a URL.
+            highlight_feature = (f, v)
 
-            field, value = idx.lookup_feature(feature_id)
-            highlight_features[field].add(value)
+            query = idx[feature]
+
+            highlight_features[f].add(value)
 
         if cluster_id is not None:
             cluster_id = highlight_cluster_id = int(cluster_id)
@@ -476,8 +483,7 @@ class Index:
             else:
                 query &= cluster_docs
 
-            for feature in idx.cluster_features(cluster_id):
-                field, value = feature[1:3]
+            for (field, value), _ in idx.cluster_features(cluster_id):
                 highlight_features[field].add(value)
 
         if query is not None:
@@ -508,9 +514,9 @@ class Index:
                     starts = ends = []
 
                     if field_positions:
-                        # Join overlapping segments together into one - this isn't really a
-                        # true 'concordance', but a blend between a concordance and a
-                        # snippet.
+                        # Join overlapping segments together into one - this isn't
+                        # really a true 'concordance', but a blend between a
+                        # concordance and a snippet.
                         starts = [max(0, field_positions[0] - snippet_window)]
                         ends = [field_positions[0] + snippet_window]
 
@@ -557,8 +563,8 @@ class Index:
                 cluster_id,
                 cluster_score,
                 [
-                    (feature_id, field, idx.field_values[field].to_html(value), score)
-                    for feature_id, field, value, score in features
+                    ((field, idx.field_values[field].to_html(value)), score)
+                    for (field, value), score in features
                 ],
             )
             for cluster_id, cluster_score, features in clusters
@@ -576,7 +582,7 @@ class Index:
             # context, and avoid passing this around for everything that
             # needs it?
             index_id=index_id,
-            highlight_feature_id=highlight_feature_id,
+            highlight_feature=highlight_feature,
             highlight_cluster_id=highlight_cluster_id,
             fields=fields,
             context="index",
@@ -637,11 +643,11 @@ class Index:
 
         output = io.StringIO()
         writer = csv.writer(output, dialect="excel", quoting=csv.QUOTE_ALL)
-        writer.writerow(("cluster_id", "feature_id", "field", "value", "docs_count"))
+        writer.writerow(("cluster_id", "field", "value", "docs_count"))
 
         for cluster_id, _, cluster_features in all_features:
-            for row in cluster_features:
-                writer.writerow([cluster_id, *row])
+            for feature, docs_count in cluster_features:
+                writer.writerow([cluster_id, *feature, docs_count])
 
         output.seek(0)
 

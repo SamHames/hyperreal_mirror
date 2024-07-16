@@ -96,11 +96,11 @@ def test_server(server_url):
     assert len(links & must_be_present) == len(must_be_present)
 
     for l in links:
-        if l.startswith("/index/0/?feature_id="):
+        if l.startswith("/index/0/?f="):
             must_be_present.add(l)
             break
     else:
-        raise ValueError("Missing a feature_id link")
+        raise ValueError("Missing a feature link")
 
     for test_link in must_be_present:
         r = requests.get(server_url + test_link, timeout=1)
