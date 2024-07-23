@@ -352,11 +352,11 @@ def migrate(db):
     """
     Migrate the database to the current version of the index schema.
 
-    Returns True if a migration operation ran, False otherwise.
+    Returns tuple of (from, to) version if a migration operation ran, False otherwise.
 
     """
 
-    db_version = list(db.execute("pragma user_version"))[0][0]
+    original_db_version = db_version = list(db.execute("pragma user_version"))[0][0]
 
     if db_version == CURRENT_SCHEMA_VERSION:
         return False
@@ -393,4 +393,4 @@ def migrate(db):
     # Only run after a migration - we can't run this during the open transaction either.
     db.execute("vacuum")
 
-    return True
+    return (original_db_version, db_version)

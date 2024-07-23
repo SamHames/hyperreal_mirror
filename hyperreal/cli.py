@@ -13,6 +13,7 @@ import click
 import hyperreal.corpus
 import hyperreal.index
 import hyperreal.server
+from hyperreal.feature_clustering import cluster_features
 
 logging.basicConfig(level=logging.INFO)
 
@@ -219,24 +220,21 @@ stackexchange_corpus.command(name="index")(
 @click.option("--iterations", default=10, type=click.INT)
 @click.option(
     "--clusters",
-    default=None,
+    default=64,
     type=click.INT,
-    help="The number of clusters to use in the model. "
-    "Ignored unless this is the first run, or --restart is passed. "
-    "If not provided in those cases it will default to 64. ",
+    help="The number of clusters to use in this clustering run. Clusters will be added "
+    "to the model and will not affect existing clusters.",
 )
 @click.option("--min-docs", default=100)
 @click.option(
     "--include-field",
+    required=True,
     default=[],
     help="""A field to include in the model initialisation. Multiple fields
     can be specified - if no fields are provided all available fields will be
     included. Ignored unless this is the first run, or --restart is
     passed.""",
     multiple=True,
-)
-@click.option(
-    "--restart", default=False, is_flag=True, help="Restart the model from scratch."
 )
 @click.option(
     "--tolerance",
@@ -253,21 +251,15 @@ stackexchange_corpus.command(name="index")(
     help="Specify a random seed for a model run. Best used with restart",
 )
 @click.option(
-    "--minimum-cluster-features",
-    default=1,
-    type=click.INT,
-    help="The minimum number of features in a cluster.",
-)
-@click.option(
-    "--group-test-batches",
-    default=None,
+    "--layer-size",
+    default=[],
     type=click.INT,
     help="The number of grouped clusters to use to accelerate the clustering. "
-    "Set to 0 to disable the group hierarchy cluster optimisation. Leaving "
-    "at the default of None sets this to 0.1*clusters.",
+    "Each additional argument should be a progressively coarser layer size argument.",
+    multiple=True,
 )
 @click.option(
-    "--group-test-top-k",
+    "--layer-checks",
     default=2,
     type=click.INT,
     help="The number of top groups to investigate if group-test-batches is enabled. "
@@ -278,13 +270,11 @@ def model(
     iterations,
     clusters,
     min_docs,
-    restart,
     include_field,
     random_seed,
     tolerance,
-    minimum_cluster_features,
-    group_test_batches,
-    group_test_top_k,
+    layer_size,
+    layer_checks,
 ):
     """
     Create or refine a new feature cluster model on the given index.
@@ -293,48 +283,24 @@ def model(
     model with --restart.
 
     """
-    doc_index = hyperreal.index.Index(
-        index_db, hyperreal.corpus.EmptyCorpus(), random_seed=random_seed
-    )
+    doc_idx = hyperreal.index.Index(index_db, hyperreal.corpus.EmptyCorpus())
 
-    # Check if any clusters exist.
-    has_clusters = bool(doc_index.cluster_ids)
-
-    if has_clusters:
-        if restart:
-            click.confirm(
-                "A model already exists on this index, do you want to delete it?",
-                abort=True,
-            )
-
-            # If the number of clusters isn't explicitly set.
-            clusters = clusters or 64
-            click.echo(
-                f"Restarting new feature cluster model with {clusters} clusters on {index_db}."
-            )
-            doc_index.initialise_clusters(
-                n_clusters=clusters,
-                min_docs=min_docs,
-                include_fields=include_field or None,
-            )
-    else:
-        # If the number of clusters isn't explicitly set.
-        clusters = clusters or 64
-        click.echo(
-            f"Creating new feature cluster model with {clusters} clusters on {index_db}."
-        )
-        doc_index.initialise_clusters(
-            n_clusters=clusters,
-            min_docs=min_docs,
-            include_fields=include_field or None,
+    features = []
+    for field in include_field:
+        features.extend(
+            f for f, _ in doc_idx.field_features(field, min_docs_count=min_docs)
         )
 
-    click.echo(f"Refining for {iterations} iterations on {index_db}.")
-    doc_index.refine_clusters(
+    clustering = cluster_features(
+        doc_idx,
+        features,
+        clusters,
         iterations=iterations,
-        target_clusters=clusters,
-        tolerance=tolerance,
-        minimum_cluster_features=minimum_cluster_features,
-        group_test_batches=group_test_batches,
-        group_test_top_k=group_test_top_k,
+        random_seed=random_seed,
+        layer_sizes=layer_size,
+        layer_checks=layer_checks,
+        feature_fraction_termination_tolerance=tolerance,
     )
+
+    for cluster in clustering.values():
+        doc_idx.create_cluster_from_features(cluster)

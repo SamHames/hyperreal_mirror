@@ -4,19 +4,15 @@ concrete corpus objects.
 
 """
 
-import collections
 import concurrent.futures as cf
 import csv
-import logging
 import multiprocessing as mp
 import pathlib
-import random
 import shutil
 import uuid
 from datetime import date
 
 import pytest
-from pyroaring import BitMap
 
 import hyperreal
 
@@ -148,93 +144,10 @@ def test_field_feature_retrieval(example_index_corpora_path):
         assert text_features[0][1] > text_features[-1][1]
 
 
-def test_model_editing(example_index_corpora_path, pool):
-    """Test editing functionality on an index."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    idx.initialise_clusters(16)
-
-    cluster_ids = idx.cluster_ids
-
-    assert len(cluster_ids) == 16
-
-    all_cluster_features = {
-        cluster_id: idx.cluster_features(cluster_id) for cluster_id in cluster_ids
-    }
-
-    all_feature_ids = [
-        feature[0] for features in all_cluster_features.values() for feature in features
-    ]
-
-    assert len(all_feature_ids) == len(set(all_feature_ids))
-
-    # Delete single feature at random
-    delete_feature_id = random.choice(all_cluster_features[0])[0]
-    idx.delete_features([delete_feature_id])
-    assert delete_feature_id not in [feature[0] for feature in idx.cluster_features(0)]
-    # Deleting the same feature shouldn't fail
-    idx.delete_features([delete_feature_id])
-
-    # Delete all features in a cluster
-    idx.delete_features([feature[0] for feature in all_cluster_features[0]])
-    assert len(idx.cluster_features(0)) == 0
-
-    assert 0 not in idx.cluster_ids and len(idx.cluster_ids) == 15
-
-    idx.delete_clusters([1, 2])
-    assert not ({1, 2} & set(idx.cluster_ids)) and len(idx.cluster_ids) == 13
-
-    # Merge clusters
-    idx.merge_clusters([3, 4])
-    assert 4 not in idx.cluster_ids and len(idx.cluster_ids) == 12
-
-    assert len(idx.cluster_features(3)) == len(all_cluster_features[3]) + len(
-        all_cluster_features[4]
-    )
-
-    # Create a new cluster from a set of features
-    new_cluster_id = idx.create_cluster_from_features(
-        [feature[0] for feature in all_cluster_features[4]]
-    )
-    assert new_cluster_id == 16
-    assert len(idx.cluster_ids) == 13
-
-
-def test_model_structured_sampling(example_index_corpora_path, pool):
-    """Test that structured sampling produces something."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    idx.initialise_clusters(8, min_docs=5)
-    idx.refine_clusters(iterations=5)
-
-    cluster_sample, sample_clusters = idx.structured_doc_sample(docs_per_cluster=2)
-
-    # Should only a specific number of documents sampled - note that this isn't
-    # guaranteed when docs_per_cluster is larger than clusters in the dataset.
-    assert (
-        len(BitMap.union(*cluster_sample.values()))
-        == len(BitMap.union(*sample_clusters.values()))
-        == 16
-    )
-
-    assert sum(len(docs) for docs in sample_clusters.values()) >= 16
-
-    # Selective cluster exporting
-    cluster_sample, sample_clusters = idx.structured_doc_sample(
-        docs_per_cluster=2, cluster_ids=idx.cluster_ids[:2]
-    )
-
-    assert len(cluster_sample) == 2
-
-
-def test_querying(example_index_corpora_path, pool):
+def test_feature_querying(example_index_corpora_path, pool):
     """Test some simple applications of boolean querying and rendering of results."""
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
     idx = hyperreal.index.Index(example_index_corpora_path[1], corpus=corpus, pool=pool)
-
-    idx.initialise_clusters(16)
 
     query = idx[("text", "the")]
     q = len(query)
@@ -250,211 +163,6 @@ def test_querying(example_index_corpora_path, pool):
     with pytest.raises(KeyError):
         x = idx[("nonexistent", "field")]
         assert not x
-
-    # Valid field, no matches, empty result set
-    assert not idx["text", "asdlfkjsadlkfjsadf"]
-
-    # Confirm that feature_id -> feature mappings in the model are correct
-    # And the cluster queries are in fact boolean combinations.
-    for cluster_id in idx.cluster_ids:
-        cluster_matching, cluster_bs = idx.cluster_query(cluster_id)
-
-        # Used for checking the ranking with bstm
-        accumulator = collections.Counter()
-
-        for (field, value), _ in idx.cluster_features(cluster_id):
-            docs = idx[(field, value)]
-            assert docs
-            for doc_id in docs:
-                accumulator[doc_id] += 1
-
-        # also test the ranking with bstm - we should retrieve the same number
-        # of results by each method. Note that we check against the number of
-        # retrieved top_k from bstm because it returns more than the
-        # specified number of results in the event of ties.
-        top_k = hyperreal.utilities.bstm(cluster_matching, cluster_bs, 5)
-        n_check = len(top_k)
-        real_sorted = [
-            doc_id for doc_id, _ in sorted(accumulator.items(), key=lambda x: x[1])
-        ]
-        real_top_k = BitMap(real_sorted[-n_check:])
-
-        assert top_k == real_top_k
-
-
-def test_pivoting(example_index_corpora_path, pool):
-    """Test pivoting by features and by clusters."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    idx.initialise_clusters(16)
-
-    # Test early/late truncation in each direction with large and small
-    # features.
-    for scoring in ("jaccard",):
-        for query in [("text", "the"), ("text", "denied")]:
-            pivoted = idx.pivot_clusters_by_query(idx[query], top_k=2, scoring=scoring)
-            for _, _, features in pivoted:
-                # This feature should be first in the cluster, but the cluster
-                # containing it may not always be first.
-                if query == features[0][0]:
-                    break
-            else:
-                assert False
-
-
-def test_pivoting_utility(example_index_corpora_path, pool):
-    """Test utility function correctly produces top 10"""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    idx.initialise_clusters(16)
-
-    query = idx[("text", "the")]
-    inter = query.intersection_cardinality(idx.cluster_docs(1))
-
-    top_10_features = {
-        feature
-        for _, feature in sorted(
-            [
-                (query.jaccard_index(idx[feature]), feature)
-                for feature, _ in idx.cluster_features(1)
-            ],
-            reverse=True,
-        )[:10]
-    }
-
-    # Test the background process
-    _, _, features = hyperreal.index._pivot_cluster_features_by_query_jaccard(
-        idx, query, 1, 10, inter
-    )
-
-    computed_top_10 = {feature for feature, _ in features}
-
-    assert computed_top_10 == top_10_features
-
-
-@pytest.mark.parametrize("n_clusters", [4, 8, 16])
-def test_fixed_seed(example_index_corpora_path, pool, n_clusters):
-    """
-    Test creation of a model (the core numerical component!).
-
-    """
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(
-        example_index_corpora_path[1], pool=pool, corpus=corpus, random_seed=10
-    )
-
-    idx.initialise_clusters(n_clusters)
-    idx.refine_clusters(iterations=1)
-
-    clustering_1 = idx.top_cluster_features()
-    idx.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
-    refined_clustering_1 = idx.top_cluster_features()
-
-    # Note we need to initialise a new object with the random seed, otherwise
-    # as each random operation consumes items from the stream.
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(
-        example_index_corpora_path[1], pool=pool, corpus=corpus, random_seed=10
-    )
-
-    idx.initialise_clusters(n_clusters)
-    idx.refine_clusters(iterations=1)
-
-    clustering_2 = idx.top_cluster_features()
-    idx.refine_clusters(target_clusters=n_clusters + 5, iterations=2)
-    refined_clustering_2 = idx.top_cluster_features()
-
-    assert clustering_1 == clustering_2
-    assert refined_clustering_1 == refined_clustering_2
-
-
-def test_splitting(example_index_corpora_path, pool):
-    """Test splitting and saving splits works correctly"""
-
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    n_clusters = 16
-    idx.initialise_clusters(n_clusters)
-
-    assert len(idx.cluster_ids) == n_clusters
-
-    for cluster_id in idx.cluster_ids:
-        idx.refine_clusters(cluster_ids=[cluster_id], target_clusters=2, iterations=1)
-
-    assert len(idx.cluster_ids) == n_clusters * 2
-
-
-def test_dissolving(example_index_corpora_path, pool):
-    """Test dissolving clusters, reducing the available cluster count."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    n_clusters = 16
-    idx.initialise_clusters(n_clusters)
-    idx.refine_clusters(iterations=10)
-
-    assert len(idx.cluster_ids) == n_clusters
-
-    idx.refine_clusters(iterations=4, target_clusters=12)
-    assert len(idx.cluster_ids) == 12
-
-
-def test_filling_empty_clusters(example_index_corpora_path, pool):
-    """Test expanding the number of clusters by subdividing the largest."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    n_clusters = 8
-    idx.initialise_clusters(n_clusters)
-    idx.refine_clusters(iterations=3)
-    assert len(idx.cluster_ids) == n_clusters
-
-    idx.refine_clusters(iterations=3, target_clusters=12)
-
-    assert len(idx.cluster_ids) == 12
-
-
-def test_termination(example_index_corpora_path, caplog, pool):
-    """Test that the algorithm actually converges for at least this case."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    n_clusters = 8
-    idx.initialise_clusters(n_clusters)
-
-    with caplog.at_level(logging.INFO):
-        idx.refine_clusters(iterations=100)
-        assert len(idx.cluster_ids) == n_clusters
-
-        for record in caplog.records:
-            if "Terminating" in record.message:
-                break
-        else:
-            assert False
-
-
-def test_pinning(example_index_corpora_path, pool):
-    """Test expanding the number of clusters by subdividing the largest."""
-    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
-
-    n_clusters = 8
-    idx.initialise_clusters(n_clusters, min_docs=5)
-    idx.refine_clusters(iterations=1)
-    assert len(idx.cluster_ids) == n_clusters
-
-    # Pull out the whole cluster to be pinned.
-    whole_cluster = {f[0] for f in idx.cluster_features(1)}
-
-    # Now pin a whole cluster
-    idx.pin_clusters(cluster_ids=[1])
-    idx.refine_clusters(iterations=3, target_clusters=16)
-
-    assert whole_cluster == {f[0] for f in idx.cluster_features(1)}
-    assert len(idx.cluster_ids) == 16
 
 
 def test_indexing_utility(example_index_corpora_path, tmp_path):

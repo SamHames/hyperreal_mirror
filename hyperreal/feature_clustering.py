@@ -25,10 +25,11 @@ def cluster_features(
     idx,
     features,
     n_clusters,
-    iterations,
+    iterations=10,
     layer_sizes=None,
     random_seed=None,
     layer_checks=2,
+    feature_fraction_termination_tolerance=0.05,
 ):
     """
     Create a clustering of the given features.
@@ -40,6 +41,7 @@ def cluster_features(
     features = list(features)
     feature_ids = list(range(len(features)))
     rand.shuffle(feature_ids)
+    n_features = len(feature_ids)
 
     # This is the clustering initialisation
     leaf_features = {
@@ -147,6 +149,12 @@ def cluster_features(
             idx.logger.info(
                 f"{iteration=}, {objective_estimate=}, {possible_moves=}, {moves_made=}"
             )
+
+            if possible_moves / n_features < feature_fraction_termination_tolerance:
+                idx.logger.info(
+                    f"Terminating at {iteration=} due to small number of moves."
+                )
+                break
 
     # Convert the feature_ids back to features for the return
     return {

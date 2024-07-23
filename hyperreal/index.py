@@ -6,7 +6,6 @@ to document keys.
 
 # pylint: disable=too-many-lines
 
-import array
 import atexit
 import collections
 import concurrent.futures as cf
@@ -20,7 +19,7 @@ import sqlite3
 import tempfile
 from collections.abc import Sequence
 from functools import wraps
-from typing import Any, Hashable, Optional, Union
+from typing import Any, Hashable, Optional
 
 from pyroaring import AbstractBitMap, BitMap
 
@@ -127,9 +126,13 @@ class Index:
         across Python versions.
 
         """
+
         self.db_path = db_path
         self.db = db_utilities.connect_sqlite(self.db_path)
         self.random = random.Random(random_seed)
+
+        # Set up a context specific adapter for this index.
+        self.logger = logging.LoggerAdapter(logger, {"index_db_path": self.db_path})
 
         # _created_pool indicates that we need to cleanup the pool.
         self._created_pool = False
@@ -146,6 +149,10 @@ class Index:
 
         migrated = _index_schema.migrate(self.db)
 
+        if migrated:
+            from_version, to_version = migrated
+            self.logger.info(f"Migrated from {from_version=} to {to_version=}.")
+
         self.corpus = corpus
         self.field_values = corpus.field_values
 
@@ -155,9 +162,6 @@ class Index:
         # the last savepoint by committing a transaction.
         self._transaction_level = 0
         self._changed = False
-
-        # Set up a context specific adapter for this index.
-        self.logger = logging.LoggerAdapter(logger, {"index_db_path": self.db_path})
 
     @property
     def pool(self):
@@ -439,20 +443,6 @@ class Index:
                 """
             )
 
-            # Update docs_counts in the clusters
-            self.db.execute(
-                """
-                update feature_cluster set
-                    docs_count = (
-                        select docs_count
-                        from inverted_index ii
-                        where (ii.field, ii.value) = (
-                            feature_cluster.field, feature_cluster.value
-                        )
-                    )
-                """
-            )
-
             # Write the field summary
             self.db.execute("delete from field_summary")
             self.db.execute(
@@ -474,11 +464,6 @@ class Index:
                 from inverted_index ii
                 group by field
                 """
-            )
-
-            # Update all cluster stats based on new index stats
-            self.db.execute(
-                "insert into changed_cluster select cluster_id from cluster"
             )
 
             self._update_cluster_docs(self.cluster_ids)
@@ -667,7 +652,7 @@ class Index:
         clusters for each of those documents.
 
         """
-        all_clusters = self.top_cluster_features(top_k=0)
+        all_clusters = self.cluster_ids
         cluster_order = reversed(all_clusters)
 
         cluster_ids = set(cluster_ids or self.cluster_ids)
@@ -676,7 +661,7 @@ class Index:
         cluster_samples = {}
 
         # Per cluster samples
-        for cluster_id, _, _ in cluster_order:
+        for cluster_id in cluster_order:
             if cluster_id in cluster_ids:
                 cluster_docs = self.cluster_docs(cluster_id) - already_sampled
                 if docs_per_cluster > 0:
@@ -689,7 +674,7 @@ class Index:
         # Clusters for all of the sampled documents.
         sample_clusters = {
             cluster_id: c
-            for cluster_id, _, _ in all_clusters
+            for cluster_id in all_clusters
             if (c := already_sampled & self.cluster_docs(cluster_id))
         }
 
@@ -923,12 +908,7 @@ class Index:
 
         """
 
-        cluster_ids = cluster_ids or [
-            r[0]
-            for r in self.db.execute(
-                "select cluster_id from cluster order by feature_count desc"
-            )
-        ]
+        cluster_ids = cluster_ids or self.cluster_ids
 
         jobs = self.pool._max_workers * 2
         futures = [
@@ -1010,8 +990,8 @@ class Index:
                     "select name, notes from cluster where cluster_id = ?", [cluster_id]
                 )
             )[0]
-        except IndexError:
-            raise KeyError(f"Cluster with id {cluster_id=} does not exist.")
+        except IndexError as exc:
+            raise KeyError(f"Cluster with id {cluster_id=} does not exist.") from exc
 
     def update_cluster_annotations(self, cluster_id, name=None, notes=None):
         """
