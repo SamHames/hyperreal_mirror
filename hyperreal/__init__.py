@@ -10,3 +10,4 @@ documents.
 """
 
 from . import corpus, db_utilities, index, server, utilities
+from .feature_clustering import cluster_features

@@ -35,7 +35,7 @@ def fixture_pool():
 
 
 @pytest.fixture(name="example_index_corpora_path")
-def fixture_example_index_corpora_path(tmp_path):
+def fixture_example_index(tmp_path):
     "Returns a path to a copy of the example index and corpora in temporary storage."
     random_corpus = tmp_path / str(uuid.uuid4())
     shutil.copy(pathlib.Path("tests", "corpora", "alice.db"), random_corpus)
@@ -125,33 +125,27 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     assert len(hare_hatter) == len(idx[("text", "hare")] & idx[("text", "hatter")])
 
 
-@pytest.mark.parametrize("n_clusters", [4, 16, 64])
-def test_model_creation(pool, example_index_corpora_path, n_clusters):
-    """Test creation of a model (the core numerical component!)."""
+def test_field_feature_retrieval(example_index_corpora_path):
+    """Confirm the field filtering works as expected."""
+
     corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
-    idx = hyperreal.index.Index(example_index_corpora_path[1], pool=pool, corpus=corpus)
+    idx = hyperreal.index.Index(example_index_corpora_path[1], corpus)
 
-    idx.initialise_clusters(n_clusters)
-    # The defaults will generate dense clustering for 4 clusters, hierarchical for 16, 64
-    idx.refine_clusters(iterations=3)
+    test_combinations = (
+        ({}, 2212),
+        ({"min_docs_count": 10}, 229),
+        ({"top_k": 100}, 100),
+        ({"top_k": 100, "min_docs_count": 10}, 100),
+    )
 
-    assert len(idx.cluster_ids) == len(idx.top_cluster_features())
-    assert 1 < len(idx.cluster_ids) <= n_clusters
-
-    idx.refine_clusters(iterations=3, group_test_batches=0)
-    assert len(idx.cluster_ids) == len(idx.top_cluster_features())
-    assert 1 < len(idx.cluster_ids) <= n_clusters
-
-    # Initialising with a field that doesn't exist should create an empty model.
-    idx.initialise_clusters(n_clusters, include_fields=["banana"])
-    idx.refine_clusters(iterations=3)
-
-    assert len(idx.cluster_ids) == len(idx.top_cluster_features())
-    assert 0 == len(idx.cluster_ids)
-
-    # No op cases - empty and single clusters selected.
-    assert idx._refine_feature_groups({}) == ({}, set())
-    idx.refine_clusters(iterations=10, cluster_ids=[1])
+    for kwargs, expected_count in test_combinations:
+        text_features = idx.field_features("text", **kwargs)
+        assert all(
+            docs_count >= kwargs.get("min_docs_count", 1)
+            for feature, docs_count in text_features
+        )
+        assert len(text_features) == expected_count
+        assert text_features[0][1] > text_features[-1][1]
 
 
 def test_model_editing(example_index_corpora_path, pool):

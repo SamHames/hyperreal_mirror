@@ -16,7 +16,7 @@ with the database connection as the only argument.
 # The application ID uses SQLite's pragma application_id to quickly identify index
 # databases from everything else.
 MAGIC_APPLICATION_ID = 715973853
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 # There's one block of statements per schema_version number - each of these is basically
 # the string of statements needed to migrate to the final version in the query.
@@ -270,10 +270,78 @@ drop_feature_ids = [
     "pragma user_version = 11",
 ]
 
+# Update cluster model from updatable clusters where a feature can only be in one
+# cluster to a model where clusters are immutable, and features can be present in many
+# clusters. Currently this only models boolean OR queries but will be extended in the
+# future.
+cluster_to_simple_query = [
+    """
+    CREATE table new_cluster (
+        cluster_id integer primary key,
+        name text not null default '',
+        notes text not null default '',
+        -- Length of doc_ids/number of docs retrieved by the union
+        docs_count integer not null default 0,
+        -- Materialised result of the query
+        doc_ids roaring_bitmap,
+        created_at default(strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), 
+        -- Clusters are immutable, with soft deletes. This enables capturing more of the
+        -- history of working with a set of clusters over time. deleted_at should
+        -- be a timestamp of when it was deleted - this is a soft delete only. 
+        deleted_at
+    )
+    """,
+    # TODO: add existing index with clusters test case for this migration.
+    """
+    INSERT into new_cluster(cluster_id, docs_count, doc_ids, notes)
+        select 
+            cluster_id, 
+            docs_count, 
+            doc_ids, 
+            '\n\n\nMigrated from existing cluster model.' 
+        from cluster
+    """,
+    """
+    CREATE table cluster_feature (
+        /* Defines a boolean OR query over the features included in the cluster. */
+        cluster_id integer references new_cluster(cluster_id) on delete cascade,
+        field text,
+        value,
+        -- docs_count is included for sorting, but might be changed in the future.
+        docs_count integer default 0,
+        primary key (cluster_id, field, value)
+    )
+    """,
+    """
+    INSERT into cluster_feature
+        select
+            cluster_id,
+            field,
+            value,
+            docs_count
+        from feature_cluster
+    """,
+    "DROP table changed_cluster",
+    "DROP table feature_cluster",
+    "DROP table cluster",
+    "ALTER table new_cluster rename to cluster",
+    """
+    CREATE index if not exists cluster_feature_order on cluster_feature(
+        cluster_id,
+        docs_count desc
+    )
+    """,
+    "pragma user_version = 12",
+]
+
 
 # This maps schema versions to offsets in the list of migration steps to take.
 # The keys correspond to versions that have been recorded in pragma user_version;
-SCHEMA_VERSION_STEPS = {0: initial_migration_steps, 10: drop_feature_ids}
+SCHEMA_VERSION_STEPS = {
+    0: initial_migration_steps,
+    10: drop_feature_ids,
+    11: cluster_to_simple_query,
+}
 
 
 class MigrationError(ValueError):

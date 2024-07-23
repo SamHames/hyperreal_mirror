@@ -30,26 +30,11 @@ from hyperreal.corpus import Corpus
 logger = logging.getLogger(__name__)
 
 
-class CorpusMissingError(AttributeError):
-    """
-    Raised when using functions that assume a corpus, but no corpus is present.
-
-    """
-
-
-class UnsupportedCorpusOperation(AttributeError):
-    """
-    Raised when the corpus provided does not support this function.
-    """
-
-
 class IndexingError(AttributeError):
     "Raised for specific problems during indexing."
 
 
 FeatureKey = tuple[str, Hashable]
-FeatureKeyOrId = Union[FeatureKey, int]
-FeatureIdAndKey = tuple[int, str, Hashable]
 BitSlice = list[BitMap]
 
 
@@ -99,7 +84,8 @@ def atomic(writes=False):
                     self.logger.info("Changes detected - updating clusters.")
                     # Note that this will check for changed queries, and will
                     # therefore be a noop if there aren't any.
-                    self._update_changed_clusters()
+                    # TODO: this whole thing can be simplified now that clusters are
+                    # immutable.
                     self._changed = False
 
                 self.db.execute(f'release "{func.__name__}"')
@@ -159,11 +145,6 @@ class Index:
             self.db.execute(statement)
 
         migrated = _index_schema.migrate(self.db)
-
-        if migrated:
-            self.db.execute("begin")
-            self._update_changed_clusters()
-            self.db.execute("commit")
 
         self.corpus = corpus
         self.field_values = corpus.field_values
@@ -500,7 +481,7 @@ class Index:
                 "insert into changed_cluster select cluster_id from cluster"
             )
 
-            self._update_changed_clusters()
+            self._update_cluster_docs(self.cluster_ids)
 
             self.db.execute("commit")
 
@@ -722,77 +703,44 @@ class Index:
         return list(self.db.execute("select * from field_summary"))
 
     @atomic(writes=True)
-    def initialise_clusters(self, n_clusters, min_docs=1, include_fields=None):
+    def restore_deleted_clusters(self, cluster_ids):
         """
-        Initialise the model with the given number of clusters.
+        Restore the specified deleted clusters.
 
-        Features that retrieve at least `min_docs` are randomly assigned to
-        one of the given clusters.
-
-        `include_fields` can be specified to limit initialising the model to features
-        from only the selected fields.
+        If the cluster ID doesn't exist or it isn't deleted, this operation will do
+        nothing.
 
         """
-
-        # Note - foreign key constraints handle most of the associated metadata,
-        # we just do one extra step to avoid a circular trigger
-        self.db.execute("delete from feature_cluster")
-        self.db.execute("delete from cluster")
-
-        self.db.execute("create temporary table if not exists include_field(field)")
-        self.db.execute("delete from include_field")
-
-        if include_fields:
-            self.db.executemany(
-                "insert into include_field values(?)", [[f] for f in include_fields]
-            )
-        else:
-            self.db.execute("insert into include_field select field from field_summary")
-
-        features = list(
-            self.db.execute(
-                """
-                select
-                    field,
-                    value,
-                    docs_count
-                from inverted_index
-                inner join include_field using(field)
-                where docs_count >= ?
-                -- Note: specify the ordering to ensure reproducibility, as these
-                -- results will be shuffled.
-                order by field, value
-                """,
-                [min_docs],
-            )
-        )
-
-        self.random.shuffle(features)
-
-        clusters = ((i, features[i::n_clusters]) for i in range(n_clusters))
-
         self.db.executemany(
             """
-            insert into feature_cluster(cluster_id, field, value, docs_count)
-                values(?, ?, ?, ?)
+            update cluster 
+                set deleted_at = null
+            where cluster_id = ?
             """,
-            (
-                (cluster_id, *feature)
-                for cluster_id, features in clusters
-                for feature in features
-            ),
+            [[c] for c in cluster_ids],
         )
 
-        self.db.execute("drop table include_field")
+        self._update_cluster_docs(cluster_ids)
 
-        self.logger.info(f"Initialised new model with {n_clusters} clusters.")
+        self.logger.info(f"Deleted clusters {cluster_ids}.")
 
     @atomic(writes=True)
     def delete_clusters(self, cluster_ids):
-        """Delete the specified clusters."""
-        # The cluster table will be automatically updated by the housekeeping functionality
+        """
+        Delete the specified clusters.
+
+        Deletes are soft deletes only and can be restored using
+        restore_deleted_clusters.
+
+        """
         self.db.executemany(
-            "delete from feature_cluster where cluster_id = ?",
+            """
+            update cluster set 
+                deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                docs_count = 0,
+                doc_ids = null
+            where cluster_id = ?
+            """,
             [[c] for c in cluster_ids],
         )
 
@@ -814,76 +762,93 @@ class Index:
 
         return merge_cluster_id
 
-    @atomic(writes=True)
-    def delete_features(self, features):
-        """Delete the given features from the model."""
-        self.db.executemany(
-            "delete from feature_cluster where (field, value)= (?, ?)",
-            (
-                (field, self.field_values[field].to_index(value))
-                for field, value in features
-            ),
-        )
+    def _update_cluster_docs(self, cluster_ids):
+        """
+        Update the doc_ids and docs_count for the given clusters.
 
-        self.logger.info(f"Delete features {features}.")
+        This is called automatically by the create_cluster_from_features and rebuild
+        methods, and shouldn't need to be called manually. The only reason to call it
+        manually is if you have manually update the cluster_feature table, and the
+        materialised cluster query is out of date.
 
-    def next_cluster_id(self):
-        """Return a new cluster_id, higher than anything already assigned."""
-        next_cluster_id = list(
+        """
+
+        for cluster_id in cluster_ids:
+            features = self.cluster_features(cluster_id)
+
+            doc_ids = BitMap()
+
+            for f, _ in features:
+                doc_ids |= self[f]
+
+            docs_count = len(doc_ids)
+
             self.db.execute(
                 """
-                select
-                    coalesce(max(cluster_id), 0) + 1
-                from cluster
-                """
+                update cluster set 
+                    docs_count = ?,
+                    doc_ids = ?
+                where cluster_id = ?
+                """,
+                [docs_count, doc_ids, cluster_id],
             )
-        )[0][0]
 
-        return next_cluster_id
+            # Also update the docs_counts in the context of the features in the query
+            # too. This measures the effective hits of this feature in the context of
+            # this query - for boolean OR queries this is still the same as the number
+            # of documents matching this query by itself.
+            for (field, value), _ in features:
+                inter_count = doc_ids.intersection_cardinality(self[(field, value)])
+                self.db.execute(
+                    """
+                    update cluster_feature
+                    set docs_count = ?
+                    where (cluster_id, field, value) = (?, ?, ?)
+                    """,
+                    [
+                        inter_count,
+                        cluster_id,
+                        field,
+                        self.field_values[field].to_index(value),
+                    ],
+                )
 
     @atomic(writes=True)
-    def create_cluster_from_features(self, features):
+    def create_cluster_from_features(self, features, name="", notes=""):
         """
-        Create a new cluster from the provided set of features.
+        Create a new cluster from the given set of features, returns the new cluster_id.
 
-        The features need not exist in the index, but won't do anything otherwise.
+        Clusters are immutable and apart from the name and notes can only be created or
+        soft deleted.
 
         """
 
-        next_cluster_id = self.next_cluster_id()
+        self.db.execute(
+            "insert into cluster(name, notes) values(?, ?)",
+            (name, notes),
+        )
+
+        cluster_id = list(self.db.execute("select last_insert_rowid()"))[0][0]
 
         index_features = [
-            (field, self.field_values[field].to_index(value), next_cluster_id)
+            (
+                cluster_id,
+                field,
+                self.field_values[field].to_index(value),
+            )
             for field, value in features
         ]
 
         self.db.executemany(
-            """
-            insert or ignore into feature_cluster(field, value, cluster_id, docs_count)
-                values (
-                    ?1,
-                    ?2,
-                    ?3,
-                    (
-                        select coalesce(docs_count, 0) from inverted_index 
-                        where (field, value) = (?1, ?2)
-                    )
-                )
-            """,
+            "insert into cluster_feature(cluster_id, field, value) values (?, ?, ?)",
             index_features,
         )
 
-        self.db.executemany(
-            """
-            update feature_cluster set cluster_id = ?3 
-            where (field, value) = (?1, ?2)
-            """,
-            index_features,
-        )
+        self._update_cluster_docs([cluster_id])
 
-        self.logger.info(f"Created cluster {next_cluster_id} from {features}.")
+        self.logger.info(f"Created cluster {cluster_id} from {len(features)} features.")
 
-        return next_cluster_id
+        return cluster_id
 
     @atomic(writes=True)
     def pin_clusters(self, cluster_ids: Sequence[int], pinned: bool = True):
@@ -905,19 +870,14 @@ class Index:
         return [
             r[0]
             for r in self.db.execute(
-                "select cluster_id from cluster order by cluster_id"
+                """
+                select cluster_id 
+                from cluster 
+                where deleted_at is null 
+                order by cluster_id
+                """
             )
         ]
-
-    @property
-    def pinned_cluster_ids(self):
-        """The ids of all clusters pinned to prevent further change."""
-        return {
-            r[0]
-            for r in self.db.execute(
-                "select cluster_id from cluster where pinned order by cluster_id"
-            )
-        }
 
     @atomic()
     def top_cluster_features(self, top_k=20):
@@ -927,6 +887,7 @@ class Index:
             """
             select cluster_id, docs_count
             from cluster
+            where deleted_at is null
             order by docs_count desc
             """
         )
@@ -1009,6 +970,73 @@ class Index:
 
         return (future.result() for future in futures)
 
+    def field_features(
+        self, field: str, top_k: Optional[int] = None, min_docs_count: int = 1
+    ):
+        """
+        Returns the features in a given field, in descending order of the count of docs.
+
+        If top_k is specified, only the top_k most frequent features by document count
+        are returned in descending order.
+
+        """
+
+        top_k = top_k or 2**62
+
+        features = [
+            ((row[0], self.field_values[row[0]].from_index(row[1])), row[2])
+            for row in self.db.execute(
+                """
+                select
+                    field,
+                    value,
+                    docs_count
+                from inverted_index
+                where field = ? and docs_count >= ?
+                order by docs_count desc, value
+                limit ?
+                """,
+                [field, min_docs_count, top_k],
+            )
+        ]
+
+        return features
+
+    def cluster_annotations(self, cluster_id):
+
+        try:
+            return list(
+                self.db.execute(
+                    "select name, notes from cluster where cluster_id = ?", [cluster_id]
+                )
+            )[0]
+        except IndexError:
+            raise KeyError(f"Cluster with id {cluster_id=} does not exist.")
+
+    def update_cluster_annotations(self, cluster_id, name=None, notes=None):
+        """
+        Update the name and notes for a given cluster.
+
+        name and notes are both optional: if left as the default None, the name or notes
+        field will be left unchanged. To empty the field, use the empty string
+        explicitly.
+
+        Currently silently continues if cluster_id does not exist.
+
+        TODO: this might need to check for deletion as well?
+
+        """
+        self.db.execute(
+            """
+            update cluster set
+                -- If name or notes are null, use the existing field values.
+                name = coalesce(?, name),
+                notes = coalesce(?, notes)
+            where cluster_id = ?
+            """,
+            [name, notes, cluster_id],
+        )
+
     def cluster_features(self, cluster_id, top_k=2**62):
         """
         Returns an impact ordered list of features for the given cluster.
@@ -1026,10 +1054,10 @@ class Index:
                     value,
                     -- Note that docs_count is denormalised to allow
                     -- a per cluster sorting of document count.
-                    fc.docs_count
-                from feature_cluster fc
+                    docs_count
+                from cluster_feature
                 where cluster_id = ?
-                order by fc.docs_count desc
+                order by docs_count desc
                 limit ?
                 """,
                 [cluster_id, top_k],
@@ -1039,7 +1067,7 @@ class Index:
         return cluster_features
 
     @atomic()
-    def union_bitslice(self, features: Sequence[FeatureKeyOrId]):
+    def union_bitslice(self, features: Sequence[FeatureKey]):
         """
         Return matching documents and accumulated bitslice for the given set
         of features.
@@ -1075,535 +1103,6 @@ class Index:
                 "select doc_ids from cluster where cluster_id = ?", [cluster_id]
             )
         )[0][0]
-
-    def _score_proposed_moves(
-        self,
-        cluster_feature: dict[Hashable, set[int]],
-        cluster_check_feature: dict[Hashable, set[int]],
-        probe_query: Optional[AbstractBitMap] = None,
-        top_k: int = 1,
-    ) -> dict[int, tuple[float, Hashable]]:
-        """
-        Return the estimated best cluster/s for each feature.
-
-        This should be used in conjunction with the scores output from
-        `_measure_feature_cluster_contributions`, which describes the contribution
-        of each feature to its own cluster.
-
-        The input is two mappings:
-
-        cluster_feature - the current cluster: features mapping
-        cluster_check_features - mapping of cluster: features to check
-            against moving into this cluster. Note that features will
-            be removed from this set if they are already in this cluster
-            in cluster_feature.
-
-        top_k: the number of best scores to keep - the default is to only
-            the single best scoring feature.
-
-        """
-
-        # preflight check:
-        missing_clusters = {
-            cluster_key
-            for cluster_key in cluster_check_feature
-            if cluster_key not in cluster_feature
-        }
-
-        if missing_clusters:
-            raise KeyError(
-                f"`cluster_feature` is missing clusters with keys: {missing_clusters}"
-            )
-
-        futures = [
-            self.pool.submit(
-                measure_feature_contribution_to_cluster,
-                self,
-                cluster_key,
-                cluster_feature[cluster_key],
-                cluster_check_feature[cluster_key] - cluster_feature[cluster_key],
-                probe_query,
-            )
-            # dispatch in sort order for reproducibility with randomisation
-            for cluster_key in sorted(cluster_check_feature)
-        ]
-
-        best_clusters = collections.defaultdict(list)
-
-        cluster_objectives = {}
-
-        for future in futures:
-            result = future.result()
-            test_cluster, objective = result[:2]
-            cluster_objectives[test_cluster] = objective
-
-            for feature_array, delta_array in [result[2:4], result[4:6]]:
-                for feature, delta in zip(feature_array, delta_array):
-                    if len(best_clusters[feature]) < top_k:
-                        heapq.heappush(best_clusters[feature], (delta, test_cluster))
-                    else:
-                        heapq.heappushpop(best_clusters[feature], (delta, test_cluster))
-
-        return cluster_objectives, {
-            key: sorted(feature_scores, reverse=True)
-            for key, feature_scores in best_clusters.items()
-        }
-
-    def _find_best_moves(
-        self,
-        cluster_feature: dict[int, set[int]],
-        group_test_top_k=1,
-        group_test_batches=None,
-        probe_query=None,
-        top_k=1,
-    ):
-        """
-        Find the approximate next nearest cluster for each feature in this clustering.
-        """
-
-        cluster_ids = list(cluster_feature.keys())
-        self.random.shuffle(cluster_ids)
-
-        movable_features = set.union(*cluster_feature.values())
-
-        if group_test_batches and group_test_batches > len(cluster_ids) / 2:
-            group_test_batches = None
-            self.logger.info(
-                f"{group_test_batches=} is too high to be useful for {len(cluster_ids)=}, "
-                "disabling."
-            )
-
-        # Group testing, generating randomised groupings of clusters to prune
-        # the search space early.
-        if group_test_batches:
-            cluster_groups = [
-                set(cluster_ids[i::group_test_batches])
-                for i in range(group_test_batches)
-            ]
-
-            group_features = {}
-            group_feature_checks = {}
-
-            for group in cluster_groups:
-                group_key = tuple(sorted(group))
-                this_group_features = set.union(
-                    *(cluster_feature[key] for key in group_key)
-                )
-
-                group_features[group_key] = this_group_features
-                group_feature_checks[group_key] = movable_features
-
-            _, best_groups = self._score_proposed_moves(
-                group_features,
-                group_feature_checks,
-                probe_query=probe_query,
-                top_k=group_test_top_k,
-            )
-
-            cluster_feature_checks = collections.defaultdict(set)
-
-            # Convert best group results into individual cluster checks
-            for feature, groups in best_groups.items():
-                if feature in movable_features:
-                    for _, group_key in groups:
-                        for cluster_key in group_key:
-                            cluster_feature_checks[cluster_key].add(feature)
-
-        # The dense testing case is much much simpler, but also much slower!
-        else:
-            cluster_feature_checks = {c: movable_features for c in cluster_ids}
-
-        return self._score_proposed_moves(
-            cluster_feature,
-            cluster_feature_checks,
-            probe_query=probe_query,
-            top_k=top_k,
-        )
-
-    def _refine_feature_groups(
-        self,
-        cluster_feature: dict[int, set[int]],
-        iterations: int = 10,
-        minimum_cluster_features: int = 1,
-        probe_query: Optional[AbstractBitMap] = None,
-        target_clusters: Optional[int] = None,
-        tolerance: float = 0.05,
-        group_test_batches: Optional[int] = None,
-        group_test_top_k: int = 2,
-    ) -> tuple[dict[int, set[int]], set[int]]:
-        """
-        Low level function for iteratively refining a feature clustering.
-
-        cluster_features is a mapping from a cluster_key to a set of features.
-
-        This is most useful if you want to explore specific clustering
-        approaches without the constraint of the saved clusters.
-
-        To change the number of clusters in the model, set target clusters to
-        a different number of clusters than in cluster_feature - the clustering
-        will be adjusted to the target. The newly generated IDs will be returned
-        along with the new feature clustering.
-
-        If a probe_query is provided, it will be intersected with all features
-        for clustering: this is used to generate a clustering for a subset of
-        the data. Note that features may not intersect with the probe query -
-        clustering is not well defined in this case and should be used with
-        care.
-
-        target_clusters: specifies a target number of clusters for the model: if
-        there are more clusters, the clusters that contribute least to the
-        objective will be dissolved. Dissolves will be conducted evenly per
-        iteration, rather than all at once. If there are fewer clusters than
-        target, new clusters will be created by sampling from the largest
-        cluster at random.
-
-        tolerance: specifies a termination tolerance. If fewer than
-        tolerance * total_features features move in an iteration, terminate
-        early. The default is set at 0.05 - the model is considered
-        converged if less than 5% of the features have moved during an
-        iteration.
-
-        top_k: the number of nearest neighbour clusters to consider as move
-        candidates.
-        """
-
-        # pylint: disable=too-many-branches,too-many-statements
-
-        target_clusters = target_clusters or len(cluster_feature)
-
-        # Handle cases where moves are not possible by returning immediately.
-        # If cluster_feature is empty
-        n_clusters = len(cluster_feature.keys())
-        if n_clusters == 0:
-            return cluster_feature, set()
-        # Or if there is only one cluster, and target_clusters is the same
-        if n_clusters == 1 == target_clusters:
-            return cluster_feature, set()
-
-        # Make sure to copy the input dict
-        cluster_feature = {
-            cluster_id: features.copy()
-            for cluster_id, features in cluster_feature.items()
-        }
-
-        feature_cluster = {
-            feature: cluster_id
-            for cluster_id, features in cluster_feature.items()
-            for feature in features
-        }
-
-        feature_list = list(feature_cluster)
-        n_features = len(feature_cluster)
-
-        changed_clusters = set(cluster_feature)
-
-        # Generate new cluster_ids and empty clusters if we have less clusters
-        # than target_clusters. New clusters are formed by splitting the
-        # current largest cluster by number of features roughly in half.
-        next_cluster_id = max(cluster_feature) + 1
-        new_clusters = target_clusters - len(cluster_feature)
-        new_cluster_ids = list(range(next_cluster_id, next_cluster_id + new_clusters))
-
-        for new_cluster_id in new_cluster_ids:
-            _, largest_cluster, largest_cluster_features = max(
-                (len(features), cluster_id, features)
-                for cluster_id, features in cluster_feature.items()
-            )
-            split = {
-                feature
-                for feature in largest_cluster_features
-                if self.random.random() < 0.5
-            }
-            cluster_feature[new_cluster_id] = split
-            cluster_feature[largest_cluster] -= split
-            for feature in split:
-                feature_cluster[feature] = new_cluster_id
-
-        assigned_cluster_ids = set(cluster_feature)
-
-        # Work out how many low objective clusters to dissolve on each iteration.
-        dissolve_clusters = max(0, len(assigned_cluster_ids) - target_clusters)
-        # Note that we try to structure it so the very last iteration does not dissolve
-        # anything.
-        dissolve_per_iteration = math.ceil(dissolve_clusters / max(1, iterations - 1))
-        dissolve_cluster_ids = set()
-
-        for iteration in range(iterations):
-            # Calculate possible moves given this clustering
-            objectives, best_moves = self._find_best_moves(
-                cluster_feature,
-                group_test_top_k=group_test_top_k,
-                group_test_batches=group_test_batches,
-                probe_query=probe_query,
-            )
-
-            total_objective = sum(objectives.values())
-
-            self.logger.info(
-                f"Iteration {iteration + 1}, current objective: {total_objective}"
-            )
-
-            # Dissolve target low objective clusters for this iteration
-            if dissolve_clusters:
-                n_dissolve = min(dissolve_clusters, dissolve_per_iteration)
-                dissolve_clusters -= n_dissolve
-
-                dissolve_cluster_order = sorted(
-                    (cluster_obj, cluster_id)
-                    for cluster_id, cluster_obj in cluster_feature.items()
-                )
-                dissolve_cluster_ids = set(
-                    cluster_id for _, cluster_id in dissolve_cluster_order[:n_dissolve]
-                )
-
-                self.logger.info(
-                    f"Dissolving {len(dissolve_cluster_ids)} low objective clusters"
-                )
-            else:
-                dissolve_cluster_ids = set()
-
-            possible_clusters = list(set(cluster_feature) - dissolve_cluster_ids)
-            possible_moves = 0
-            actual_moves = 0
-            changed_clusters = set()
-
-            self.random.shuffle(feature_list)
-
-            for feature in feature_list:
-                _, to_cluster = best_moves[feature][0]
-                current_cluster = feature_cluster[feature]
-
-                to_cluster_len = len(cluster_feature[to_cluster])
-                current_cluster_len = len(cluster_feature[current_cluster])
-
-                # Accept moves from clusters with many to few features with high prob,
-                # accept moves from clusters with few to many feature with low prob.
-                move_acceptance_probability = (current_cluster_len - 1) / (
-                    to_cluster_len + current_cluster
-                )
-                # Note that we're squaring the probability here - this makes moves from
-                # smaller to larger clusters much less likely to be accepted, without
-                # affecting moves from larger to smaller clusters too much. This makes
-                # the algorithm converge slower overall, but prevents the tail of
-                # clusters with fewer features from being absorbed into a single large
-                # cluster. There might be better ways to address this cluster size
-                # desire in the objective, but this will do for now.
-                accept = self.random.random() < (move_acceptance_probability**2)
-
-                # Handle dissolving clusters
-                if current_cluster in dissolve_cluster_ids:
-                    # Always accept a move out of a dissolving cluster
-                    accept = True
-
-                    # If we're moving into a dissolving cluster as well move
-                    # to a randomly selected cluster.
-                    if to_cluster in dissolve_cluster_ids:
-                        to_cluster = self.random.choice(possible_clusters)
-
-                # Don't move into a dissolving cluster
-                elif to_cluster in dissolve_cluster_ids:
-                    continue
-
-                # Not actually a move!
-                elif current_cluster == to_cluster:
-                    continue
-
-                # Don't move things out of a small cluster.
-                elif len(cluster_feature[current_cluster]) == minimum_cluster_features:
-                    continue
-
-                # We can make this move, so let's try it
-                possible_moves += 1
-
-                if accept:
-                    actual_moves += 1
-
-                    cluster_feature[current_cluster].discard(feature)
-                    cluster_feature[to_cluster].add(feature)
-                    feature_cluster[feature] = to_cluster
-                    changed_clusters.add(to_cluster)
-                    changed_clusters.add(current_cluster)
-
-            for cluster_id in dissolve_cluster_ids:
-                if len(cluster_feature[cluster_id]):
-                    raise ValueError("This cluster should have been emptied.")
-                del cluster_feature[cluster_id]
-
-            self.logger.info(
-                f"Finished iteration {iteration + 1}/{iterations}, changed "
-                f"{len(changed_clusters)} clusters, moved {actual_moves} features."
-            )
-
-            if not dissolve_cluster_ids:
-                if (possible_moves / n_features) < tolerance:
-                    self.logger.info(
-                        "Terminating refinement due to small number of feature moves."
-                    )
-                    break
-
-        return cluster_feature, new_cluster_ids
-
-    @atomic()
-    def refine_clusters(
-        self,
-        iterations: int = 10,
-        cluster_ids: Optional[Sequence[int]] = None,
-        minimum_cluster_features: int = 1,
-        probe_query: Optional[AbstractBitMap] = None,
-        target_clusters: Optional[int] = None,
-        tolerance: float = 0.05,
-        group_test_batches: Optional[int] = None,
-        group_test_top_k: int = 2,
-    ):
-        """
-        Refine the feature clusters for the current model.
-
-        Optionally provide a list of specific cluster_ids to refine.
-
-        If target_clusters is larger than the current number of clusters in
-        the model, the largest clusters by number of features will be split
-        to reach the target. This can be used to split all or some selected
-        clusters.
-
-        """
-
-        cluster_ids = set(cluster_ids or self.cluster_ids)
-
-        if iterations < 1:
-            raise ValueError(
-                f"You must specificy at least one iteration, provided '{iterations}'."
-            )
-
-        # Establish forward reverse mappings of features to clusters and vice versa.
-
-        cluster_feature = {
-            cluster_id: set(f[0] for f in self.cluster_features(cluster_id))
-            for cluster_id in cluster_ids
-        }
-
-        # Set target clusters to the current number of clusters, or the
-        # provided value. But we also need to account for pinned clusters in
-        # the next step, otherwise this will be the wrong count.
-        target_clusters = target_clusters or len(cluster_feature)
-
-        # Remove pinned clusters from refinement, and don't count them towards
-        # target clusters.
-        pinned_clusters = set(self.pinned_cluster_ids)
-
-        for cluster_id in pinned_clusters:
-            if cluster_id in cluster_feature:
-                del cluster_feature[cluster_id]
-                target_clusters -= 1
-
-        if group_test_batches is None:
-            group_test_batches = math.ceil(len(cluster_feature) ** 0.5)
-
-        cluster_feature, new_cluster_ids = self._refine_feature_groups(
-            cluster_feature,
-            iterations=iterations,
-            minimum_cluster_features=minimum_cluster_features,
-            probe_query=probe_query,
-            target_clusters=target_clusters,
-            tolerance=tolerance,
-            group_test_top_k=group_test_top_k,
-            group_test_batches=group_test_batches,
-        )
-
-        # Map new_cluster_ids generated to actual globally unique IDs.
-        # Make sure to copy these out first, as new_cluster_ids might overlap
-        # with the global clustering model!
-        new_cluster_feature = {
-            cluster_id: cluster_feature[cluster_id] for cluster_id in new_cluster_ids
-        }
-
-        next_cluster_id = self.next_cluster_id()
-
-        for cluster_id in new_cluster_ids:
-            del cluster_feature[cluster_id]
-            cluster_feature[next_cluster_id] = new_cluster_feature[cluster_id]
-            next_cluster_id += 1
-
-        # Serialise the actual results of the clustering!
-        self._update_cluster_feature(cluster_feature)
-
-    @atomic(writes=True)
-    def _update_cluster_feature(self, cluster_feature):
-        """
-        Update the given cluster: feature mapping.
-
-        Note that this only updates the provided clusters: it does not replace
-        the entire state of the model. Also note that this can clobber
-        cluster_ids if you're not careful.
-
-        """
-        self.db.executemany(
-            """
-            update feature_cluster set cluster_id = ?1 where (field, value) = (?2, ?3)
-            """,
-            (
-                (cluster_id, field, self.field_values[field].to_index(value))
-                for cluster_id, features in cluster_feature.items()
-                for field, value in features
-            ),
-        )
-
-    def _update_changed_clusters(self):
-        """
-        Refresh cluster union queries for changed clusters.
-
-        This is usually called from the `atomic` decorator, or when reindexing.
-
-        It is assumed that this is called inside a transaction.
-
-        """
-
-        # First update the feature counts, and remove empty clusters
-        self.db.execute(
-            """
-            update cluster set feature_count = (
-                select count(*)
-                from feature_cluster fc
-                where fc.cluster_id=cluster.cluster_id
-            )
-            where cluster_id in (select cluster_id from changed_cluster)
-            """
-        )
-
-        changed = self.db.execute("select cluster_id from changed_cluster")
-
-        # Then update the union statistics for all of the clusters
-        bg_args = (
-            (
-                self,
-                cluster_param[0],
-                [
-                    (field, self.field_values[field].from_index(value))
-                    for field, value in self.db.execute(
-                        """
-                        select field, value
-                        from feature_cluster
-                        where cluster_id = ?
-                        """,
-                        cluster_param,
-                    )
-                ],
-            )
-            for cluster_param in changed
-        )
-
-        # Note that the data here may not have been committed yet, so we have
-        # to read and pass the features to the background ourselves.
-        for cluster_id, query, weight in self.pool.map(_union_query, bg_args):
-            self.db.execute(
-                """
-                update cluster set (docs_count, weight, doc_ids) = (?, ?, ?)
-                where cluster_id = ?
-                """,
-                (len(query), weight, query, cluster_id),
-            )
-
-        self.db.execute("delete from cluster where feature_count = 0")
-        self.db.execute("delete from changed_cluster")
 
     @atomic()
     def field_proximity_query(
@@ -1961,149 +1460,6 @@ def _pivot_cluster_features_by_query_jaccard(
         similarity = query.jaccard_index(idx.cluster_docs(cluster_id))
 
     return cluster_id, similarity, results
-
-
-def measure_feature_contribution_to_cluster(
-    idx,
-    group_key: Any,
-    feature_group: set[int],
-    add_features: set[int],
-    probe_query: Optional[AbstractBitMap],
-) -> tuple[
-    Any,
-    float,
-    list[tuple[str, Hashable]],
-    array.array("d"),
-    list[tuple[str, Hashable]],
-    array.array("d"),
-]:
-    """
-    Measure the contribution of each feature to this cluster.
-
-    The contribution is the delta between the objective of the cluster without
-    the feature and with the feature.
-
-    This function also has the side effect of approximating the objective
-    contribution for this feature in this cluster (assuming moving only that
-    feature).
-
-    """
-
-    with idx:
-        # FIRST PHASE: compute the objective and minimal cover stats for the
-        # current cluster.
-
-        # The union of all docs covered by the cluster
-        cluster_union = BitMap()
-        # The set of all docs covered at least twice.
-        # This will be used to work out which documents are only covered once.
-        covered_twice = BitMap()
-
-        hits = 0
-        n_features = len(feature_group)
-
-        if not n_features:
-            return (
-                group_key,
-                0,
-                [],
-                array.array("d"),
-                [],
-                array.array("d"),
-            )
-
-        # Construct the union of all cluster tokens, and also the set of
-        # documents only covered by a single feature.
-        for feature in feature_group:
-            docs = idx[feature]
-
-            if probe_query:
-                docs &= probe_query
-
-            hits += len(docs)
-
-            # Docs covered at least twice
-            covered_twice |= cluster_union & docs
-            # All docs now covered
-            cluster_union |= docs
-
-        only_once = cluster_union - covered_twice
-
-        c = len(cluster_union)
-        objective = hits / (c + n_features) - (hits / (hits + n_features))
-
-        # PHASE 2: compute the incremental change in objective from removing
-        # each feature (alone) from the current cluster. Note: using an array
-        # to only manage two objects worth of de/serialisation
-
-        remove_feature = list(feature_group)
-        remove_delta = array.array("d", (0 for _ in remove_feature))
-
-        # Features that are already in the cluster, so we need to calculate a remove operator.
-        # Effectively we're counting the negative of the score for removing that feature
-        # as the effect of adding it to the cluster.
-        for i, feature in enumerate(feature_group):
-            docs = idx[feature]
-
-            if probe_query:
-                docs &= probe_query
-
-            feature_hits = len(docs)
-
-            old_hits = hits - feature_hits
-            only_once_hits = docs.intersection_cardinality(only_once)
-            old_c = c - only_once_hits
-
-            # Check if this feature intersects with any other feature in this cluster
-            intersects_with_other_feature = only_once_hits < feature_hits
-
-            # It's okay for the cluster to become empty - we'll just prune it.
-            if old_c and intersects_with_other_feature:
-                old_objective = old_hits / (old_c + (n_features - 1)) - (
-                    old_hits / (old_hits + n_features - 1)
-                )
-
-                delta = objective - old_objective
-
-            # Penalises features that don't intersect with other features in the cluster.
-            elif old_c:
-                delta = -1
-            # If it would otherwise be a singleton cluster, just mark it as no change
-            else:
-                delta = 0
-
-            remove_delta[i] = delta
-
-        # PHASE 3: Incremental delta from adding new features to the cluster.
-        add_feature = list(add_features - feature_group)
-        add_delta = array.array("d", (0 for _ in add_feature))
-
-        # All tokens that are adds (not already in the cluster)
-        for i, feature in enumerate(add_feature):
-            docs = idx[feature]
-
-            if probe_query:
-                docs &= probe_query
-
-            feature_hits = len(docs)
-
-            if docs.intersect(cluster_union):
-                new_hits = hits + feature_hits
-                new_c = docs.union_cardinality(cluster_union)
-                new_objective = new_hits / (new_c + (n_features + 1)) - (
-                    new_hits / (new_hits + n_features + 1)
-                )
-
-                delta = new_objective - objective
-
-            # If the feature doesn't intersect with the cluster at all,
-            # give it a bad delta.
-            else:
-                delta = -1
-
-            add_delta[i] = delta
-
-    return group_key, objective, remove_feature, remove_delta, add_feature, add_delta
 
 
 def _union_query(args):
