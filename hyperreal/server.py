@@ -104,9 +104,6 @@ class Cluster:
             (cluster_index + 1) if cluster_index < (len(all_clusters) - 1) else 0
         ]
 
-        # Pinned clusters can't be changed, only unpinned
-        pinned = int(cluster_id in idx.pinned_cluster_ids)
-
         # Set defaults to be used if neither cluster/feature are provided. In this
         # case there is no query to drive contextualisation, and no docs to display.
         highlight_feature = None
@@ -255,7 +252,6 @@ class Cluster:
             # Cluster specific nav and editing
             prev_cluster_id=prev_cluster_id,
             next_cluster_id=next_cluster_id,
-            pinned=pinned,
             features=clusters[0][-1],
             cluster_id=cluster_id,
         )
@@ -354,58 +350,6 @@ class ClusterOverview:
 
         raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id[0]}")
 
-    @cherrypy.expose
-    @cherrypy.tools.allow(methods=["POST"])
-    @cherrypy.tools.ensure_list(cluster_id=int)
-    def pin(self, index_id, cluster_id=None, pinned="1", return_to="cluster"):
-        """
-        Pin or unpin the selected clusters.
-
-        Pinned clusters will not be affected by future iterations of the algorithm.
-
-        """
-        cherrypy.request.index.pin_clusters(
-            cluster_ids=cherrypy.request.params["cluster_id"], pinned=int(pinned)
-        )
-        if return_to == "cluster":
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id[0]}")
-
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id[0]}")
-
-
-class FeatureOverview:
-    """Endpoints for specific feature related functionality."""
-
-    @cherrypy.expose
-    @cherrypy.tools.allow(methods=["POST"])
-    @cherrypy.tools.ensure_list(feature_id=int)
-    def remove_from_model(self, index_id, feature_id=None, cluster_id=None):
-        """Removed the specified features from the model."""
-        cherrypy.request.index.delete_features(cherrypy.request.params["feature_id"])
-        if cluster_id is not None:
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id}")
-
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
-
-    @cherrypy.expose
-    @cherrypy.tools.allow(methods=["POST"])
-    @cherrypy.tools.ensure_list(feature_id=int)
-    def pin(self, index_id, feature_id=None, cluster_id=None, pinned="1"):
-        """
-        Pin the selected features.
-
-        Pinned features will not be moved algorithmically, and clusters containing any
-        pinned features will not be automatically split.
-
-        """
-        cherrypy.request.index.pin_features(
-            cherrypy.request.params["feature_id"], pinned=int(pinned)
-        )
-        if cluster_id is not None:
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id}")
-
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}/")
-
 
 @cherrypy.popargs("index_id")
 @cherrypy.tools.cleanup_index()
@@ -420,7 +364,6 @@ class Index:
     """
 
     cluster = ClusterOverview()
-    feature = FeatureOverview()
 
     @cherrypy.expose
     @cherrypy.config(**{"response.stream": True})

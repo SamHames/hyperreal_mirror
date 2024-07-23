@@ -55,8 +55,17 @@ def fixture_server(tmp_path, request):
             corp = hyperreal.corpus.EmptyCorpus()
 
         idx = hyperreal.index.Index(index_path, corpus=corp, pool=pool)
-        idx.initialise_clusters(8, min_docs=3)
-        idx.refine_clusters(iterations=5)
+
+        features = [row[0] for row in idx.field_features("text", min_docs_count=1)]
+        clustering = hyperreal.cluster_features(
+            idx,
+            features,
+            16,
+            iterations=10,
+        )
+
+        for cluster in clustering.values():
+            idx.create_cluster_from_features(cluster)
 
         index_server = hyperreal.server.SingleIndexServer(index_path, pool=pool)
         engine = hyperreal.server.launch_web_server(index_server, port=0)
