@@ -89,8 +89,9 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
     target_docs, target_nnz, target_positions = check_stats()
 
     nnz = list(idx.db.execute("select sum(docs_count) from inverted_index"))[0][0]
-    total_docs = list(idx.db.execute("select count(*) from doc_key"))[0][0]
-    assert total_docs == target_docs
+    total_docs = idx.n_docs()
+    all_doc_ids = idx.all_docs()
+    assert total_docs == target_docs == len(all_doc_ids)
     assert nnz == target_nnz
 
     idx.rebuild(doc_batch_size=10, index_positions=True)
@@ -119,6 +120,12 @@ def test_indexing(pool, tmp_path, corpus, args, kwargs, check_stats):
 
     assert len(hare_hatter)
     assert len(hare_hatter) == len(idx[("text", "hare")] & idx[("text", "hatter")])
+
+
+def test_all_doc_counting(pool, example_index_corpora_path):
+
+    corpus = hyperreal.corpus.PlainTextSqliteCorpus(example_index_corpora_path[0])
+    idx = hyperreal.index.Index(example_index_corpora_path[1], corpus)
 
 
 def test_field_feature_retrieval(example_index_corpora_path):

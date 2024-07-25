@@ -1084,6 +1084,16 @@ class Index:
             )
         )[0][0]
 
+    def all_docs(self) -> AbstractBitMap:
+        """Return a bitmap of all doc_ids in the index."""
+        return BitMap(range(self.n_docs()))
+
+    def n_docs(self) -> int:
+        """Return total number of documents in the index."""
+        return list(
+            self.db.execute("select coalesce(max(doc_id) + 1, 0) from doc_key")
+        )[0][0]
+
     @atomic()
     def field_proximity_query(
         self, field, value_clauses: list[list], window_size: int
