@@ -1404,7 +1404,7 @@ def _pivot_cluster_features_by_query_jaccard(
 ):
 
     with idx:
-        results = [((-1, -math.inf), (-1, -1))] * top_k
+        results = [((-1, -math.inf), ("field", "value"))] * top_k
 
         q = len(query)
 
@@ -1444,7 +1444,9 @@ def _pivot_cluster_features_by_query_jaccard(
 
         # Not completely deterministic ordering: we don't want to sort by arbitrary
         # and potentially unsortable features, so just use the similarity score alone.
-        results = [(r[1], r[0][0]) for r in sorted(results, reverse=True)]
+        results = [
+            (r[1], r[0][0]) for r in sorted(results, reverse=True) if r[0][0] > 0
+        ]
 
         # Finally compute the similarity of the query with the cluster.
         similarity = query.jaccard_index(idx.cluster_docs(cluster_id))
