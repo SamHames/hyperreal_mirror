@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Create clusters from fields{% endblock %}
+
+{% block content %}
+
+<form method="post" action="/index/{{ index_id }}/create_clusters">
+    <fieldset>
+        <ul>
+            <li>
+                <label for="field_selection">Choose at least one field to create clusters from:</label>
+                <select name="include_fields" id="field_selection" multiple>
+                    {% for field, _, _, _, _ in field_summary %}
+                    <option value="{{ field }}">{{ field }}</option>
+                    {% endfor %}
+                </select>
+            </li>
+            <li>
+                <label for="iterations">Number of iterations to run:</label>
+                <input id="iterations" name="iterations" type="number" value="50" />
+            </li>
+            <li>
+                <label for="min-docs">Minimum number of documents a feature needs to retrieve to be included in the model:</label>
+                <input id="min-docs" name="min_docs" type="number" value="10" />
+            </li>
+            <li>
+                <label for="clusters">Number of clusters in the model:</label>
+                <input id="clusters" name="clusters" type="number" value="64" />
+            </li>
+        </ul>
+    </fieldset>
+    <button type="submit">Create Clusters</button>
+</form>
+
+{% endblock %}

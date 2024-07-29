@@ -114,3 +114,15 @@ def test_server(server_url):
     for test_link in must_be_present:
         r = requests.get(server_url + test_link, timeout=1)
         r.raise_for_status()
+
+
+# Test details
+
+# Test cluster creation page opens
+
+# Test cluster creation works for one or more fields, and that they render
+# correctly afterwards.
+
+# Test a sample of links work - random walk through the whole page.
+
+# Test deleting all wipes everything.

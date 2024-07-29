@@ -229,11 +229,14 @@ h1 {
 
 <body class="with-sidebar" up-main>
     <header>
-        <h1><a href="/">Feature Clustering</a></h1>
         <nav>
             <ul class="nav-links">
-            {% block nav %}
-            {% endblock %}
+                <li><a href="/index/{{ index_id }}">Overview</a></li>
+                <li><a href="/index/{{ index_id }}/info">Index Info</a></li>
+                <li><a href="/index/{{ index_id }}/create">Create New Clusters</a></li>
+                <li><a href="/index/{{ index_id }}/delete_all">Delete All Clusters</a></li>
+                {% block nav %}
+                {% endblock %}
             </ul>
         </nav>
     </header>

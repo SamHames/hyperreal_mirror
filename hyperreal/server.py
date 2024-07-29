@@ -11,6 +11,7 @@ import cherrypy
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 import hyperreal.index
+import hyperreal.feature_clustering
 from hyperreal.corpus import EmptyCorpus
 
 # Cherrypy uses raise HTTPRedirect often, so this lint is just noise.
@@ -384,10 +385,6 @@ class Index:
         # pylint: disable=too-many-branches,too-many-statements,too-many-nested-blocks
 
         idx = cherrypy.request.index
-        # Redirect to the index overview page to create a new model if no
-        # index has been created.
-        if not idx.cluster_ids:
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/details")
 
         # Set defaults to be used if neither cluster/feature are provided. In this
         # case there is no query to drive contextualisation, and no docs to display.
@@ -554,14 +551,32 @@ class Index:
         raise cherrypy.HTTPRedirect(f"/index/{index_id}/?feature_id={feature_id}")
 
     @cherrypy.expose
-    def details(self, index_id):
+    def info(self, index_id):
         """
-        Show the details of the index, including indexed fields and associated cardinalities.
+        Show the details of the index, including indexed fields and value ranges.
 
         """
         idx = cherrypy.request.index
 
         template = templates.get_template("details.html")
+        current_clusters = len(idx.cluster_ids)
+        field_summary = idx.indexed_field_summary()
+
+        return template.render(
+            field_summary=field_summary,
+            index_id=index_id,
+            current_clusters=current_clusters,
+        )
+
+    @cherrypy.expose
+    def create(self, index_id):
+        """
+        Create a new clusters by automated clustering of features from chosen fields.
+
+        """
+        idx = cherrypy.request.index
+
+        template = templates.get_template("create_clusters.html")
         current_clusters = len(idx.cluster_ids)
         field_summary = idx.indexed_field_summary()
 
@@ -599,57 +614,77 @@ class Index:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(include_fields=str)
-    def recreate_model(
+    def create_clusters(
         self,
         index_id,
         include_fields=None,
         min_docs="10",
         clusters="64",
-        iterations="10",
-        minimum_cluster_features="1",
+        iterations="50",
     ):
         """
-        (Re)Create the model for this index with the given parameters.
+        Create a new set of clusters automatically from features from each field.
 
-        Note that this does not actually run any iterations of refinement.
+        The created clusters will be added to the existing fields.
 
         """
         idx = cherrypy.request.index
-        idx.initialise_clusters(
-            n_clusters=int(clusters),
-            min_docs=int(min_docs),
-            include_fields=include_fields or None,
+
+        include_features = []
+
+        if not include_fields:
+            raise cherrypy.HTTPError(
+                status=422,
+                message="At least one include_fields parameter must be provided.",
+            )
+
+        for field in include_fields:
+
+            if field not in idx.field_values:
+                raise cherrypy.HTTPError(
+                    status=422,
+                    message=f"Specified field {field} not present on this index.",
+                )
+
+            include_features.extend(
+                f[0] for f in idx.field_features(field, min_docs_count=int(min_docs))
+            )
+
+        clustering = hyperreal.cluster_features(
+            idx,
+            include_features,
+            int(clusters),
+            iterations=int(iterations),
         )
 
-        idx.refine_clusters(
-            iterations=int(iterations),
-            minimum_cluster_features=int(minimum_cluster_features),
-        )
+        for cluster in clustering.values():
+            idx.create_cluster_from_features(cluster)
 
         raise cherrypy.HTTPRedirect(f"/index/{index_id}")
 
     @cherrypy.expose
-    @cherrypy.tools.allow(methods=["POST"])
-    def refine_model(
-        self,
-        index_id,
-        iterations="10",
-        target_clusters="0",
-        minimum_cluster_features="1",
-    ):
+    def delete_all(self, index_id):
         """
-        Refine the existing model for the given number of iterations.
+        Show the details of the index, including indexed fields and value ranges.
 
         """
-        if target_clusters:
-            target_clusters = int(target_clusters)
-        else:
-            target_clusters = None
-        cherrypy.request.index.refine_clusters(
-            iterations=int(iterations),
-            target_clusters=target_clusters,
-            minimum_cluster_features=int(minimum_cluster_features),
+        idx = cherrypy.request.index
+
+        template = templates.get_template("delete_clusters.html")
+        current_clusters = len(idx.cluster_ids)
+
+        return template.render(
+            index_id=index_id,
+            current_clusters=current_clusters,
         )
+
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    def delete_all_clusters(self, index_id):
+        """(Soft) delete all clusters."""
+        idx = cherrypy.request.index
+
+        idx.delete_clusters(idx.cluster_ids)
 
         raise cherrypy.HTTPRedirect(f"/index/{index_id}")
 
