@@ -10,9 +10,12 @@
     <style type="text/css">
 
 body {
-    margin: 0 3em;
+    margin: 0;
 }
 
+main {
+    margin: 0 1em;
+}
 .cluster-list {
     display: flex;
     flex-wrap: wrap;
@@ -169,14 +172,15 @@ section {
     margin: 2em 0;
 }
 
-form {
+/*form {
     padding: 0.5em;
     margin: 0.5em;
     max-width: 80em;
-}
+}*/
 
 .nav-links {
     display: flex;
+    flex-wrap: wrap;
     list-style-type: none;
     margin-bottom: 1em;
     margin-top: 0em;
@@ -187,8 +191,11 @@ form {
     margin-right: 1em;
 }
 
-nav, h1 {
-    display: inline-block;
+header {
+    position: sticky;
+    top: 0;
+    background: lightblue;
+    z-index: 1;
 }
 
 h1 {
@@ -227,7 +234,7 @@ h1 {
     {% endblock %}
 </head>
 
-<body class="with-sidebar" up-main>
+<body>
     <header>
         <nav>
             <ul class="nav-links">

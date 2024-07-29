@@ -4,23 +4,25 @@
 
 {% block title %}Feature Clustering{% endblock %}
 
+{% block nav %}
+                <li>
+                    <form class="search-form" method="get" action="/index/{{ index_id }}/">
+                        <label for="target_field">Search field:</label>
+                        <select name="f" id="target_field">
+                            {% for field in fields %}
+                            <option value="{{ field }}">{{ field }}</option>
+                            {% endfor %}
+                        </select>
+                        <label for="site-search">search for</label>
+                        <input type="search" id="target_value" name="v" />
+                        <button type="submit">Search</button>
+                    </form>
+                </li>
+{% endblock %}
+
 {% block content %}
 
 {% block context_edit %}
-
-<div class="feature-search">
-    <form method="get" action="/index/{{ index_id }}/">
-        <label for="target_field">Search field:</label>
-        <select name="f" id="target_field">
-            {% for field in fields %}
-            <option value="{{ field }}">{{ field }}</option>
-            {% endfor %}
-        </select>
-        <label for="site-search">for</label>
-        <input type="search" id="target_value" name="v" />
-        <button type="submit">Search</button>
-    </form>
-</div> 
 
 <details>
     <summary>Edit Selected Clusters</summary>

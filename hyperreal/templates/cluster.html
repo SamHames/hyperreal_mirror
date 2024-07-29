@@ -5,20 +5,6 @@
 {% block title %}Cluster {{ cluster_id }}{% endblock %}
 
 {% block context_edit %}
-<div class="feature-search">
-    <form method="get" action="/index/{{ index_id }}/cluster/{{ cluster_id }}">
-        <label for="target_field">Search field:</label>
-        <select name="f" id="target_field">
-            {% for field in fields %}
-            <option value="{{ field }}">{{ field }}</option>
-            {% endfor %}
-        </select>
-        <label for="site-search">for</label>
-        <input type="search" id="target_value" name="v" />
-        <button type="submit">Search</button>
-    </form>
-</div> 
-
 <ul class="nav-links">
     <li><a href="/index/{{ index_id }}/cluster/{{ cluster_id }}">Cluster Overview</a></li>
     {% if prev_cluster_id or next_cluster_id %}
