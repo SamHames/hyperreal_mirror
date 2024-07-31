@@ -740,7 +740,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                                 '<Deleted User>'
                             ) as DisplayName,
                             CreationDate,
-                            PostType
+                            PostType,
+                            OwnerUserId
                         from Post
                         inner join Site using(site_id)
                         where Post.doc_id = ?
@@ -748,6 +749,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                         [key],
                     )
                 )[0]
+
+                doc["LiveLink"] = f"{doc['site_url']}/questions/{doc['Id']}"
 
                 doc["QuestionTitle"] = list(
                     self.db.execute(
