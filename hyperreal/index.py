@@ -733,15 +733,15 @@ class Index:
 
     @atomic(writes=True)
     def merge_clusters(self, cluster_ids):
-        """Merge all clusters into the first cluster_id in the provided list."""
+        """Create a new cluster by merging the features from the provided clusters."""
 
-        merge_cluster_id = cluster_ids[0]
+        cluster_features = [
+            f[0]
+            for cluster_id in cluster_ids
+            for f in self.cluster_features(cluster_id)
+        ]
 
-        for cluster_id in cluster_ids[1:]:
-            self.db.execute(
-                "update feature_cluster set cluster_id=? where cluster_id=?",
-                [merge_cluster_id, cluster_id],
-            )
+        merge_cluster_id = self.create_cluster_from_features(cluster_features)
 
         self.logger.info(f"Merged {cluster_ids} into {merge_cluster_id}.")
 

@@ -147,7 +147,7 @@ class Cluster:
                 query &= cluster_docs
 
             for feature in idx.cluster_features(filter_cluster_id):
-                field, value = feature[1:3]
+                field, value = feature[:2]
                 highlight_features[field].add(value)
 
         # Sorted features for both display and driving edit navigation
@@ -280,10 +280,10 @@ class ClusterOverview:
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
-    @cherrypy.tools.ensure_list(cluster_id=int)
-    def delete(self, index_id, cluster_id=None, return_cluster_id=None, **params):
+    @cherrypy.tools.ensure_list(from_clusters=int)
+    def delete(self, index_id, from_clusters=None, return_cluster_id=None, **params):
         """Delete the specified clusters, if they exist."""
-        cherrypy.request.index.delete_clusters(cherrypy.request.params["cluster_id"])
+        cherrypy.request.index.delete_clusters(from_clusters)
 
         if return_cluster_id:
             redirect_to = f"/index/{index_id}/cluster/{return_cluster_id}"
@@ -303,8 +303,8 @@ class ClusterOverview:
 
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
-    @cherrypy.tools.ensure_list(cluster_id=int)
-    def merge(self, index_id, cluster_id=None, **params):
+    @cherrypy.tools.ensure_list(from_clusters=int)
+    def merge(self, index_id, from_clusters=None, **params):
         """
         Merge the specified clusters into one.
 
@@ -312,44 +312,9 @@ class ClusterOverview:
 
         """
         merge_cluster_id = cherrypy.request.index.merge_clusters(
-            cherrypy.request.params["cluster_id"]
+            cherrypy.request.params["from_clusters"]
         )
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{merge_cluster_id}")
-
-    @cherrypy.expose
-    @cherrypy.tools.allow(methods=["POST"])
-    @cherrypy.tools.ensure_list(cluster_id=int)
-    def refine(
-        self,
-        index_id,
-        cluster_id=None,
-        target_clusters=None,
-        iterations="10",
-        return_to="cluster",
-        minimum_cluster_features="1",
-    ):
-        """
-        Refine the clustering on this index.
-
-        Optionally provide a list of specific clusters, a number of target clusters
-        to expand/contract to, and a minimum number of features in each cluster.
-
-        """
-        if target_clusters:
-            target_clusters = int(target_clusters)
-        else:
-            target_clusters = None
-
-        cherrypy.request.index.refine_clusters(
-            cluster_ids=cherrypy.request.params["cluster_id"],
-            target_clusters=target_clusters,
-            minimum_cluster_features=int(minimum_cluster_features),
-            iterations=int(iterations),
-        )
-        if return_to == "cluster":
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/cluster/{cluster_id[0]}")
-
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id[0]}")
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={merge_cluster_id}")
 
 
 @cherrypy.popargs("index_id")
@@ -374,7 +339,7 @@ class Index:
         f=None,
         v=None,
         cluster_id=None,
-        exemplar_docs="5",
+        exemplar_docs="30",
         top_k_features="40",
         snippet_window="10",
     ):
@@ -428,14 +393,20 @@ class Index:
 
         if query is not None:
             clusters = idx.pivot_clusters_by_query(query, top_k=int(top_k_features))
-            total_docs = len(query)
+        else:
+            clusters = idx.top_cluster_features(top_k=int(top_k_features))
+            # If there is no query specified, sample from all docs.
+            query = idx.all_docs()
 
-            sampled_docs = idx.sample_bitmap(query, int(exemplar_docs))
+        total_docs = len(query)
 
-            for _, _, doc in idx.docs(sampled_docs):
+        sampled_docs = idx.sample_bitmap(query, int(exemplar_docs))
 
-                html_docs.append(idx.corpus.doc_to_html(doc))
+        for _, _, doc in idx.docs(sampled_docs):
 
+            html_docs.append(idx.corpus.doc_to_html(doc))
+
+            if highlight_features:
                 doc_features = idx.corpus.doc_to_features(doc)
 
                 feature_matches = idx.match_doc_features(
@@ -472,6 +443,8 @@ class Index:
                                 starts.append(start)
                                 ends.append(end)
 
+                    # This seems to be wrong, but is going to be refactored
+                    # significantly anyway....
                     # Convert the matching feature to HTML representations as well.
                     doc_matches = {
                         field: sorted(
@@ -492,10 +465,11 @@ class Index:
                         )
                         for start, end in zip(starts, ends)
                     ]
-                    snippets.append(doc_snippets)
 
-        else:
-            clusters = idx.top_cluster_features(top_k=int(top_k_features))
+                    snippets.append(doc_snippets)
+            else:
+                matches.append({})
+                snippets.append([])
 
         # Render all the feature values to HTML
         clusters = (
@@ -623,6 +597,7 @@ class Index:
         min_docs="10",
         clusters="64",
         iterations="50",
+        return_to=None,
     ):
         """
         Create a new set of clusters from features in a given set of fields or clusters.
@@ -673,7 +648,9 @@ class Index:
         for cluster in clustering.values():
             last_cluster_id = idx.create_cluster_from_features(cluster)
 
-        if from_clusters:
+        if return_to:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={return_to}")
+        elif from_clusters:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id}")
         else:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}")

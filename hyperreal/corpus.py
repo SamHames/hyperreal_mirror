@@ -741,7 +741,8 @@ class StackExchangeCorpus(SqliteBackedCorpus):
                             ) as DisplayName,
                             CreationDate,
                             PostType,
-                            OwnerUserId
+                            OwnerUserId,
+                            ContentLicense
                         from Post
                         inner join Site using(site_id)
                         where Post.doc_id = ?

@@ -17,31 +17,6 @@
 <details>
     <summary>Edit this cluster</summary>
 
-    {% if pinned %}
-    <form method="post" action="/index/{{ index_id }}/cluster/pin">
-        <fieldset>
-            <input type="hidden" name="return_to" value="cluster">
-            <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
-            <input type="hidden" name="pinned" value="{{ 0 if pinned else 1 }}">
-            <button class="inline-button" type="submit">Unpin Cluster</button>
-        </fieldset>
-    </form>
-
-    {% else %}
-    <form method="post" action="/index/{{ index_id }}/feature/remove_from_model">
-        <fieldset>
-            <label for="feature_selection">Choose features:</label>
-            <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
-            <select name="feature_id" id="feature_selection" multiple>
-                {% for (field, value), count in features %}
-                <option value="{{ feature_id }}">{{ field }}: {{ value }}</option>
-                {% endfor %}
-            </select>
-        </fieldset>
-        <button type="submit">Delete Selected Features</button>
-        <button type="submit" formaction="/index/{{ index_id }}/cluster/create" method="post">Create From Selected Features</button>
-    </form>
-
     <form method="post" action="/index/{{ index_id }}/cluster/delete">
         <fieldset>
             <input type="hidden" name="return_cluster_id" value="{{ next_cluster_id }}">
@@ -61,18 +36,9 @@
     </form>
     {% endif %}
 
-    <form method="post" action="/index/{{ index_id }}/cluster/pin">
+    <form method="post" action="/index/{{ index_id }}/create_clusters">
         <fieldset>
-            <input type="hidden" name="return_to" value="cluster">
-            <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
-            <input type="hidden" name="pinned" value="{{ 0 if pinned else 1 }}">
-            <button class="inline-button" type="submit">Pin Cluster</button>
-        </fieldset>
-    </form>
-
-    <form method="post" action="/index/{{ index_id }}/cluster/refine">
-        <fieldset>
-            <input type="hidden" name="cluster_id" value="{{ cluster_id }}">
+            <input type="hidden" name="from_clusters" value="{{ cluster_id }}">
             <input type="hidden" name="return_to" value="cluster">
             <ul>
                 <li>
@@ -83,16 +49,10 @@
                     <label for="iterations">Number of iterations of refinement after splitting:</label>
                     <input id="iterations" name="iterations" type="number" value="10" />
                 </li>
-                <li>
-                    <label for="minimum_cluster_features">Minimum number of features in split clusters:</label>
-                    <input id="minimum_cluster_features" name="minimum_cluster_features" type="number" value="1" />
-                </li>
             </ul>
         </fieldset>
         <button type="submit">Split Cluster</button>
     </form>
-
-    {% endif %}
 </details>
 
 {% endblock %}

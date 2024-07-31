@@ -123,26 +123,29 @@
 
 
 {% macro render_search_result(doc, matches, snippets) -%}
+<div class="document">
+    {{doc}}
+    
+    <dl class="matching-features">
+        {% for field, values in matches.items() %}
+        <dt>{{ field }}</dt>
+        <dd>
+            {% for value in values %}
+            <span>{{ value }}</span>
+            {% endfor %}
+        </dd>
+        {% endfor %}
+    </dl>
+
 {% if snippets %}
-<details>
-    <summary>Snippets</summary>
     {% for snippet in snippets %}
     <p>
         {{ snippet }}
     </p>
     {% endfor %}
-</details>
 {% endif %}
-<dl class="matching-features">
-    {% for field, values in matches.items() %}
-    <dt>{{ field }}</dt>
-    <dd>
-        {% for value in values %}
-        <span>{{ value }}</span>
-        {% endfor %}
-    </dd>
-    {% endfor %}
-</dl>
-<div class="document">{{doc}}</div>
+</div>
+
+
 {%- endmacro %}
 
