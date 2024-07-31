@@ -27,10 +27,9 @@
 <details>
     <summary>Edit Selected Clusters</summary>
     <form method="post" id="cluster_edit" action="/index/{{ index_id }}/cluster/delete">
-        <input type="hidden" name="return_to" value="model">
-        <label for="target_clusters">Refine selection into how many clusters:</label>
-        <input id="target_clusters" name="target_clusters" type="number">
-        <button type="submit" formaction="/index/{{ index_id }}/cluster/refine" method="post">Refine Selected Clusters</button>
+        <label for="clusters">Refine selection into how many clusters:</label>
+        <input id="clusters" name="clusters" type="number">
+        <button type="submit" formaction="/index/{{ index_id }}/create_clusters" method="post">Refine Selected Clusters</button>
         <br>
         <button type="submit">Delete Clusters 🗑️</button>
         <button type="submit" formaction="/index/{{ index_id }}/cluster/merge" method="post">Merge Clusters</button>
@@ -39,26 +38,24 @@
 
 {% endblock %}
 
-<ul class="cluster-list">
-    {% if search_results %}
-    <li>
-        <div class="cluster-header">
-            Sample of {{ total_docs }} documents.
-        </div>
+<div class="switcher">
 
+    <div>
+        <h2>Sample of {{ total_docs }} documents.</h2>
         <ul class="doc-list">
         {% for doc, matches, snippets in search_results %}
             <li>{{ render_search_result(doc, matches, snippets) }}</li>
         {% endfor %}
         </ul>
+    </div>
 
-    </li>
-    {% endif %}
+    <ul class="cluster-list">
 
-    {% for cluster_id, cluster_score, features in clusters %}
-    <li>
-        {{ render_cluster(index_id, cluster_id, features, cluster_score, highlight_cluster_id, highlight_feature, context=context) }}
-    </li>
-    {% endfor %}
-</ul>
+        {% for cluster_id, cluster_score, features in clusters %}
+        <li>
+            {{ render_cluster(index_id, cluster_id, features, cluster_score, highlight_cluster_id, highlight_feature, context=context) }}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
 {% endblock %}

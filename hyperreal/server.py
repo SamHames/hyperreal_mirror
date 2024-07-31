@@ -614,28 +614,38 @@ class Index:
     @cherrypy.expose
     @cherrypy.tools.allow(methods=["POST"])
     @cherrypy.tools.ensure_list(include_fields=str)
+    @cherrypy.tools.ensure_list(from_clusters=int)
     def create_clusters(
         self,
         index_id,
         include_fields=None,
+        from_clusters=None,
         min_docs="10",
         clusters="64",
         iterations="50",
     ):
         """
-        Create a new set of clusters automatically from features from each field.
+        Create a new set of clusters from features in a given set of fields or clusters.
 
-        The created clusters will be added to the existing fields.
+        The created clusters will be added to the existing clusters.
 
         """
         idx = cherrypy.request.index
 
-        include_features = []
+        include_features = set()
 
-        if not include_fields:
+        if not include_fields and not from_clusters:
             raise cherrypy.HTTPError(
                 status=422,
-                message="At least one include_fields parameter must be provided.",
+                message="At least one include_fields or from_clusters parameter must be "
+                "provided.",
+            )
+
+        if include_fields and from_clusters:
+            raise cherrypy.HTTPError(
+                status=422,
+                message="Only one of include_fields or from_clusters can be specified, "
+                "not both.",
             )
 
         for field in include_fields:
@@ -646,9 +656,12 @@ class Index:
                     message=f"Specified field {field} not present on this index.",
                 )
 
-            include_features.extend(
+            include_features |= {
                 f[0] for f in idx.field_features(field, min_docs_count=int(min_docs))
-            )
+            }
+
+        for cluster_id in from_clusters:
+            include_features |= {f[0] for f in idx.cluster_features(cluster_id)}
 
         clustering = hyperreal.cluster_features(
             idx,
@@ -658,9 +671,12 @@ class Index:
         )
 
         for cluster in clustering.values():
-            idx.create_cluster_from_features(cluster)
+            last_cluster_id = idx.create_cluster_from_features(cluster)
 
-        raise cherrypy.HTTPRedirect(f"/index/{index_id}")
+        if from_clusters:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id}")
+        else:
+            raise cherrypy.HTTPRedirect(f"/index/{index_id}")
 
     @cherrypy.expose
     def delete_all(self, index_id):
