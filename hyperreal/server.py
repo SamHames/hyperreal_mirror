@@ -225,22 +225,34 @@ class Cluster:
         fields = idx.field_values.keys()
 
         # Render all the feature values to HTML
-        clusters = [
-            (
-                cluster_id,
-                cluster_score,
-                [
-                    ((field, idx.field_values[field].to_html(value)), score)
-                    for (field, value), score in features
-                ],
+        render_clusters = []
+        render_features = defaultdict(list)
+
+        for cluster_id, cluster_score, features in clusters:
+
+            render_clusters.append(
+                (
+                    cluster_id,
+                    cluster_score,
+                    [
+                        ((field, idx.field_values[field].to_html(value)), score)
+                        for (field, value), score in features
+                    ],
+                )
             )
-            for cluster_id, cluster_score, features in clusters
-        ]
+
+            for (field, value), score in features:
+                render_features[field].append(
+                    (
+                        idx.field_values[field].to_str(value),
+                        idx.field_values[field].to_html(value),
+                    )
+                )
 
         template = templates.get_template("cluster.html")
 
         return template.generate(
-            clusters=clusters,
+            clusters=render_clusters,
             total_docs=total_docs,
             search_results=list(zip(html_docs, matches, snippets)),
             # Design note: might be worth letting templates grab the request
@@ -254,6 +266,7 @@ class Cluster:
             prev_cluster_id=prev_cluster_id,
             next_cluster_id=next_cluster_id,
             features=clusters[0][-1],
+            render_features=render_features,
             cluster_id=cluster_id,
         )
 
@@ -651,9 +664,32 @@ class Index:
         if return_to:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={return_to}")
         elif from_clusters:
-            raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id}")
+            raise cherrypy.HTTPRedirect(
+                f"/index/{index_id}/?cluster_id={last_cluster_id}"
+            )
         else:
             raise cherrypy.HTTPRedirect(f"/index/{index_id}")
+
+    @cherrypy.expose
+    @cherrypy.tools.allow(methods=["POST"])
+    def create_cluster_from_features(self, index_id, **features):
+        """
+        Create a new cluster from the given set of features.
+
+        Features are specified as field:value arguments.
+
+        """
+        idx = cherrypy.request.index
+
+        cluster_features = set()
+
+        for field, values in features.items():
+            for v in values:
+                cluster_features.add((field, idx.field_values[field].from_str(v)))
+
+        cluster_id = idx.create_cluster_from_features(cluster_features)
+
+        raise cherrypy.HTTPRedirect(f"/index/{index_id}/?cluster_id={cluster_id}")
 
     @cherrypy.expose
     def delete_all(self, index_id):

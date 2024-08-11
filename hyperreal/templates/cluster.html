@@ -25,16 +25,20 @@
         </fieldset>
     </form>
 
-    {% if visible_features %}
-    <form method="post" action="/index/{{ index_id }}/cluster/create">
+    <form method="post" action="/index/{{ index_id }}/create_cluster_from_features">
         <fieldset>
-            {% for feature_id in visible_features %}
-            <input type="hidden" name="feature_id" value={{ feature_id }}>
+            {% for field, values in render_features.items() %}
+                <label for="{{ field }}-features">Select features from field: {{ field }}</label>
+                <select name="{{ field }}" id="{{ field }}-features" multiple>
+                    {% for str_value, html_value in values %}
+                    <option value="{{ str_value }}">{{ html_value }}</option>
+                    {% endfor %}
+                </select>
             {% endfor %}
-            <button type="submit">Create New Cluster From All Visible Features</button>
+
+            <button type="submit">Create New Cluster From Selected</button>
         </fieldset>
     </form>
-    {% endif %}
 
     <form method="post" action="/index/{{ index_id }}/create_clusters">
         <fieldset>
