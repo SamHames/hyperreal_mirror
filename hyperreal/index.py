@@ -835,20 +835,6 @@ class Index:
 
         return cluster_id
 
-    @atomic(writes=True)
-    def pin_clusters(self, cluster_ids: Sequence[int], pinned: bool = True):
-        """
-        Pin (or unpin) the given clusters.
-
-        A pinned cluster will not be modified by the automated clustering
-        routine. This can be used to preserve useful clusters and allow
-        remaining unpinned clusters to be refined further.
-        """
-        self.db.executemany(
-            "update cluster set pinned = ? where cluster_id = ?",
-            ((pinned, c) for c in cluster_ids),
-        )
-
     @property
     def cluster_ids(self):
         """The ids of all defined feature-clusters."""
