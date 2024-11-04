@@ -8,6 +8,12 @@ Produces three sets of CSV files per query:
 - The top 100 most similar features across all features, regardless of cluster.
 - The time distribution of that query (by parliament)
 
+
+Additionally for incorporating diachronic components of analysis:
+
+- Look at the set of most similar queries to the clusters, and also annotate with the
+  time series of the number of speeches per parliament containing the intersection.
+
 """
 
 import concurrent.futures as cf
@@ -23,6 +29,8 @@ from pyroaring import BitMap
 db = "tidy_hansard.db"
 db_index = "tidy_hansard_index.db"
 
+# Queries can only be used for the text column, and are a simple boolean OR (matching
+# any of the words if present).
 queries = [
     ["unparliamentary"],
     ["hypocrite", "hypocrisy", "hypocritical", "hypocrites"],
@@ -44,6 +52,20 @@ if __name__ == "__main__":
             for w in expanded_query:
                 results |= idx[w]
 
+            # Timeline of query overall, by parliament
+            values, totals, q_intersections = idx.intersect_queries_with_field(
+                {"q": results}, "parl_no"
+            )
+
+            query_timeline = q_intersections["q"]
+
+            with open(f"timeline_{query[0]}.csv", "w") as f:
+                writer = csv.writer(f)
+                writer.writerow(["parl_no", "total_speeches", "matching_speeches"])
+
+                for v, t, i in zip(values, totals, query_timeline):
+                    writer.writerow([v, t, i])
+
             all_cluster_similarities = list(idx.pivot_clusters_by_query(results))
 
             with open(f"similarities_by_cluster_{query[0]}.csv", "w") as f:
@@ -57,9 +79,38 @@ if __name__ == "__main__":
                     ]
                 )
 
-                for cluster_id, cluster_sim, features in all_cluster_similarities[:20]:
+                for cluster_id, cluster_sim, features in all_cluster_similarities[:50]:
                     for (_, feature), similarity in features:
                         writer.writerow([feature, similarity, cluster_id, cluster_sim])
+
+            with open(f"similar_clusters_for_annotation_{query[0]}.csv", "w") as f:
+                writer = csv.writer(f)
+                writer.writerow(["cluster_id", "most_similar_features", *range(1, 48)])
+
+                for cluster_id, cluster_sim, features in all_cluster_similarities[:50]:
+                    top_features = [f[0] for f in features]
+                    cluster_repr = ", ".join(f[1] for f in top_features)
+
+                    # Evaluate the OR of the top 20 most similar words and the
+                    # intersection with the overall query to give a sense of how
+                    # prevalent the words occur in the same speeches.
+                    inter = BitMap()
+                    for f in top_features:
+                        inter |= idx[f]
+
+                    inter &= results
+
+                    # Intersection with time by parliament
+                    values, totals, inter_results = idx.intersect_queries_with_field(
+                        {"q": inter}, "parl_no"
+                    )
+
+                    normalised_by_q = [
+                        i / total
+                        for i, total in zip(inter_results["q"], query_timeline)
+                    ]
+
+                    writer.writerow((cluster_id, cluster_repr, *normalised_by_q))
 
             k = 100
             top_k = [(0, ("", ""), -1, 0)] * k
@@ -84,15 +135,3 @@ if __name__ == "__main__":
                     top_k, reverse=True
                 ):
                     writer.writerow([feature, similarity, cluster_id, cluster_sim])
-
-            # Timeline, by parliament
-            values, totals, intersections = idx.intersect_queries_with_field(
-                {"q": results}, "parl_no"
-            )
-
-            with open(f"timeline_{query[0]}.csv", "w") as f:
-                writer = csv.writer(f)
-                writer.writerow(["parl_no", "total_speeches", "matching_speeches"])
-
-                for v, t, i in zip(values, totals, intersections["q"]):
-                    writer.writerow([v, t, i])
