@@ -60,7 +60,7 @@ if __name__ == "__main__":
             query_timeline = q_intersections["q"]
 
             with open(f"timeline_{query[0]}.csv", "w") as f:
-                writer = csv.writer(f)
+                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
                 writer.writerow(["parl_no", "total_speeches", "matching_speeches"])
 
                 for v, t, i in zip(values, totals, query_timeline):
@@ -69,7 +69,7 @@ if __name__ == "__main__":
             all_cluster_similarities = list(idx.pivot_clusters_by_query(results))
 
             with open(f"similarities_by_cluster_{query[0]}.csv", "w") as f:
-                writer = csv.writer(f)
+                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
                 writer.writerow(
                     [
                         "word",
@@ -84,7 +84,7 @@ if __name__ == "__main__":
                         writer.writerow([feature, similarity, cluster_id, cluster_sim])
 
             with open(f"similar_clusters_for_annotation_{query[0]}.csv", "w") as f:
-                writer = csv.writer(f)
+                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
                 writer.writerow(["cluster_id", "most_similar_features", *range(1, 48)])
 
                 for cluster_id, cluster_sim, features in all_cluster_similarities[:50]:
@@ -112,6 +112,61 @@ if __name__ == "__main__":
 
                     writer.writerow((cluster_id, cluster_repr, *normalised_by_q))
 
+            # Create concordances for the most similar words, in the places where the
+            # word is used in a speech with unparliamentary.
+            with open(f"similar_feature_concordances_{query[0]}.csv", "w") as f:
+                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+                writer.writerow(
+                    ["feature", "date", "house", "title", "url", "concordance"]
+                )
+
+                converter = idx.field_values["text"].segment_to_str
+
+                for cluster_id, cluster_sim, features in all_cluster_similarities[:50]:
+                    top_features = [f[0] for f in features]
+
+                    for f in top_features:
+
+                        to_match = {f[0]: [f[1]]}
+
+                        # Document matches both the driving query and the similar word
+                        # Sample at most 10 documents for each pair.
+                        match_both = idx.sample_bitmap(idx[f] & results, 10)
+
+                        # Construct the snippets matching the feature
+                        for _, _, doc in idx.docs(match_both):
+
+                            doc_features = idx.corpus.doc_to_features(doc)
+
+                            matches = idx.match_doc_features(doc_features, to_match)
+                            positions = sorted(
+                                p
+                                for positions in matches["text"].values()
+                                for p in positions
+                            )
+
+                            window_size = 12
+                            concordances = [
+                                converter(
+                                    doc_features["text"],
+                                    max(p - window_size, 0),
+                                    p + window_size + 1,
+                                    highlight=to_match,
+                                )
+                                for p in positions
+                            ]
+
+                            other_fields = [
+                                f[1],
+                                doc["date"],
+                                doc["house"],
+                                doc["title"],
+                                doc["url"],
+                            ]
+
+                            for line in concordances:
+                                writer.writerow([*other_fields, line])
+
             k = 100
             top_k = [(0, ("", ""), -1, 0)] * k
             top_k_similarity = list(idx.pivot_clusters_by_query(results, top_k=k))
@@ -121,7 +176,7 @@ if __name__ == "__main__":
                     heapq.heappushpop(top_k, (similarity, f, cluster_id, cluster_sim))
 
             with open(f"similarities_top_{k}_{query[0]}.csv", "w") as f:
-                writer = csv.writer(f)
+                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
                 writer.writerow(
                     [
                         "word",
