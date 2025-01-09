@@ -58,46 +58,61 @@ class Corpus(Protocol):
 
     handler_registry: set[value_handlers.ValueHandler] = default_handlers
 
-    @property
-    def schema(self) -> dict[Any, value_handlers.ValueHandler]:
-        """
-        The schema maps the types of values emitted by `indexable_docs` to a handler.
+    def _create_type_maps(self) -> None:
+        """Create a more usable mapping between types/value names and their handlers."""
 
-        """
-        if not hasattr(self, "_schema"):
+        type_schema = {}
+        named_handlers = {}
 
-            schema = {}
+        for handler in self.handler_registry:
 
-            named_handlers = {}
+            name = handler.value_name
 
-            for handler in self.handler_registry:
+            if name in named_handlers:
+                raise SchemaValidationError(
+                    f"Handler {handler} has the same `value_name` {name} as "
+                    f"handler {named_handlers[name]}. Names must be unique for all "
+                    "handlers defined on a corpus."
+                )
+            else:
+                named_handlers[name] = handler
 
-                name = handler.value_name
+            for supported_type in handler.supported_types:
 
-                if name in named_handlers:
+                if supported_type in type_schema:
                     raise SchemaValidationError(
-                        f"Handler {handler} has the same `value_name` {name} as "
-                        f"handler {named_handlers[name]}. Names must be unique for all "
-                        "handlers defined on a corpus."
+                        f"Type {supported_type} can be handled by both {handler} "
+                        f"and {type_schema[supported_type]}. A valid mapping requires "
+                        "that there is only one handler for a given type."
                     )
+
                 else:
-                    named_handlers[name] = handler
+                    type_schema[supported_type] = handler
 
-                for supported_type in handler.supported_types:
+        self._type_map = type_schema
+        self._name_map = named_handlers
 
-                    if supported_type in schema:
-                        raise SchemaValidationError(
-                            f"Type {supported_type} can be handled by both {handler} "
-                            f"and {schema[supported_type]}. A valid schema requires "
-                            "that there is only one handler for a given type."
-                        )
+    @property
+    def type_handlers(self) -> dict[Any, value_handlers.ValueHandler]:
+        """
+        Map of types of values emitted by `indexable_docs` to a handler.
 
-                    else:
-                        schema[supported_type] = handler
+        """
+        if not hasattr(self, "_type_map"):
+            self._create_type_maps()
 
-            self._schema = schema
+        return self._type_map
 
-        return self._schema
+    @property
+    def name_handlers(self) -> dict[Any, value_handlers.ValueHandler]:
+        """
+        Map of value_names to handlers.
+
+        """
+        if not hasattr(self, "_name_map"):
+            self._create_type_maps()
+
+        return self._name_map
 
     @abc.abstractmethod
     def all_doc_keys(self) -> Iterable[DocKey]:

@@ -25,29 +25,12 @@ from pyroaring import BitMap, BitMap64
 
 from . import corpus, db_utilities
 
-
-def _batch(sequence, batch_size):
-    """A generator for batches up to the given size."""
-
-    current_batch = []
-    current_size = 0
-
-    for item in sequence:
-        current_batch.append(item)
-        current_size += 1
-
-        if current_size == batch_size:
-            yield current_batch
-            current_batch = []
-            current_size = 0
-
-    if current_size:
-        yield current_batch
+__all__ = ["build_index"]
 
 
 def build_index(
-    corpus: corpus.Corpus,
     db_path,
+    corpus: corpus.Corpus,
     pool: cf.Executor,
     doc_batch_size: int = 1000,
     max_workers: Optional[int] = None,
@@ -89,7 +72,7 @@ def build_index(
 
             segment_in_progress.add(
                 pool.submit(
-                    make_segment,
+                    _make_segment,
                     corpus,
                     segment_path,
                     current_doc_id,
@@ -103,9 +86,28 @@ def build_index(
 
         for segment in cf.as_completed(segment_in_progress):
             start_doc_id, merge_from = segment.result()
-            merge_into(start_doc_id, merge_from, merge_segments)
+            _merge_into(start_doc_id, merge_from, merge_segments)
 
-        finalise_into(merge_segments, db_path)
+        _finalise_into(merge_segments, db_path)
+
+
+def _batch(sequence, batch_size):
+    """A generator for batches up to the given size."""
+
+    current_batch = []
+    current_size = 0
+
+    for item in sequence:
+        current_batch.append(item)
+        current_size += 1
+
+        if current_size == batch_size:
+            yield current_batch
+            current_batch = []
+            current_size = 0
+
+    if current_size:
+        yield current_batch
 
 
 def _init_segment(db_path):
@@ -134,7 +136,7 @@ def _init_segment(db_path):
             field,
             first_doc_id,
             max_cardinality,
-            value_handler,
+            value_handler_name,
             doc_count,
             doc_ids roaring_bitmap,
             position_count,
@@ -149,7 +151,7 @@ def _init_segment(db_path):
     return db
 
 
-def make_segment(
+def _make_segment(
     corpus: corpus.Corpus,
     segment_path,
     start_doc_id: int,
@@ -220,20 +222,20 @@ def make_segment(
 
 
 @dc.dataclass
-class DocsPositions:
+class _DocsPositions:
     docs: BitMap = dc.field(default_factory=BitMap)
     positions: BitMap64 = dc.field(default_factory=BitMap64)
 
 
 @dc.dataclass
-class FieldBatchHeader:
+class _FieldBatchHeader:
     """Records all the information about this field in the batch."""
 
     docs: BitMap = dc.field(default_factory=BitMap)
     docs_w_positions: BitMap = dc.field(default_factory=BitMap)
     doc_position_ranges: BitMap64 = dc.field(default_factory=BitMap64)
     max_cardinality: int = 0
-    value_handler: str = ""
+    value_handler_name: str = ""
 
 
 def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
@@ -248,14 +250,14 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
     # One bitmap for document occurrence, the other other for recording
     # positional information.
     batch_segment = collections.defaultdict(
-        lambda: collections.defaultdict(DocsPositions)
+        lambda: collections.defaultdict(_DocsPositions)
     )
     # Mapping of fields -> doc_ids, doc_ids w position starts, position starts for
     # each document. Note this requires recording three pieces of information:
     # Whether the field was present on the doc, regardless of content, and whether
     # the doc has any positional information. The latter two will be empty for most
     # fields that are simple attributes or sets.
-    batch_segment_header = collections.defaultdict(FieldBatchHeader)
+    batch_segment_header = collections.defaultdict(_FieldBatchHeader)
 
     doc_id = start_doc_id
 
@@ -344,7 +346,7 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
         # Establish the order of values, validating the constraint that there is
         # only one ValueHandler per field.
         value_types = {type(v) for v in field_values}
-        handlers = {corpus.schema[v] for v in value_types}
+        handlers = {corpus.type_handlers[v] for v in value_types}
 
         if len(handlers) > 1:
             # TODO: Write this error message more proper.
@@ -355,7 +357,7 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
         handler = handlers.pop()
         transform = handler.to_index
 
-        batch_segment_header[field].value_handler = handler.value_name
+        batch_segment_header[field].value_handler_name = handler.value_name
 
         value_order = sorted((transform(value), value) for value in field_values)
 
@@ -422,7 +424,7 @@ def _stage_doc_batch(
                 field,
                 first_doc_id,
                 header_row.max_cardinality,
-                header_row.value_handler,
+                header_row.value_handler_name,
                 len(header_row.docs),
                 header_row.docs,
                 n_positions,
@@ -432,7 +434,7 @@ def _stage_doc_batch(
         )
 
 
-def merge_into(first_doc_id, from_segment, to_segment):
+def _merge_into(first_doc_id, from_segment, to_segment):
     """
     Merge the contents of this index into a single segment on `other_index`.
 
@@ -486,18 +488,21 @@ def merge_into(first_doc_id, from_segment, to_segment):
                         field,
                         ?,
                         max(max_cardinality),
-                        value_handler,
+                        value_handler_name,
                         sum(doc_count),
                         roaring_union(doc_ids),
                         sum(position_count),
                         roaring_union(position_doc_ids),
                         roaring_union64(position_doc_starts)
                     from segment_header
-                    -- Note that group by value_handler is redundant if this is well
+                    -- Note that group by value_handler_name is redundant if this is well
                     -- formed, but will generate a primary key error if the invariant
-                    -- of only one value_handler per field is violated.
+                    -- of only one value_handler_name per field is violated.
                     -- TODO: might be a better way to do this?
-                    group by field, value_handler
+                    -- TODO: check performance is acceptable for large indexes, it might
+                    -- be preferable to not have a primary key on this table and create
+                    -- an index after.
+                    group by field, value_handler_name
                     """,
                 [first_doc_id],
             )
@@ -509,7 +514,7 @@ def merge_into(first_doc_id, from_segment, to_segment):
             raise
 
 
-def finalise_into(from_segment, to_final):
+def _finalise_into(from_segment, to_final):
     """
     Merge everything into the final destination index database.
 
@@ -528,31 +533,10 @@ def finalise_into(from_segment, to_final):
             db.execute("begin")
 
             # new doc_keys
-            db.execute(
-                """
-                CREATE table if not exists final.doc_key (
-                    doc_id integer primary key,
-                    doc_key unique
-                )
-                """
-            )
             db.execute("DELETE from final.doc_key")
             db.execute("INSERT into final.doc_key select * from main.doc_key")
 
             # The new inverted index
-            db.execute(
-                """
-                CREATE table if not exists final.inverted_index(
-                    field text references field_summary,
-                    value not null,
-                    doc_count,
-                    doc_ids roaring_bitmap,
-                    position_count,
-                    positions roaring_bitmap64,
-                    primary key (field, value)
-                )
-                """
-            )
             db.execute("DELETE from final.inverted_index")
 
             # Work out how much to shift each field/first_doc_id combination.
@@ -603,20 +587,6 @@ def finalise_into(from_segment, to_final):
                 """
             )
 
-            db.execute(
-                """
-                CREATE table if not exists final.field_summary(
-                    field text primary key,
-                    max_cardinality,
-                    value_handler,
-                    doc_count,
-                    doc_ids roaring_bitmap,
-                    position_count,
-                    position_doc_ids roaring_bitmap,
-                    position_doc_starts roaring_bitmap64
-                )
-                """
-            )
             db.execute("DELETE from final.field_summary")
 
             db.execute(
@@ -625,7 +595,7 @@ def finalise_into(from_segment, to_final):
                     select
                         field, 
                         max(max_cardinality),
-                        value_handler,
+                        value_handler_name,
                         sum(doc_count),
                         roaring_union(doc_ids),
                         sum(position_count),
@@ -633,7 +603,7 @@ def finalise_into(from_segment, to_final):
                         roaring_shift_union64(position_doc_starts, cumulative_shift)
                     from segment_header
                     inner join field_shift using(field, first_doc_id)
-                    group by field, value_handler
+                    group by field, value_handler_name
                 """
             )
 
