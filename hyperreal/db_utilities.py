@@ -131,11 +131,9 @@ class RoaringShiftUnion64:
     def step(self, bitmap, shift):
         # Unfortunately we need to do this the long way - BitMap's support a fast shift
         # operator, but that isn't implemented for BitMap64's yet.
-        self.bitmap.update(
-            shifted
-            for i in pyroaring.BitMap64.deserialize(bitmap)
-            if (shifted := i + shift) > 0
-        )
+        positions: pyroaring.BitMap64 = pyroaring.BitMap64.deserialize(bitmap)
+        self.bitmap.update(shifted for i in positions if (shifted := i + shift) > 0)
+
         # TODO: possibly only create bitmap64's if necessary?
 
     def finalize(self):

@@ -19,7 +19,7 @@ import dataclasses as dc
 import math
 import os
 import tempfile
-from typing import Optional, Iterable
+from typing import Iterable, Optional
 
 from pyroaring import BitMap, BitMap64
 

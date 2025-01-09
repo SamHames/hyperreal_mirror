@@ -27,12 +27,11 @@ Example:
 """
 
 import abc
-from typing import Protocol, Hashable, Iterable, Any, TypeVar
+from typing import Any, Hashable, Iterable, Optional, TypeVar
 
 from tinyhtml import h
 
 from . import value_handlers
-
 
 DocKey = TypeVar("DocKey")
 Doc = TypeVar("Doc")
@@ -54,7 +53,7 @@ class SchemaValidationError(Exception):
     """Used for problems with creating a schema of value_handlers."""
 
 
-class Corpus(Protocol):
+class Corpus:
 
     handler_registry: set[value_handlers.ValueHandler] = default_handlers
 
@@ -153,6 +152,18 @@ class Corpus(Protocol):
         """
         for key, str_doc in self.str_docs(doc_keys):
             yield key, h("p")(str_doc).render()
+
+    def html_indexable_docs(
+        self, doc_keys: Iterable[DocKey], highlight_spec: Optional = None
+    ) -> Iterable[tuple[DocKey, str]]:
+        """
+        A HTML formating of a doc as indexed.
+
+        Highlighting via specific features to match? Or via specific positions to pull
+        out of the match?
+
+        """
+        pass
 
     def str_docs(self, doc_keys: Iterable[DocKey]) -> Iterable[tuple[DocKey, str]]:
         """
