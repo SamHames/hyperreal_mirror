@@ -53,6 +53,7 @@ class SchemaValidationError(Exception):
     """Used for problems with creating a schema of value_handlers."""
 
 
+# TODO: should I call this HyperrealCorpus, to go along with HyperrealIndex?
 class Corpus:
 
     handler_registry: set[value_handlers.ValueHandler] = default_handlers

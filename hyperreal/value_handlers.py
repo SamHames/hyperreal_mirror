@@ -25,8 +25,6 @@ from collections.abc import Hashable, Sequence
 from datetime import date, datetime
 from typing import Optional, Protocol
 
-import tinyhtml
-
 
 class ValueHandler(Protocol):
     """
@@ -133,6 +131,8 @@ class DateHandler(ValueHandler):
         return value.isoformat()
 
     def to_html(self, value):
+        # TODO: should the output be a string that is treated as raw HTML always, or
+        # should a str be escaped and only known HTML renderables be included as is?
         return f"<time>{value.isoformat()}</time>"
 
     def from_str(self, value):
