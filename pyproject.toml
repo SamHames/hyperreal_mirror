@@ -21,7 +21,7 @@ dependencies = [
 version="0.7.0.dev1"
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "tox", "requests", "pylint", "isort"]
+dev = ["pytest", "black", "tox", "requests", "pylint", "isort", "hypothesis"]
 
 [project.urls]
 Repository = "https://hyperreal.app"

@@ -78,7 +78,13 @@ class StringHandler(ValueHandler):
 
 
 class IntegerHandler(ValueHandler):
-    """Handles integers and only things convertible to integers via `int`"""
+    """
+    Handles integers and things convertible to integers.
+
+    Values between -2**63 and 2**63 - 1 are supported - larger values cannot be inserted
+    into an SQLite database as an integer.
+
+    """
 
     stored_sorted = True
     value_name = "int"
