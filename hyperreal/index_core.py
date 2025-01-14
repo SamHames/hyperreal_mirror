@@ -9,17 +9,22 @@ Interactions between the schema and this?
 
 How does a query work?
 
+Extending the query interface.
+
 Documentation page: querying.
 
 """
 
 import collections
 import concurrent.futures as cf
+import dataclasses as dc
+from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Optional
 
-from pyroaring import BitMap, BitMap64
+from pyroaring import AbstractBitMap, BitMap, BitMap64
 
 from . import corpus, db_utilities, index_builder, value_handlers, index_plugin
+from .feature_cluster import FeatureCluster
 
 
 core_migration = index_plugin.Migration(
@@ -37,6 +42,7 @@ core_migration = index_plugin.Migration(
             field text primary key,
             max_cardinality,
             value_handler_name,
+            stored_sorted,
             doc_count,
             doc_ids roaring_bitmap,
             position_count,
@@ -56,10 +62,14 @@ core_migration = index_plugin.Migration(
         )
         """,
     ],
+    description="Initialise the core tables for holding the index of the corpus.",
 )
-core_schema = index_plugin.IndexPlugin(
-    "hyperreal_core", "1", migrations=[core_migration]
-)
+
+
+class CoreSchema(index_plugin.IndexPlugin):
+    plugin_name = "hyperreal_core"
+    current_version = "1"
+    migrations = [core_migration]
 
 
 class HyperrealIndex:
@@ -69,7 +79,9 @@ class HyperrealIndex:
         index_path,
         corpus: corpus.Corpus,
         pool: Optional[cf.Executor],
-        plugins: Optional[list[index_plugin.IndexPlugin]] = None,
+        # TODO: document this -> can take either a class that is initialised with the
+        # index, or a Callable that returns an IndexPlugin instance.
+        plugins=(FeatureCluster,),
     ):
         """Plugins are initialised once at startup."""
 
@@ -77,7 +89,11 @@ class HyperrealIndex:
         self.corpus = corpus
         self.pool = pool
         self.db = db_utilities.connect_sqlite(index_path)
-        self.plugins = plugins or []
+        self._provided_plugins = plugins or []
+        self.p = SimpleNamespace()
+
+        # TODO: validate all the details of the plugins are consistent - unique
+        # plugin_names etc.
 
         # This is the minimum necessary to bootstrap everything else - we manage the
         # core db schema state just like any other plugins state.
@@ -91,28 +107,42 @@ class HyperrealIndex:
         )
         self.db.execute("pragma journal_mode=WAL")
 
-        self.db.execute("begin")
-        # TODO: foreign keys or no? Probably no?
+        try:
+            self.db.execute("begin")
+            self._ensure_migrated(CoreSchema(self))
+            self._init_plugins()
+            self.db.execute("commit")
+        except Exception:
+            self.db.execute("rollback")
+            raise
 
-        self._ensure_migrated(core_schema)
-        self._init_plugins()
-        self.db.execute("commit")
+    def __enter__(self):
+        self.db.execute("begin")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            # Rollback on exception, otherwise commit.
+            self.db.execute("rollback")
+        else:
+            self.db.execute("commit")
+
+    def close(self):
+        self.db.close()
 
     def _init_plugins(self):
         """Initialise plugins, ensuring all migrations have been run."""
-        for plugin in self.plugins:
-            # Check version against the index.
-            # run migrations if necessary.
+
+        for PluginClass in self._provided_plugins:
+
+            # Initialise the plugin class with this index.
+            plugin = PluginClass(self)
+
+            # Check version against the index and run migrations if necessary.
             self._ensure_migrated(plugin)
 
-    def _apply_migration(self, migration: index_plugin.Migration):
-
-        for i, step in enumerate(migration.steps):
-            # TODO: log and raise meaningful error
-            if isinstance(step, str):
-                self.db.execute(step)
-            elif callable(step):
-                step(self)
+            # Finally make the plugin available against the appropriate namespace in the
+            # index.
+            setattr(self.p, plugin.plugin_name, plugin)
 
     def _ensure_migrated(self, plugin: index_plugin.IndexPlugin):
 
@@ -127,6 +157,15 @@ class HyperrealIndex:
             # TODO: error message when index version not in possible migrations
 
         self._set_plugin_version(plugin.plugin_name, index_version)
+
+    def _apply_migration(self, migration: index_plugin.Migration):
+
+        for i, step in enumerate(migration.steps):
+            # TODO: log and raise meaningful error
+            if isinstance(step, str):
+                self.db.execute(step)
+            elif callable(step):
+                step(self)
 
     def get_plugin_version(self, plugin_name: str):
         version = list(
@@ -169,6 +208,9 @@ class HyperrealIndex:
             )
 
             _field_handlers = {}
+
+            # TODO, process cardinalities to determine whether they were range encoded
+            # or not.
             for field, name, cardinality, position_count in field_details:
 
                 handler = self.corpus.name_handlers[name]
@@ -190,9 +232,10 @@ class HyperrealIndex:
         """
         Used to handle pickling the index object for use of an index in a process pool.
 
-        Note that the process pool is not available on a reconstituted index.
+        Note that the process pool and plugins are not available on the pickled object?
 
         """
+        # TODO: think about whether plugins should be available on a pickled index.
         self.__init__(args[0], args[1], None)
 
     def rebuild(self, doc_batch_size: int = 1000, max_workers: Optional[int] = None):
@@ -232,6 +275,13 @@ class HyperrealIndex:
         
         """
 
+    def _iter_field_values(self, *values):
+        """Iterate through docs matching each expression in field values."""
+
+        for expression in values:
+            # validate the field
+            field = expression.field
+
     def _iter_docs_for_features(self, features):
         """"""
         # Feature specification: tuple (field, values)
@@ -250,72 +300,18 @@ class HyperrealIndex:
         """Evaluate an AND query"""
 
 
-class Query:
-    # TODO: make this a fragment, and make sure it prints nicely.
-    def evaluate(self, idx: HyperrealIndex):
+@dc.dataclass
+class FieldValues:
+    # Clause or Expression orr FeatureGroup or FieldValuesClause?
+    # Empty value list matches all docs in field?
+    # Empty field matches all docs?
+    """
+    The basic building block for querying and retrieving documents by their contents.
+
+    """
+
+    field: str
+    values: dc.field(default_factory=list)
+
+    def to_html(self, idx: HyperrealIndex):
         pass
-
-    def render_into(self, idx: HyperrealIndex):
-        pass
-
-
-class Any(Query):
-
-    def __init__(self, *args):
-        self.args = args
-
-        # TODO - validate input arguments in general
-
-    def evaluate(self, idx: HyperrealIndex):
-
-        # TODO - validate input arguments for the index? Or does that get pushed down
-        # to the index itself?
-
-        result = BitMap()
-
-        for arg in self.args:
-
-            if isinstance(arg, Query):
-                result |= arg.evaluate()
-
-            elif isinstance(arg, tuple):
-                result |= idx.or_query(arg)
-
-        return result
-
-
-class All(Query):
-
-    def __init__(self, *args):
-        self.args = args
-
-    def evaluate(self, idx: HyperrealIndex):
-
-        if not self.args:
-            return BitMap()
-
-        # Initialise with the first arg
-        if isinstance(self.args[0], Query):
-            result = self.args[0].evaluate(idx)
-
-        elif isinstance(self.args[0], tuple):
-            result = idx.and_query(self.args[0])
-
-        for arg in self.args[1:]:
-
-            if isinstance(arg, Query):
-                result &= arg.evaluate(idx)
-
-            elif isinstance(arg, tuple):
-                result &= idx.and_query(arg)
-
-        return result
-
-
-class Not(Query):
-    def __init__(self, potentially_keep, remove):
-        self.keep = potentially_keep
-        self.remove = remove
-
-    def evaluate(self, idx: HyperrealIndex):
-        return self.keep.evaluate(idx) - self.remove.evaluate(idx)

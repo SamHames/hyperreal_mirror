@@ -46,7 +46,13 @@ def fixture_db():
 @pytest.mark.parametrize("handler, strategy", handlers_strategies)
 @given(strategies.data())
 def test_process_request(db, handler, strategy, data):
-    """Test that the value roundtrips through SQLite correctly."""
+    """
+    Test that the value roundtrips through SQLite correctly.
+
+    This is necessary to ensure that things like type affinities and SQLite based limits
+    that might be different from Python limits are documented correctly.
+
+    """
     example = data.draw(strategy)
 
     try:

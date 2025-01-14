@@ -12,25 +12,28 @@ core index schema itself.
 - 'stateless' plugins
 - 
 
-(general link to an extension)
+(general link to an extension overview)
+
+Example usage of creating a plugin - iterate from a stateless plugin to something
+maintaining some state (possibly show an example of a regular expression based query
+engine?).
 
 """
 
 import collections
+import dataclasses as dc
+import keyword
 from typing import Optional, Callable
 
 
+@dc.dataclass
 class Migration:
+    from_version: Optional[str]
+    to_version: str
+    description: Optional[str]
+    steps: list[str | Callable] = dc.field(default_factory=list)
 
-    def __init__(
-        self,
-        from_version: Optional[str],
-        to_version: str,
-        steps: list[str | Callable],
-    ):
-        self.from_version = from_version
-        self.to_version = to_version
-        self.steps = steps
+    def __post_init__(self):
         self.validate_steps()
 
     def validate_steps(self):
@@ -39,7 +42,7 @@ class Migration:
         ]
         if invalid_steps:
             raise ValueError(
-                "Steps must be either strs for SQL queries, or callable functions. "
+                "Steps must be either strings for SQL queries, or callables. "
                 f"These steps are invalid: {invalid_steps}"
             )
 
@@ -47,21 +50,34 @@ class Migration:
 class IndexPlugin:
 
     plugin_name: str
-    migrations: list[Migration]
-    current_version: str
+    current_version: Optional[str] = (None,)
+    migrations: Optional[list[Migration]] = (None,)
 
-    def __init__(
-        self,
-        plugin_name: str,
-        current_version: Optional[str] = None,
-        migrations: Optional[list[Migration]] = None,
-    ):
+    def __init__(self, idx: "HyperrealIndex"):
 
-        self.plugin_name = plugin_name
-        self.current_version = current_version
-        self.migrations = migrations or []
+        if not self.plugin_name.isidentifier():
+            raise ValueError(
+                f"plugin_name must be a valid python identifier, got {plugin_name=}"
+            )
+        if keyword.iskeyword(self.plugin_name):
+            raise ValueError(
+                f"plugin_name must not be a Python keyword, got {plugin_name=}"
+            )
 
         self.setup_validate_migrations()
+
+        # TODO: work out the appropriate way to fix the typing
+        self.idx = idx
+
+    def post_index_rebuild(self) -> None:
+        """
+        Optionally override to specify actions to run after indexing is completed.
+
+        This is designed to enable things like recalculating saved results after a
+        corpus has changed, such as by adding new documents.
+
+        """
+        return
 
     def setup_validate_migrations(self):
         """

@@ -137,6 +137,7 @@ def _init_segment(db_path):
             first_doc_id,
             max_cardinality,
             value_handler_name,
+            stored_sorted,
             doc_count,
             doc_ids roaring_bitmap,
             position_count,
@@ -236,6 +237,7 @@ class _FieldBatchHeader:
     doc_position_ranges: BitMap64 = dc.field(default_factory=BitMap64)
     max_cardinality: int = 0
     value_handler_name: str = ""
+    stored_sorted: bool = False
 
 
 def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
@@ -358,6 +360,7 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
         transform = handler.to_index
 
         batch_segment_header[field].value_handler_name = handler.value_name
+        batch_segment_header[field].stored_sorted = handler.stored_sorted
 
         value_order = sorted((transform(value), value) for value in field_values)
 
@@ -419,12 +422,13 @@ def _stage_doc_batch(
             n_positions = header_row.doc_position_ranges[-1]
 
         db.execute(
-            "INSERT into segment_header values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT into segment_header values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 field,
                 first_doc_id,
                 header_row.max_cardinality,
                 header_row.value_handler_name,
+                header_row.stored_sorted,
                 len(header_row.docs),
                 header_row.docs,
                 n_positions,
@@ -489,6 +493,7 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                         ?,
                         max(max_cardinality),
                         value_handler_name,
+                        stored_sorted,
                         sum(doc_count),
                         roaring_union(doc_ids),
                         sum(position_count),
@@ -518,15 +523,15 @@ def _finalise_into(from_segment, to_final):
     """
     Merge everything into the final destination index database.
 
-    This step needs to do some specific processing, by shifting all of the positional
-    index information as we go.
+    This step needs to do some specific additional processing in order to:
+
+    - shifting all the positional information from non-contiguous sections
+    - processing field values that are amenable to range encoding
 
     """
 
     db = _init_segment(from_segment)
 
-    # TODO - what kind of validation of the database are we doing here?
-    # TODO - how do we manage the schema of the main DB?
     with contextlib.closing(db):
         try:
             db.execute("attach ? as 'final'", [str(to_final)])
@@ -536,10 +541,8 @@ def _finalise_into(from_segment, to_final):
             db.execute("DELETE from final.doc_key")
             db.execute("INSERT into final.doc_key select * from main.doc_key")
 
-            # The new inverted index
-            db.execute("DELETE from final.inverted_index")
-
-            # Work out how much to shift each field/first_doc_id combination.
+            # Work out how much to shift each positional set for each field/first_doc_id
+            # combination.
             db.execute(
                 """
                 create temporary table field_shift(
@@ -570,25 +573,8 @@ def _finalise_into(from_segment, to_final):
                     )
                     current_shift += position_count
 
-            db.execute(
-                """
-                INSERT into final.inverted_index 
-                    select
-                        field, 
-                        value,
-                        sum(doc_count),
-                        roaring_union(doc_ids),
-                        sum(position_count),
-                        roaring_shift_union64(positions, cumulative_shift)
-                    from inverted_index_segment
-                    inner join field_shift using(field, first_doc_id)
-                    group by field, value
-
-                """
-            )
-
+            # First process the field summary, so that we can work out the schema
             db.execute("DELETE from final.field_summary")
-
             db.execute(
                 """
                 INSERT into final.field_summary 
@@ -596,6 +582,9 @@ def _finalise_into(from_segment, to_final):
                         field, 
                         max(max_cardinality),
                         value_handler_name,
+                        -- This is guaranteed to be the same across the field so we can
+                        -- rely on SQLite behaviour to grab an arbitrary row.
+                        stored_sorted,
                         sum(doc_count),
                         roaring_union(doc_ids),
                         sum(position_count),
@@ -606,6 +595,89 @@ def _finalise_into(from_segment, to_final):
                     group by field, value_handler_name
                 """
             )
+
+            ## The new inverted index ##
+
+            # Work out which fields are just passed through, and which are range
+            # encoded. For range encoded fields we will do an extra processing step -
+            # all others can be inserted normally.
+
+            db.execute("DELETE from final.inverted_index")
+            field_processing = db.execute(
+                """
+                SELECT field, max_cardinality, stored_sorted, position_count
+                from field_summary
+                order by field
+                """
+            )
+
+            for (
+                field,
+                max_cardinality,
+                stored_sorted,
+                position_count,
+            ) in field_processing:
+
+                if (max_cardinality, stored_sorted, position_count) == (1, 1, 0):
+
+                    # Generate the initial merged values
+                    merged = db.execute(
+                        """
+                        SELECT
+                            field, 
+                            value,
+                            sum(doc_count),
+                            roaring_union(doc_ids),
+                            sum(position_count),
+                            roaring_shift_union64(positions, cumulative_shift)
+                        from inverted_index_segment
+                        inner join field_shift using(field, first_doc_id)
+                        where field = ?
+                        group by value
+                        order by value
+                        """,
+                        [field],
+                    )
+                    # range encode - a value now represents itself + doc_ids matching
+                    # all the values that were lower than this.
+                    accumulated_docs = BitMap()
+
+                    for field, value, _, docs, pos_count, positions in merged:
+
+                        accumulated_docs |= BitMap.deserialize(docs)
+
+                        db.execute(
+                            "INSERT into final.inverted_index values "
+                            "(?, ?, ?, ?, ?, ?)",
+                            (
+                                field,
+                                value,
+                                len(accumulated_docs),
+                                accumulated_docs,
+                                position_count,
+                                positions,
+                            ),
+                        )
+
+                else:
+                    # Pass through case - no extra details required.
+                    db.execute(
+                        """
+                        INSERT into final.inverted_index 
+                            select
+                                field, 
+                                value,
+                                sum(doc_count),
+                                roaring_union(doc_ids),
+                                sum(position_count),
+                                roaring_shift_union64(positions, cumulative_shift)
+                            from inverted_index_segment
+                            inner join field_shift using(field, first_doc_id)
+                            where field = ?
+                            group by value
+                        """,
+                        [field],
+                    )
 
             db.execute("commit")
 
