@@ -13,11 +13,15 @@ Extending the query interface.
 
 Documentation page: querying.
 
+
+Example for doc tests: basic functionality of all the methods.
+
 """
 
 import collections
 import concurrent.futures as cf
 import dataclasses as dc
+import itertools
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Optional
 
@@ -219,6 +223,7 @@ class HyperrealIndex:
                     handler,
                     cardinality,
                     position_count,
+                    handler.stored_sorted,
                 )
 
             self._field_handlers = _field_handlers
@@ -249,19 +254,136 @@ class HyperrealIndex:
         if hasattr(self, "_field_handlers"):
             del self._field_handlers
 
-    def doc_ids_to_keys(self, doc_ids: Iterable[int]):
-        """Generate document keys on the corpus from the given doc_ids."""
-        pass
+    @property
+    def max_doc_id(self) -> Optional[int]:
+        """
+        The maximum doc_id in the collection.
+
+        If no docs are present in the collection, returns None.
+
+        """
+        if self.total_doc_count == 0:
+            return None
+        else:
+            return self.total_doc_count - 1
+
+    @property
+    def total_doc_count(self) -> int:
+        """Return the number of indexed documents."""
+        return list(
+            self.db.execute("select coalesce(max(doc_id) + 1, 0) from doc_key")
+        )[0][0]
 
     def all_doc_ids(self) -> BitMap:
         """Returns all doc_ids in the collection."""
-        pass
+        return BitMap(range(0, self.total_doc_count))
+
+    def _iter_corpus_docs(self, doc_ids: Iterable[int], corpus_method: Callable):
+        """
+        Helper function for iterating through transformed documents from a corpus.
+
+        This handles generating an iterator of doc_keys, and keeping that in sync
+        with the doc_ids.
+
+        """
+
+        # This is implemented in a fiddly way, as the corpus should only take an
+        # iterator of keys, but we want to keep the doc_id -> doc_key links intact
+        # without loading everything into memory.
+        doc_keys = self.doc_ids_to_keys(doc_ids)
+
+        # Split the generator into two, so we can iterate and keep everything aligned.
+        for_corpus, for_doc_id = itertools.tee(doc_keys, 2)
+        corpus_docs = corpus_method((doc_key for _, doc_key in for_corpus))
+
+        # Walk through the corpus docs, potentially allowing the corpus to swallow
+        # keys for any reason (such as for a missing doc).
+        for doc_key1, doc in corpus_docs:
+
+            # Advance through the other iterator until we get the same doc_key. It is
+            # assumed that this will almost always just be the very next one/ that
+            # missing keys are rare.
+            for doc_id, doc_key2 in for_doc_id:
+                if doc_key1 == doc_key2:
+                    break
+            # TODO - this could be less fiddly if there are constraints on what a corpus
+            # can do with keys. This interface allows a corpus to do something like
+            # handle a missing key by continuing on to the next doc.
+            yield doc_id, doc_key1, doc
 
     def docs(self, doc_ids):
-        """Iterate through documents on the corpus matching doc_ids."""
-        doc_keys = self.doc_ids_to_keys(doc_ids)
-        for (doc_id, doc_key), doc in self.corpus():
+        """
+        Iterate through documents on the corpus matching doc_ids.
+
+        """
+
+        return self._iter_corpus_docs(doc_ids, self.corpus.docs)
+
+    def indexable_docs(self, doc_ids):
+        """
+        Iterate through indexable form of documents on the corpus matching doc_ids.
+
+        """
+
+        return self._iter_corpus_docs(doc_ids, self.corpus.indexable_docs)
+
+    def html_docs(self, doc_ids):
+        """
+        Iterate through HTML form of documents on the corpus matching doc_ids.
+
+        """
+
+        return self._iter_corpus_docs(doc_ids, self.corpus.html_docs)
+
+    def _lookup_doc_key(self, doc_id: int):
+        """
+        Return the doc_key for the given doc_id.
+
+        It's usually preferable to use the bulk forms doc_ids_to_keys or the docs and
+        other methods directly. This method does not handle the case where doc_id is
+        not present on the index.
+
+        """
+
+        return list(
+            self.db.execute("SELECT doc_key from doc_key where doc_id = ?", [doc_id])
+        )[0][0]
+
+    def doc_ids_to_keys(self, doc_ids: Iterable[int]) -> Iterable[tuple[int, Any]]:
+        """Generate document keys on the corpus from the given doc_ids."""
+
+        self.db.execute("savepoint doc_ids_to_keys")
+
+        # Validate doc_ids are valid. Since doc_ids are all contiguous this is
+        # straightforward.
+        total_docs = self.total_doc_count
+
+        for doc_id in doc_ids:
+            # total_docs is exclusive bound, as doc_id's start at 0, so max_doc_id
+            # is one less than total_docs
+            if not (0 <= doc_id < total_docs):
+                raise ValueError(
+                    f"Invalid {doc_id=} - valid doc_id's for this index are between 0 "
+                    f"and {max_doc_id}"
+                )
+
+            yield doc_id, self._lookup_doc_key(doc_id)
+
+        self.db.execute("release doc_ids_to_keys")
+
+    def facet_count(self, field, queries, value_bins=None):
+        """
+        Return the counts for each query in queries against all values in fields, or all ranges in value_bins.
+
+        """
+        if value_bins is None:
             pass
+
+        else:
+            ranges = [
+                slice(left, right) for left, right in zip(value_bins, value_bins[1:])
+            ]
+        return
 
     def __getitem__(self, field, value) -> BitMap:
         """Retrieve documents matching a literal field value."""

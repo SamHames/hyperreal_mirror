@@ -50,8 +50,8 @@ class Migration:
 class IndexPlugin:
 
     plugin_name: str
-    current_version: Optional[str] = (None,)
-    migrations: Optional[list[Migration]] = (None,)
+    current_version: Optional[str] = None
+    migrations: Optional[list[Migration]] = None
 
     def __init__(self, idx: "HyperrealIndex"):
 
@@ -91,6 +91,8 @@ class IndexPlugin:
               that we always follow a consistent pathway through the migrations.
 
         """
+
+        self.migrations = self.migrations or []
 
         # An empty set of migrations is valid, and is treated as a stateless migration.
         if not self.migrations:
