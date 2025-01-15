@@ -67,9 +67,11 @@ class ValueHandler(Protocol):
 class StringHandler(ValueHandler):
     """Handles strings, by not doing anything to them anywhere."""
 
-    # Note that strings are lexicographically sorted, but no locale specific collation
-    # is possible to apply, so it's safer to say they aren't sorted.
-    stored_sorted = False
+    # Note that strings are lexicographically sorted, but this is not an alphabetical
+    # sort - that would require an appropriate database collation. This level of sorting
+    # is however appropriate for simple things like converting a wildcard like "cat*"
+    # into a range search for "cat":"cat\U0010ffff" (the maximum unicode character).
+    stored_sorted = True
     value_name = "str"
     supported_types = set([str])
 

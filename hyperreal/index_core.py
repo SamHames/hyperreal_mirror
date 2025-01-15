@@ -157,6 +157,7 @@ class HyperrealIndex:
             migration = plugin.version_migration_map[index_version]
             index_version = migration.to_version
             # TODO: log migrations being applied
+            # TODO: logging framework in general...
             self._apply_migration(migration)
             # TODO: error message when index version not in possible migrations
 
@@ -219,11 +220,15 @@ class HyperrealIndex:
 
                 handler = self.corpus.name_handlers[name]
 
-                _field_handlers[field] = (
-                    handler,
+                range_encoded = (
                     cardinality,
                     position_count,
                     handler.stored_sorted,
+                ) == (1, 0, True)
+
+                _field_handlers[field] = (
+                    handler,
+                    range_encoded,
                 )
 
             self._field_handlers = _field_handlers
@@ -373,7 +378,8 @@ class HyperrealIndex:
 
     def facet_count(self, field, queries, value_bins=None):
         """
-        Return the counts for each query in queries against all values in fields, or all ranges in value_bins.
+        Return the counts for each query in queries against all values in fields, or all
+        ranges in value_bins.
 
         """
         if value_bins is None:
@@ -385,8 +391,40 @@ class HyperrealIndex:
             ]
         return
 
-    def __getitem__(self, field, value) -> BitMap:
-        """Retrieve documents matching a literal field value."""
+    def __getitem__(self, field: str, value) -> BitMap:
+        """
+        Retrieve documents matching a literal field value, or a range of values.
+
+        This is the most basic retrieval operation for documents based on their
+        constituent features as fields and values.
+
+        """
+
+        # Validation 1: does this field exist for indexed documents
+        if field not in self.field_handlers:
+            raise ValueError(f"{field=} does not occur in this index.")
+
+        handler, range_encoded = self.field_handlers[field]
+
+        is_slice = isinstance(value, slice)
+
+        if is_slice and not handler.stored_sorted:
+            raise TypeError(
+                f"{handler=} does not indicate that values are stored "
+                "lexicographically sorted, range queries are not supported."
+            )
+
+        # Four cases (slice, literal) x (range_encoded, literal)
+        if range_encoded:
+            if is_slice:
+                pass
+            else:
+                pass
+        else:
+            if is_slice:
+                pass
+            else:
+                pass
 
         """
         Errors and validation:
@@ -396,6 +434,153 @@ class HyperrealIndex:
         - slices for ranges, but only on sortable fields. Step parameter must be None.
         
         """
+
+    def _literal_feature_lookup(self, field, index_value):
+
+        matching = list(
+            self.db.execute(
+                "SELECT doc_ids from inverted_index where (field, value) = (?, ?)",
+                (field, index_value),
+            )
+        )
+
+        if matching:
+            return matching[0][0]
+        else:
+            return BitMap()
+
+    def _literal_range_encoded_feature_lookup(self, field, index_value):
+
+        # Pick the literal value - if this isn't present then we can return immediately
+        match_init = list(
+            self.db.execute(
+                "SELECT doc_ids from inverted_index where (field, value) = (?, ?)",
+                (field, index_value),
+            )
+        )
+
+        if not match_init:
+            return BitMap()
+        else:
+            bm = match_init[0][0]
+
+        # Now we retrieve the value that is just prior to the actual value.
+        match_prev = list(
+            self.db.execute(
+                """
+                SELECT max(value), doc_ids 
+                from inverted_index 
+                where field = ?
+                    and value < ?
+                """,
+                (field, index_value),
+            )
+        )
+
+        if match_prev:
+            return bm - match_prev[0][0]
+        else:
+            return bm
+
+    def _slice_feature_lookup(self, field, index_value_start, index_value_end):
+
+        if index_value_start is None and index_value_end is None:
+            raise ValueError(
+                "One of index_value_start and index_value_end needs to be not None."
+            )
+        elif index_value_start is None:
+            where_clause = "where field = ? and value < ?"
+            args = [field, index_value_end]
+        elif index_value_end is None:
+            where_clause = "where field = ? and value >= ?"
+            args = [field, index_value_start]
+        else:
+            where_clause = "where field = ? and value >= ? and value < ?"
+            args = [field, index_value_start, index_value_end]
+
+        matching = list(
+            self.db.execute(
+                f"""
+                SELECT roaring_union(doc_ids) 
+                from inverted_index 
+                {where_clause}
+                """,
+                args,
+            )
+        )
+
+        if matching:
+            return BitMap.deserialize(matching[0][0])
+        else:
+            return BitMap()
+
+    def _slice_range_encoded_feature_lookup(
+        self, field, index_value_start, index_value_end
+    ):
+
+        if index_value_start is None and index_value_end is None:
+            raise ValueError(
+                "One of index_value_start and index_value_end needs to be not None."
+            )
+
+        if index_value_start is None:
+            # Easy case - no lower bound documents to exclude at the end
+            exclude_row = BitMap()
+
+        else:
+            # We actually have to check if there are lower bound docs so we can exclude
+            # them. It might happen that that value_start < smallest value in the index,
+            # in which case there's nothing to exclude.
+            exclude_row = list(
+                self.db.execute(
+                    """
+                    SELECT max(value), doc_ids 
+                    from inverted_index 
+                    where field = ? and value < ?
+                    """,
+                    [field, index_value_start],
+                )
+            )
+
+            print(exclude_row)
+
+            if exclude_row:
+                exclude_docs = exclude_row[0][1]
+
+        if index_value_end is None:
+            # Use the last row as the indicator of all docs matching this field.
+            include_docs = list(
+                self.db.execute(
+                    """
+                    SELECT max(value), doc_ids 
+                    from inverted_index 
+                    where field = ?
+                    """,
+                    [field],
+                )
+            )[0][1]
+
+        else:
+            # We actually have to check an upper bound value against the index values.
+            # Because this is an exclusive bound, we do the same test as the lower
+            # bound.
+            include_row = list(
+                self.db.execute(
+                    """
+                    SELECT max(value), doc_ids 
+                    from inverted_index 
+                    where field = ? and value < ?
+                    """,
+                    [field, index_value_end],
+                )
+            )
+
+            if include_row:
+                include_docs = include_row[0][1]
+
+            print(include_row)
+
+        return include_docs - exclude_docs
 
     def _iter_field_values(self, *values):
         """Iterate through docs matching each expression in field values."""
