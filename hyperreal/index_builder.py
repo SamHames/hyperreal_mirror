@@ -174,50 +174,53 @@ def _make_segment(
 
     next_doc_id = start_doc_id
 
-    db.execute("begin")
+    with contextlib.closing(corpus) as corp:
 
-    for batch_docs in _batch(doc_keys, doc_batch_size):
+        db.execute("begin")
 
-        # Prepare the batch of document for insertion, generating an in-memory version
-        # of the index.
-        (
-            batch_keys,
-            batch_segment,
-            batch_segment_header,
-            insert_order,
-            field_positions,
-        ) = _prepare_doc_batch(corpus, next_doc_id, field_positions, batch_docs)
+        for batch_docs in _batch(doc_keys, doc_batch_size):
 
-        # Write this batch to the staging segment.
-        _stage_doc_batch(
-            db,
-            next_doc_id,
-            batch_keys,
-            batch_segment,
-            batch_segment_header,
-            insert_order,
-        )
+            # Prepare the batch of document for insertion, generating an in-memory
+            # version of the index.
+            (
+                batch_keys,
+                batch_segment,
+                batch_segment_header,
+                insert_order,
+                field_positions,
+            ) = _prepare_doc_batch(corp, next_doc_id, field_positions, batch_docs)
 
-        # We also need to check this at the end - but it's better to fail as early as
-        # possible if anything is wrong.
-        invalid_fields = [
-            (field, handlers)
-            for field, handlers in observed_field_handlers.items()
-            if len(handlers) > 1
-        ]
-
-        if invalid_fields:
-            raise SchemaValidationError(
-                "Only one ValueHandler can be used per field across all documents.\n"
-                "The following fields are invalid for indexing:\n"
-                "\n".join(
-                    f"\t{field=} has {handlers=}" for field, handlers in invalid_fields
-                )
+            # Write this batch to the staging segment.
+            _stage_doc_batch(
+                db,
+                next_doc_id,
+                batch_keys,
+                batch_segment,
+                batch_segment_header,
+                insert_order,
             )
 
-        next_doc_id += len(batch_docs)
+            # We also need to check this at the end - but it's better to fail as early as
+            # possible if anything is wrong.
+            invalid_fields = [
+                (field, handlers)
+                for field, handlers in observed_field_handlers.items()
+                if len(handlers) > 1
+            ]
 
-    db.execute("commit")
+            if invalid_fields:
+                raise SchemaValidationError(
+                    "Only one ValueHandler can be used per field across all documents.\n"
+                    "The following fields are invalid for indexing:\n"
+                    "\n".join(
+                        f"\t{field=} has {handlers=}"
+                        for field, handlers in invalid_fields
+                    )
+                )
+
+            next_doc_id += len(batch_docs)
+
+        db.execute("commit")
 
     return start_doc_id, segment_path
 
