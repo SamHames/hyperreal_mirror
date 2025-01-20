@@ -132,7 +132,9 @@ class RoaringShiftUnion64:
         # Unfortunately we need to do this the long way - BitMap's support a fast shift
         # operator, but that isn't implemented for BitMap64's yet.
         positions: pyroaring.BitMap64 = pyroaring.BitMap64.deserialize(bitmap)
-        self.bitmap.update(shifted for i in positions if (shifted := i + shift) > 0)
+        # Assumes that the shift is always positive
+        # TODO: validate this.
+        self.bitmap.update(p + shift for p in positions)
 
         # TODO: possibly only create bitmap64's if necessary?
 

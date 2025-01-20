@@ -30,7 +30,7 @@ __all__ = ["build_index"]
 
 def build_index(
     db_path,
-    corpus: corpus.Corpus,
+    corpus: corpus.HyperrealCorpus,
     pool: cf.Executor,
     doc_batch_size: int = 1000,
     max_workers: Optional[int] = None,
@@ -153,7 +153,7 @@ def _init_segment(db_path):
 
 
 def _make_segment(
-    corpus: corpus.Corpus,
+    corpus: corpus.HyperrealCorpus,
     segment_path,
     start_doc_id: int,
     doc_keys: Iterable[corpus.DocKey],
@@ -189,6 +189,8 @@ def _make_segment(
                 insert_order,
                 field_positions,
             ) = _prepare_doc_batch(corp, next_doc_id, field_positions, batch_docs)
+
+            print("prepared")
 
             # Write this batch to the staging segment.
             _stage_doc_batch(
@@ -329,6 +331,7 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
                 # instances except the first and last.
                 batch_segment_header[field].doc_position_ranges.add(start_position)
                 batch_segment_header[field].doc_position_ranges.add(next_position)
+
                 field_positions[field] = next_position
 
         doc_id += 1
@@ -499,7 +502,7 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                         stored_sorted,
                         sum(doc_count),
                         roaring_union(doc_ids),
-                        sum(position_count),
+                        max(position_count),
                         roaring_union(position_doc_ids),
                         roaring_union64(position_doc_starts)
                     from segment_header

@@ -27,6 +27,8 @@ Example:
 """
 
 import abc
+import mmap
+import re
 from typing import Any, Hashable, Iterable, Optional, TypeVar
 
 from tinyhtml import h
@@ -53,8 +55,8 @@ class SchemaValidationError(Exception):
     """Used for problems with creating a schema of value_handlers."""
 
 
-# TODO: should I call this HyperrealCorpus, to go along with HyperrealIndex?
-class Corpus:
+# TODO: Should this be a protocol instead?
+class HyperrealCorpus:
 
     handler_registry: set[value_handlers.ValueHandler] = default_handlers
 
@@ -180,3 +182,115 @@ class Corpus:
 
         """
         pass
+
+
+boundary_regex = re.compile(r"\b")
+
+
+def boundary_tokeniser(text: str) -> list[str]:
+    r"""
+    A simplistic regular expression based tokeniser.
+
+    This tokeniser:
+
+    - lowercases the text
+    - splits on re module "word" boundaries (matches the regular expression "\b")
+    - filters any token that is only whitespace (using str.strip)
+
+    """
+    return [
+        stripped
+        for token in boundary_regex.split(text.lower())
+        if (stripped := token.strip())
+    ]
+
+
+class TextfileParagraphsCorpus(HyperrealCorpus):
+
+    def __init__(
+        self,
+        text_file_path,
+        tokeniser=boundary_tokeniser,
+        encoding="utf8",
+        paragraph_positions=None,
+    ):
+        """
+        A corpus that treats the paragraphs of a text file as a sequence of documents.
+
+        Paragraph boundaries are identified as lines with only whitespace characters.
+
+        This corpus memory maps and reads the file once from beginning to end to
+        identify paragraph boundaries for efficient enumeration and random access
+        later.
+
+        """
+
+        self.text_file_path = text_file_path
+        self.encoding = encoding
+        self.tokeniser = tokeniser
+
+        self.f = open(self.text_file_path, "r+b")
+        self.mm = mmap.mmap(self.f.fileno(), 0, access=mmap.ACCESS_READ)
+
+        self._paragraph_positions = paragraph_positions
+
+    def __getstate__(self):
+        return (
+            self.text_file_path,
+            self.tokeniser,
+            self.encoding,
+            self._paragraph_positions,
+        )
+
+    def __setstate__(self, args):
+        self.__init__(*args)
+
+    def all_doc_keys(self):
+        return range(len(self.paragraph_positions) - 1)
+
+    def docs(self, doc_keys):
+        for key in doc_keys:
+
+            start = self.paragraph_positions[key]
+            end = self.paragraph_positions[key + 1]
+
+            yield key, self.mm[start:end].decode(self.encoding)
+
+    def indexable_docs(self, doc_keys):
+        for key, text in self.docs(doc_keys):
+            yield key, {"para_no": key, "text": self.tokeniser(text)}
+
+    def close(self):
+        self.mm.close()
+        self.f.close()
+
+    @property
+    def paragraph_positions(self):
+        """
+        An array with the position of each paragraph as bytes in the text file.
+
+        """
+
+        if self._paragraph_positions is None:
+
+            self.mm.seek(0)
+
+            last_line_not_empty = False
+            para_positions = [0]
+            pos = 0
+
+            for line in iter(self.mm.readline, b""):
+
+                line_not_empty = bool(line.decode(self.encoding).strip())
+
+                if line_not_empty and not last_line_not_empty:
+                    para_positions.append(pos)
+
+                pos = self.mm.tell()
+                last_line_not_empty = line_not_empty
+
+            para_positions.append(self.mm.tell())
+
+            self._paragraph_positions = para_positions
+
+        return self._paragraph_positions

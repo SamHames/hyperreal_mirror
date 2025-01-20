@@ -44,6 +44,11 @@ core_migration = index_plugin.Migration(
         """
         CREATE table if not exists field_summary(
             field text primary key,
+            -- TODO: cardinality is potentially confusing, because we can talk about it
+            -- here as 1:x cardinality, or separately as the cardinality/unique values
+            -- defined on a field. Is there a more precise naming for each?
+            -- TODO: we also want the number of unique values on a field for display
+            -- purposes.
             max_cardinality,
             value_handler_name,
             stored_sorted,
@@ -81,7 +86,7 @@ class HyperrealIndex:
     def __init__(
         self,
         index_path,
-        corpus: corpus.Corpus,
+        corpus: corpus.HyperrealCorpus,
         pool: Optional[cf.Executor],
         # TODO: document this -> can take either a class that is initialised with the
         # index, or a Callable that returns an IndexPlugin instance.
@@ -391,51 +396,7 @@ class HyperrealIndex:
             ]
         return
 
-    def __getitem__(self, field: str, value) -> BitMap:
-        """
-        Retrieve documents matching a literal field value, or a range of values.
-
-        This is the most basic retrieval operation for documents based on their
-        constituent features as fields and values.
-
-        """
-
-        # Validation 1: does this field exist for indexed documents
-        if field not in self.field_handlers:
-            raise ValueError(f"{field=} does not occur in this index.")
-
-        handler, range_encoded = self.field_handlers[field]
-
-        is_slice = isinstance(value, slice)
-
-        if is_slice and not handler.stored_sorted:
-            raise TypeError(
-                f"{handler=} does not indicate that values are stored "
-                "lexicographically sorted, range queries are not supported."
-            )
-
-        # Four cases (slice, literal) x (range_encoded, literal)
-        if range_encoded:
-            if is_slice:
-                pass
-            else:
-                pass
-        else:
-            if is_slice:
-                pass
-            else:
-                pass
-
-        """
-        Errors and validation:
-
-        - field needs to be in field handlers, otherwise error
-        - missing value is fine as long as the field exists: just return empty docs.
-        - slices for ranges, but only on sortable fields. Step parameter must be None.
-        
-        """
-
-    def _literal_feature_lookup(self, field, index_value):
+    def _match_literal_feature(self, field, index_value):
 
         matching = list(
             self.db.execute(
@@ -449,23 +410,36 @@ class HyperrealIndex:
         else:
             return BitMap()
 
-    def _literal_range_encoded_feature_lookup(self, field, index_value):
+    def _match_literal_feature_pos(self, field, index_value):
+        matching = list(
+            self.db.execute(
+                "SELECT positions from inverted_index where (field, value) = (?, ?)",
+                (field, index_value),
+            )
+        )
+
+        if matching:
+            return matching[0][0]
+        else:
+            return BitMap64()
+
+    def _match_range_encoded_literal_feature(self, field, index_value):
 
         # Pick the literal value - if this isn't present then we can return immediately
-        match_init = list(
+        include_row = list(
             self.db.execute(
                 "SELECT doc_ids from inverted_index where (field, value) = (?, ?)",
                 (field, index_value),
             )
         )
 
-        if not match_init:
+        if not include_row:
             return BitMap()
         else:
-            bm = match_init[0][0]
+            include_docs = include_row[0][0]
 
         # Now we retrieve the value that is just prior to the actual value.
-        match_prev = list(
+        exclude_row = list(
             self.db.execute(
                 """
                 SELECT max(value), doc_ids 
@@ -477,12 +451,12 @@ class HyperrealIndex:
             )
         )
 
-        if match_prev:
-            return bm - match_prev[0][0]
+        if exclude_row:
+            return include_docs - exclude_row[0][1]
         else:
-            return bm
+            return include_docs
 
-    def _slice_feature_lookup(self, field, index_value_start, index_value_end):
+    def _match_slice_feature(self, field, index_value_start, index_value_end):
 
         if index_value_start is None and index_value_end is None:
             raise ValueError(
@@ -514,7 +488,39 @@ class HyperrealIndex:
         else:
             return BitMap()
 
-    def _slice_range_encoded_feature_lookup(
+    def _match_slice_feature_pos(self, field, index_value_start, index_value_end):
+
+        if index_value_start is None and index_value_end is None:
+            raise ValueError(
+                "One of index_value_start and index_value_end needs to be not None."
+            )
+        elif index_value_start is None:
+            where_clause = "where field = ? and value < ?"
+            args = [field, index_value_end]
+        elif index_value_end is None:
+            where_clause = "where field = ? and value >= ?"
+            args = [field, index_value_start]
+        else:
+            where_clause = "where field = ? and value >= ? and value < ?"
+            args = [field, index_value_start, index_value_end]
+
+        matching = list(
+            self.db.execute(
+                f"""
+                SELECT roaring_union64(positions) 
+                from inverted_index 
+                {where_clause}
+                """,
+                args,
+            )
+        )
+
+        if matching:
+            return BitMap64.deserialize(matching[0][0])
+        else:
+            return BitMap64()
+
+    def _match_range_encoded_slice_feature(
         self, field, index_value_start, index_value_end
     ):
 
@@ -541,8 +547,6 @@ class HyperrealIndex:
                     [field, index_value_start],
                 )
             )
-
-            print(exclude_row)
 
             if exclude_row:
                 exclude_docs = exclude_row[0][1]
@@ -578,33 +582,144 @@ class HyperrealIndex:
             if include_row:
                 include_docs = include_row[0][1]
 
-            print(include_row)
-
         return include_docs - exclude_docs
 
-    def _iter_field_values(self, *values):
-        """Iterate through docs matching each expression in field values."""
+    def _iter_docs_for_features(self, field_values):
+        """
+        Turn a FieldValues Clause into an iterable of values and docs.
 
-        for expression in values:
-            # validate the field
-            field = expression.field
+        This is responsible for turning a clause into an iterable of docs, one per
+        matching value component.
 
-    def _iter_docs_for_features(self, features):
-        """"""
-        # Feature specification: tuple (field, values)
-        # dict (field: values)
-        # single field?
-        # iterator of any of the above.
-        # Iterate through all the individual docs matching the given features?
-        # TODO: some kind of cache for validating features and handling? Or precompute
-        # what kind of features are supportable given something?
 
-    def or_query(self, single_field_clause):
-        """Evaluate an OR query across a single field of values."""
-        pass
+        """
+        # TODO: update nomenclature and make types clear
+        # TODO: what is the public interface? Is it just match_any, match_all?
+        # TODO: should I validate the types as well?
 
-    def and_query(self, single_field_clause):
+        if field_values.field not in self.field_handlers:
+            raise ValueError(
+                f"Field '{field_values.field}' does not exist on this index."
+            )
+
+        handler, range_encoded = self.field_handlers[field_values.field]
+
+        # Map the lookup types based on how the field is encoded
+        lookup_literal = self._match_literal_feature
+        lookup_slice = self._match_slice_feature
+
+        if range_encoded:
+            lookup_literal = self._match_range_encoded_literal_feature
+            lookup_slice = self._match_range_encoded_slice_feature
+
+        for value in field_values.values:
+            if isinstance(value, slice):
+                if value.step is not None:
+                    raise (ValueError("Step is not supported for a slice query."))
+
+                start = None
+                if value.start is not None:
+                    start = handler.to_index(value.start)
+
+                stop = None
+                if value.stop is not None:
+                    stop = handler.to_index(value.stop)
+                yield value, lookup_slice(field_values.field, start, stop)
+            else:
+                yield value, lookup_literal(field_values.field, handler.to_index(value))
+
+    def _iter_pos_for_features(self, field_values):
+
+        if field_values.field not in self.field_handlers:
+            raise ValueError(
+                f"Field '{field_values.field}' does not exist on this index."
+            )
+
+        handler, _ = self.field_handlers[field_values.field]
+
+        for value in field_values.values:
+            if isinstance(value, slice):
+                if value.step is not None:
+                    raise (ValueError("Step is not supported for a slice query."))
+
+                start = None
+                if value.start is not None:
+                    start = handler.to_index(value.start)
+
+                stop = None
+                if value.stop is not None:
+                    stop = handler.to_index(value.stop)
+                yield value, self._match_slice_feature_pos(
+                    field_values.field, start, stop
+                )
+            else:
+                yield value, self._match_literal_feature_pos(
+                    field_values.field, handler.to_index(value)
+                )
+
+    def match_any(self, *field_value_clauses):
+        """Evaluate an OR query across a set of field_value_clauses."""
+
+        feature_docs = (
+            (value, docs)
+            for field_values in field_value_clauses
+            for value, docs in self._iter_docs_for_features(field_values)
+        )
+
+        result_docs = BitMap()
+
+        for _, docs in feature_docs:
+            result_docs |= docs
+
+        return result_docs
+
+    def match_all(self, *field_value_clauses):
         """Evaluate an AND query"""
+        feature_docs = (
+            (value, docs)
+            for field_values in field_value_clauses
+            for value, docs in self._iter_docs_for_features(field_values)
+        )
+
+        _, result_docs = next(feature_docs)
+
+        for _, docs in feature_docs:
+            result_docs &= docs
+
+        return result_docs
+
+    def match_phrase(self, field_values):
+
+        feature_positions = self._iter_pos_for_features(field_values)
+
+        _, positions = next(feature_positions)
+
+        # Match phrases by shifting positions and keeping the parts that line up.
+        # TODO: handle the document edges in the flat positions index.
+        for i, (_, f_positions) in enumerate(feature_positions):
+            offset = -(i + 1)
+            positions &= BitMap64(i + offset for i in f_positions)
+
+            if not positions:
+                break
+
+        return self.positions_to_docs(field_values.field, positions)
+
+    def positions_to_docs(self, field, positions):
+
+        pos_docs, pos_doc_starts = list(
+            self.db.execute(
+                "SELECT position_doc_ids, position_doc_starts from field_summary where field = ?",
+                [field],
+            )
+        )[0]
+
+        docs = BitMap()
+
+        for p in positions:
+            docs.add(pos_docs[pos_doc_starts.rank(p) - 1])
+
+        return docs
 
 
 @dc.dataclass
@@ -622,3 +737,7 @@ class FieldValues:
 
     def to_html(self, idx: HyperrealIndex):
         pass
+
+
+# Building queries? Build up clauses out of field values - these are the basic building
+# blocks of complex queries - query nodes take
