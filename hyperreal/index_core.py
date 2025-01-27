@@ -381,19 +381,75 @@ class HyperrealIndex:
 
         self.db.execute("release doc_ids_to_keys")
 
-    def facet_count(self, field, queries, value_bins=None):
+    def field_values(self, field: str) -> FieldValues:
         """
-        Return the counts for each query in queries against all values in fields, or all
-        ranges in value_bins.
+        Return the indexed values for field.
+
+        This is the starting point for tabulating things like word counts, and
+        displaying complex collections of values in different formats.
 
         """
-        if value_bins is None:
-            pass
+        handler, range_encoded = self.field_handlers[field]
+
+        rows = self.db.execute(
+            """
+            SELECT value, doc_count, position_count
+            from inverted_index
+            where field = ?
+            order by value
+            """,
+            [field],
+        )
+        values, doc_counts, position_counts = list(zip(*rows))
+        values = [handler.from_index(v) for v in values]
+
+        if range_encoded:
+            # Range encoded values need to be diffed, as they're a cumulative
+            # sum
+            doc_counts_diff = [doc_counts[0]]
+
+            for d in doc_counts[1:]:
+                doc_counts_diff.append(d - doc_counts_diff[-1])
+
+            stats = {"doc_count": doc_counts_diff}
 
         else:
+            stats = {"doc_count": doc_counts}
+
+            if any(position_counts):
+                stats["position_count"] = position_counts
+
+        return FieldValues(
+            field=field,
+            values=value_columns,
+            stats=stats,
+            range_encoded=range_encoded,
+        )
+
+    def facet_count(self, field, queries: dict[str, AbstractBitMap], value_bins=None):
+        """
+        Count intersection of each of queries with the full set of values in field.
+
+        Returns:
+
+        - values of the facet
+        - counts of each query intersection with that value facet
+        - total size of the facet, for normalisation purposes
+
+        """
+
+        # Strategy: create a FieldValues object to drive the iteration for this
+        # function.
+
+        if value_bins is None:
+            field_values = self.field_values(field)
+
+        else:
+            handler, range_encoded = self.field_handlers[field]
             ranges = [
                 slice(left, right) for left, right in zip(value_bins, value_bins[1:])
             ]
+
         return
 
     def _match_literal_feature(self, field, index_value):
@@ -733,10 +789,25 @@ class FieldValues:
     """
 
     field: str
-    values: dc.field(default_factory=list)
+    values: list = dc.field(default_factory=list)
+    statistics: collections.defaultdict[list] = dc.field(
+        default_factory=lambda: defaultdict(list)
+    )
 
     def to_html(self, idx: HyperrealIndex):
         pass
+
+    def sort_by(self, statistics_key: str, ascending=True):
+        """
+        Return a new FieldValues object with values sorted by the given statistic.
+
+        """
+
+        v
+
+        return FieldValues(
+            field=self.field,
+        )
 
 
 # Building queries? Build up clauses out of field values - these are the basic building
