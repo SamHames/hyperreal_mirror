@@ -21,7 +21,7 @@ import os
 import tempfile
 from typing import Iterable, Optional
 
-from pyroaring import BitMap, BitMap64
+from pyroaring import BitMap
 
 from . import corpus, db_utilities
 
@@ -128,8 +128,17 @@ def _init_segment(db_path):
             doc_count,
             doc_ids roaring_bitmap,
             position_count,
-            positions roaring_bitmap64,
             primary key (field, value, first_doc_id)
+        );
+
+        CREATE table if not exists position_index_segment(
+            field text references field_summary,
+            value not null,
+            mod_position integer not null,
+            first_doc_id,
+            position_count,
+            group_ids roaring_bitmap,
+            primary key (field, value, mod_position, first_doc_id)
         );
 
         CREATE table if not exists segment_header(
@@ -141,8 +150,9 @@ def _init_segment(db_path):
             doc_count,
             doc_ids roaring_bitmap,
             position_count,
-            position_doc_ids roaring_bitmap,
-            position_doc_starts roaring_bitmap64,
+            group_count,
+            group_doc_ids roaring_bitmap,
+            doc_group_starts roaring_bitmap,
             primary key (field, first_doc_id)
         );
 
@@ -190,8 +200,6 @@ def _make_segment(
                 field_positions,
             ) = _prepare_doc_batch(corp, next_doc_id, field_positions, batch_docs)
 
-            print("prepared")
-
             # Write this batch to the staging segment.
             _stage_doc_batch(
                 db,
@@ -230,7 +238,9 @@ def _make_segment(
 @dc.dataclass
 class _DocsPositions:
     docs: BitMap = dc.field(default_factory=BitMap)
-    positions: BitMap64 = dc.field(default_factory=BitMap64)
+    group_positions: dict[BitMap] = dc.field(
+        default_factory=lambda: collections.defaultdict(BitMap)
+    )
 
 
 @dc.dataclass
@@ -239,13 +249,14 @@ class _FieldBatchHeader:
 
     docs: BitMap = dc.field(default_factory=BitMap)
     docs_w_positions: BitMap = dc.field(default_factory=BitMap)
-    doc_position_ranges: BitMap64 = dc.field(default_factory=BitMap64)
+    doc_group_ranges: BitMap = dc.field(default_factory=BitMap)
+    positions_indexed: int = 0
     max_cardinality: int = 0
     value_handler_name: str = ""
     stored_sorted: bool = False
 
 
-def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
+def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys, group_size=8):
     """
     Process this group of docs into a Python structure suitable for serialising.
 
@@ -253,7 +264,6 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
 
     """
 
-    # Mapping of {field: {value: (BitMap(), BitMap64())}}
     # One bitmap for document occurrence, the other other for recording
     # positional information.
     batch_segment = collections.defaultdict(
@@ -321,16 +331,33 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys):
                 next_position = start_position = field_positions[field]
 
                 for value in values:
-                    batch_field[value].positions.add(next_position)
+                    group, offset = divmod(next_position, group_size)
+                    batch_field[value].group_positions[offset].add(group)
                     next_position += 1
+
+                # After a field in a document finishes, advance by group_size(-1 because
+                # we already advanced after the last position). This leaves 'holes'
+                # and 'wastes' space, but means we don't have to worry about document
+                # boundaries for offsets < group_size. This also means that documents
+                # never overlap in a group.
+
+                # TODO: do we need to optimise this in some way, how do we pick the
+                # groupsize and the offset size range here reasonably?
+                next_position += group_size - 1
 
                 # Keep track of the doc-positional mapping
                 batch_segment_header[field].docs_w_positions.add(doc_id)
-                # Annotate the position ranges for this field in the doc. Always add
+                # Annotate the group ranges for this field in the doc. Always add
                 # the [start, end) range - this will be redundant for all of the
                 # instances except the first and last.
-                batch_segment_header[field].doc_position_ranges.add(start_position)
-                batch_segment_header[field].doc_position_ranges.add(next_position)
+                batch_segment_header[field].doc_group_ranges.add(
+                    start_position // group_size
+                )
+                batch_segment_header[field].doc_group_ranges.add(
+                    next_position // group_size
+                )
+
+                batch_segment_header[field].positions_indexed += position_count
 
                 field_positions[field] = next_position
 
@@ -405,7 +432,7 @@ def _stage_doc_batch(
         field_batch = batch_segment[field]
 
         db.executemany(
-            "INSERT into inverted_index_segment values(?, ?, ?, ?, ?, ?, ?)",
+            "INSERT into inverted_index_segment values(?, ?, ?, ?, ?, ?)",
             (
                 (
                     field,
@@ -413,22 +440,34 @@ def _stage_doc_batch(
                     first_doc_id,
                     len(field_batch[value].docs),
                     field_batch[value].docs,
-                    len(field_batch[value].positions),
-                    field_batch[value].positions,
+                    sum(
+                        len(group)
+                        for group in field_batch[value].group_positions.values()
+                    ),
                 )
                 for index_value, value in value_order
+            ),
+        )
+
+        db.executemany(
+            "INSERT into position_index_segment values(?, ?, ?, ?, ?, ?)",
+            (
+                (field, index_value, mod_position, first_doc_id, len(groups), groups)
+                for index_value, value in value_order
+                for mod_position, groups in field_batch[value].group_positions.items()
             ),
         )
 
         # Don't forget to write the header row describing the position-doc mapping
         header_row = batch_segment_header[field]
 
-        n_positions = 0
-        if header_row.doc_position_ranges:
-            n_positions = header_row.doc_position_ranges[-1]
+        group_count = 0
+
+        if header_row.doc_group_ranges:
+            group_count = header_row.doc_group_ranges[-1]
 
         db.execute(
-            "INSERT into segment_header values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT into segment_header values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 field,
                 first_doc_id,
@@ -437,9 +476,10 @@ def _stage_doc_batch(
                 header_row.stored_sorted,
                 len(header_row.docs),
                 header_row.docs,
-                n_positions,
+                header_row.positions_indexed,
+                group_count,
                 header_row.docs_w_positions,
-                header_row.doc_position_ranges,
+                header_row.doc_group_ranges,
             ),
         )
 
@@ -483,10 +523,25 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                         ?,
                         sum(doc_count),
                         roaring_union(doc_ids),
-                        sum(position_count),
-                        roaring_union64(positions)
+                        sum(position_count)
                     from inverted_index_segment
                     group by field, value
+                    """,
+                [first_doc_id],
+            )
+
+            db.execute(
+                """
+                INSERT into merge_segment.position_index_segment
+                    select
+                        field,
+                        value,
+                        mod_position,
+                        ?,
+                        sum(position_count),
+                        roaring_union(group_ids)
+                    from position_index_segment
+                    group by field, value, mod_position
                     """,
                 [first_doc_id],
             )
@@ -502,9 +557,10 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                         stored_sorted,
                         sum(doc_count),
                         roaring_union(doc_ids),
-                        max(position_count),
-                        roaring_union(position_doc_ids),
-                        roaring_union64(position_doc_starts)
+                        sum(position_count),
+                        max(group_count),
+                        roaring_union(group_doc_ids),
+                        roaring_union(doc_group_starts)
                     from segment_header
                     -- Note that group by value_handler_name is redundant if this is well
                     -- formed, but will generate a primary key error if the invariant
@@ -564,7 +620,7 @@ def _finalise_into(from_segment, to_final):
                 current_shift = 0
                 segment_sizes = db.execute(
                     """
-                    SELECT first_doc_id, position_count 
+                    SELECT first_doc_id, group_count 
                     from segment_header
                     where field = ?
                     order by first_doc_id
@@ -572,12 +628,12 @@ def _finalise_into(from_segment, to_final):
                     [field],
                 )
 
-                for first_doc_id, position_count in segment_sizes:
+                for first_doc_id, group_count in segment_sizes:
                     db.execute(
                         "insert into field_shift values(?, ?, ?)",
                         [field, first_doc_id, current_shift],
                     )
-                    current_shift += position_count
+                    current_shift += group_count
 
             # First process the field summary, so that we can work out the schema
             db.execute("DELETE from final.field_summary")
@@ -594,8 +650,8 @@ def _finalise_into(from_segment, to_final):
                         sum(doc_count),
                         roaring_union(doc_ids),
                         sum(position_count),
-                        roaring_union(position_doc_ids),
-                        roaring_shift_union64(position_doc_starts, cumulative_shift)
+                        roaring_union(group_doc_ids),
+                        roaring_shift_union(doc_group_starts, cumulative_shift)
                     from segment_header
                     inner join field_shift using(field, first_doc_id)
                     group by field, value_handler_name
@@ -609,6 +665,7 @@ def _finalise_into(from_segment, to_final):
             # all others can be inserted normally.
 
             db.execute("DELETE from final.inverted_index")
+            db.execute("DELETE from final.position_index")
             field_processing = db.execute(
                 """
                 SELECT field, max_cardinality, stored_sorted, position_count
@@ -634,10 +691,8 @@ def _finalise_into(from_segment, to_final):
                             value,
                             sum(doc_count),
                             roaring_union(doc_ids),
-                            sum(position_count),
-                            roaring_shift_union64(positions, cumulative_shift)
+                            sum(position_count)
                         from inverted_index_segment
-                        inner join field_shift using(field, first_doc_id)
                         where field = ?
                         group by value
                         order by value
@@ -648,20 +703,19 @@ def _finalise_into(from_segment, to_final):
                     # all the values that were lower than this.
                     accumulated_docs = BitMap()
 
-                    for field, value, _, docs, pos_count, positions in merged:
+                    for field, value, _, docs, pos_count in merged:
 
                         accumulated_docs |= BitMap.deserialize(docs)
 
                         db.execute(
                             "INSERT into final.inverted_index values "
-                            "(?, ?, ?, ?, ?, ?)",
+                            "(?, ?, ?, ?, ?)",
                             (
                                 field,
                                 value,
                                 len(accumulated_docs),
                                 accumulated_docs,
                                 position_count,
-                                positions,
                             ),
                         )
 
@@ -675,12 +729,30 @@ def _finalise_into(from_segment, to_final):
                                 value,
                                 sum(doc_count),
                                 roaring_union(doc_ids),
-                                sum(position_count),
-                                roaring_shift_union64(positions, cumulative_shift)
+                                sum(position_count)
                             from inverted_index_segment
                             inner join field_shift using(field, first_doc_id)
                             where field = ?
                             group by value
+                            order by value
+                        """,
+                        [field],
+                    )
+
+                    db.execute(
+                        """
+                        INSERT into final.position_index 
+                            select
+                                field, 
+                                value,
+                                mod_position,
+                                sum(position_count),
+                                roaring_shift_union(group_ids, cumulative_shift)
+                            from position_index_segment
+                            inner join field_shift using(field, first_doc_id)
+                            where field = ?
+                            group by value, mod_position
+                            order by value, mod_position
                         """,
                         [field],
                     )

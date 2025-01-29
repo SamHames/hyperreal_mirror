@@ -18,6 +18,8 @@ Example for doc tests: basic functionality of all the methods.
 
 """
 
+from __future__ import annotations
+
 import collections
 import concurrent.futures as cf
 import dataclasses as dc
@@ -42,7 +44,7 @@ core_migration = index_plugin.Migration(
         )
         """,
         """
-        CREATE table if not exists field_summary(
+        CREATE table field_summary(
             field text primary key,
             -- TODO: cardinality is potentially confusing, because we can talk about it
             -- here as 1:x cardinality, or separately as the cardinality/unique values
@@ -55,19 +57,29 @@ core_migration = index_plugin.Migration(
             doc_count,
             doc_ids roaring_bitmap,
             position_count,
-            position_doc_ids roaring_bitmap,
-            position_doc_starts roaring_bitmap64
+            group_doc_ids roaring_bitmap,
+            doc_group_starts roaring_bitmap
         )
         """,
         """
-        CREATE table if not exists inverted_index(
+        CREATE table inverted_index(
             field text references field_summary,
             value not null,
             doc_count,
             doc_ids roaring_bitmap,
             position_count,
-            positions roaring_bitmap64,
             primary key (field, value)
+        )
+        """,
+        """
+        CREATE table position_index(
+            field text references field_summary,
+            value not null,
+            mod_position integer not null,
+            position_count,
+            group_ids roaring_bitmap,
+            primary key (field, value, mod_position)
+            foreign key (field, value) references inverted_index
         )
         """,
     ],
@@ -421,8 +433,8 @@ class HyperrealIndex:
 
         return FieldValues(
             field=field,
-            values=value_columns,
-            stats=stats,
+            values=values,
+            statistics=stats,
             range_encoded=range_encoded,
         )
 
@@ -467,17 +479,19 @@ class HyperrealIndex:
             return BitMap()
 
     def _match_literal_feature_pos(self, field, index_value):
-        matching = list(
-            self.db.execute(
-                "SELECT positions from inverted_index where (field, value) = (?, ?)",
-                (field, index_value),
-            )
+
+        matching_rows = self.db.execute(
+            """
+            SELECT 
+                mod_position, 
+                group_ids 
+            from position_index 
+            where (field, value) = (?, ?)
+            """,
+            (field, index_value),
         )
 
-        if matching:
-            return matching[0][0]
-        else:
-            return BitMap64()
+        return {mod_position: group for mod_position, group in matching_rows}
 
     def _match_range_encoded_literal_feature(self, field, index_value):
 
@@ -560,21 +574,20 @@ class HyperrealIndex:
             where_clause = "where field = ? and value >= ? and value < ?"
             args = [field, index_value_start, index_value_end]
 
-        matching = list(
-            self.db.execute(
-                f"""
-                SELECT roaring_union64(positions) 
-                from inverted_index 
-                {where_clause}
-                """,
-                args,
-            )
+        matching = self.db.execute(
+            f"""
+            SELECT mod_position, roaring_union(groups) 
+            from position_index 
+            {where_clause}
+            group by mod_position
+            """,
+            args,
         )
 
-        if matching:
-            return BitMap64.deserialize(matching[0][0])
-        else:
-            return BitMap64()
+        return {
+            mod_position: BitMap.deserialize(groups)
+            for mod_position, groups in matching
+        }
 
     def _match_range_encoded_slice_feature(
         self, field, index_value_start, index_value_end
@@ -714,7 +727,7 @@ class HyperrealIndex:
                 )
 
     def match_any(self, *field_value_clauses):
-        """Evaluate an OR query across a set of field_value_clauses."""
+        """Evaluate an OR query across a set of FieldValues."""
 
         feature_docs = (
             (value, docs)
@@ -744,28 +757,47 @@ class HyperrealIndex:
 
         return result_docs
 
-    def match_phrase(self, field_values):
+    def match_phrase(self, field_phrase):
 
-        feature_positions = self._iter_pos_for_features(field_values)
+        feature_positions = self._iter_pos_for_features(field_phrase)
 
-        _, positions = next(feature_positions)
+        _, matches = next(feature_positions)
+        current_shift = 1
 
-        # Match phrases by shifting positions and keeping the parts that line up.
-        # TODO: handle the document edges in the flat positions index.
-        for i, (_, f_positions) in enumerate(feature_positions):
-            offset = -(i + 1)
-            positions &= BitMap64(i + offset for i in f_positions)
+        for _, next_positions in feature_positions:
 
-            if not positions:
-                break
+            for already_matched in list(matches):
 
-        return self.positions_to_docs(field_values.field, positions)
+                test_match = already_matched + current_shift
 
-    def positions_to_docs(self, field, positions):
+                # TODO: index needs to keep track of the group_size when indexing...
+                # This is currently hardcoded.
+                group_shift, test_match = divmod(test_match, 8)
+
+                if group_shift:
+                    next_group_match = next_positions.get(test_match, BitMap())
+                    matches[already_matched] &= next_group_match.shift(-group_shift)
+                else:
+                    matches[already_matched] &= next_positions.get(test_match, BitMap())
+
+            # Remove any empty matches so they don't need to be checked.
+            matches = {
+                mod_position: group for mod_position, group in matches.items() if group
+            }
+
+            current_shift += 1
+
+        if matches:
+            matching_groups = BitMap.union(*matches.values())
+            return self.groups_to_docs(field_phrase.field, matching_groups)
+        else:
+            return BitMap()
+
+    def groups_to_docs(self, field, positions):
 
         pos_docs, pos_doc_starts = list(
             self.db.execute(
-                "SELECT position_doc_ids, position_doc_starts from field_summary where field = ?",
+                "SELECT group_doc_ids, doc_group_starts from field_summary where field = ?",
                 [field],
             )
         )[0]
@@ -791,8 +823,9 @@ class FieldValues:
     field: str
     values: list = dc.field(default_factory=list)
     statistics: collections.defaultdict[list] = dc.field(
-        default_factory=lambda: defaultdict(list)
+        default_factory=lambda: collections.defaultdict(list)
     )
+    range_encoded: bool = False
 
     def to_html(self, idx: HyperrealIndex):
         pass

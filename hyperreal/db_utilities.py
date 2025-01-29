@@ -41,8 +41,7 @@ def connect_sqlite(db_path, row_factory=None):
     )
 
     conn.create_aggregate("roaring_union", 1, RoaringUnion)
-    conn.create_aggregate("roaring_union64", 1, RoaringUnion64)
-    conn.create_aggregate("roaring_shift_union64", 2, RoaringShiftUnion64)
+    conn.create_aggregate("roaring_shift_union", 2, RoaringShiftUnion)
 
     if row_factory:
         conn.row_factory = row_factory
@@ -76,9 +75,7 @@ def load_bitmap64(bm_bytes):
 
 sqlite3.register_adapter(pyroaring.BitMap, save_bitmap)
 sqlite3.register_adapter(pyroaring.FrozenBitMap, save_bitmap)
-sqlite3.register_adapter(pyroaring.BitMap64, save_bitmap)
 sqlite3.register_converter("roaring_bitmap", load_bitmap)
-sqlite3.register_converter("roaring_bitmap64", load_bitmap64)
 
 
 class RoaringUnion:
@@ -99,44 +96,20 @@ class RoaringUnion:
         return save_bitmap(self.bitmap)
 
 
-class RoaringUnion64:
+class RoaringShiftUnion:
     """
-    Allows calling `roaring_union64` as a function inside SQLite group by.
-
-    """
-
-    # pylint: disable=missing-function-docstring
-
-    def __init__(self):
-        self.bitmap = pyroaring.BitMap64()
-
-    def step(self, bitmap):
-        self.bitmap |= pyroaring.BitMap64.deserialize(bitmap)
-
-    def finalize(self):
-        return save_bitmap(self.bitmap)
-
-
-class RoaringShiftUnion64:
-    """
-    Allows calling `roaring_union64` as a function inside SQLite group by.
+    Shift bitset by an offset, then accumulate through union.
 
     """
 
     # pylint: disable=missing-function-docstring
 
     def __init__(self):
-        self.bitmap = pyroaring.BitMap64()
+        self.bitmap = pyroaring.BitMap()
 
-    def step(self, bitmap, shift):
-        # Unfortunately we need to do this the long way - BitMap's support a fast shift
-        # operator, but that isn't implemented for BitMap64's yet.
-        positions: pyroaring.BitMap64 = pyroaring.BitMap64.deserialize(bitmap)
-        # Assumes that the shift is always positive
-        # TODO: validate this.
-        self.bitmap.update(p + shift for p in positions)
-
-        # TODO: possibly only create bitmap64's if necessary?
+    def step(self, bitmap_bytes, shift):
+        bitmap = pyroaring.BitMap.deserialize(bitmap_bytes)
+        self.bitmap |= bitmap.shift(shift)
 
     def finalize(self):
         return save_bitmap(self.bitmap)
