@@ -1,5 +1,5 @@
 """
-A hyperreal corpus models accessing and transforming a collection of documents.
+A HyperrealCorpus models accessing and transforming a collection of documents.
 
 The corpus is the core point to customise hyperreal to work with the specifics of your
 data.
@@ -9,7 +9,6 @@ This corpus interface is designed to enable:
 - working with large collections of documents without loading everything into memory
 - leaving your documents where they are
 - fine-grained control over how your documents are transformed for display and indexing. 
-
 
 Corpus requirements
 
@@ -21,8 +20,6 @@ Indexable docs format -> link to the index_builder documentation.
 
 Links to a corpus design guide in the docs?
 Links to the examples gallery.
-
-Example:
 
 """
 
@@ -232,7 +229,7 @@ class TextfileParagraphsCorpus(HyperrealCorpus):
         self.f = open(self.text_file_path, "r+b")
         self.mm = mmap.mmap(self.f.fileno(), 0, access=mmap.ACCESS_READ)
 
-        self._paragraph_positions = paragraph_positions
+        self._paragraph_positions = None
 
     def __getstate__(self):
         return (
@@ -265,9 +262,9 @@ class TextfileParagraphsCorpus(HyperrealCorpus):
         self.f.close()
 
     @property
-    def paragraph_positions(self):
+    def paragraph_positions(self) -> list[int]:
         """
-        An array with the position of each paragraph as bytes in the text file.
+        A list of the start position of each paragraph as bytes in the text file.
 
         """
 

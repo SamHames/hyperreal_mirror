@@ -25,12 +25,12 @@ import concurrent.futures as cf
 import dataclasses as dc
 import itertools
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, Hashable
 
 from pyroaring import AbstractBitMap, BitMap, BitMap64
 
 from . import corpus, db_utilities, index_builder, value_handlers, index_plugin
-from .feature_cluster import FeatureCluster
+from .feature_cluster import FeatureClustering
 
 
 core_migration = index_plugin.Migration(
@@ -102,7 +102,7 @@ class HyperrealIndex:
         pool: Optional[cf.Executor],
         # TODO: document this -> can take either a class that is initialised with the
         # index, or a Callable that returns an IndexPlugin instance.
-        plugins=(FeatureCluster,),
+        plugins=(FeatureClustering,),
     ):
         """Plugins are initialised once at startup."""
 
@@ -393,7 +393,7 @@ class HyperrealIndex:
 
         self.db.execute("release doc_ids_to_keys")
 
-    def field_values(self, field: str) -> FieldValues:
+    def field_values(self, field: str, min_docs=1) -> FieldValues:
         """
         Return the indexed values for field.
 
@@ -408,9 +408,10 @@ class HyperrealIndex:
             SELECT value, doc_count, position_count
             from inverted_index
             where field = ?
+                and doc_count >= ?
             order by value
             """,
-            [field],
+            [field, min_docs],
         )
         values, doc_counts, position_counts = list(zip(*rows))
         values = [handler.from_index(v) for v in values]
@@ -431,52 +432,81 @@ class HyperrealIndex:
             if any(position_counts):
                 stats["position_count"] = position_counts
 
-        return FieldValues(
-            field=field,
-            values=values,
-            statistics=stats,
-            range_encoded=range_encoded,
-        )
+        return FieldValues(field=field, values=values, statistics=stats)
 
-    def facet_count(self, field, queries: dict[str, AbstractBitMap], value_bins=None):
+    def facet_count(
+        self, field_values: FieldValues, query: AbstractBitMap
+    ) -> FieldValues:
         """
-        Count intersection of each of queries with the full set of values in field.
+        Intersect query with every value in the provided field_values.
+
+        Provides a number of statistics about the relationship between the given query
+        and fields.
 
         Returns:
 
-        - values of the facet
-        - counts of each query intersection with that value facet
-        - total size of the facet, for normalisation purposes
+        FieldValues object with the following statistics:
 
         """
 
-        # Strategy: create a FieldValues object to drive the iteration for this
-        # function.
+        # TODO: might make sense for this to take multiple queries as an input?
+        # So we only load each value's doc once?
+        # This might take some fiddling with the structure of statistics though...
 
-        if value_bins is None:
-            field_values = self.field_values(field)
+        field = field_values.field
 
-        else:
-            handler, range_encoded = self.field_handlers[field]
-            ranges = [
-                slice(left, right) for left, right in zip(value_bins, value_bins[1:])
-            ]
+        values = []
+        doc_counts = []
+        hits = []
+        jaccard_similarity = []
+        value_proportion = []
+        query_proportion = []
 
-        return
+        q_len = len(query)
+        total_docs = self.total_doc_count
 
-    def _match_literal_feature(self, field, index_value):
+        for query_value, (docs, doc_count, _) in self._iter_docs_for_features(
+            field_values
+        ):
+            doc_counts.append(doc_count)
+            inter = query.intersection_cardinality(docs)
+            hits.append(inter)
+
+            # Compute some other derived statistics
+            jaccard_similarity.append(inter / (doc_count + q_len - inter))
+            value_proportion.append(inter / doc_count)
+            query_proportion.append(inter / q_len)
+
+        return FieldValues(
+            field,
+            values=field_values.values,
+            statistics={
+                "doc_count": doc_counts,
+                "hits": hits,
+                "jaccard_similarity": jaccard_similarity,
+                "value_proportion": value_proportion,
+                "query_proportion": query_proportion,
+            },
+        )
+
+    def _match_literal_feature(self, field, index_value) -> tuple[BitMap, int, int]:
 
         matching = list(
             self.db.execute(
-                "SELECT doc_ids from inverted_index where (field, value) = (?, ?)",
+                """
+                SELECT 
+                    doc_ids, doc_count, position_count 
+                from inverted_index 
+                where (field, value) = (?, ?)
+                """,
                 (field, index_value),
             )
         )
 
         if matching:
-            return matching[0][0]
+            return matching[0]
         else:
-            return BitMap()
+            return BitMap(), 0, 0
 
     def _match_literal_feature_pos(self, field, index_value):
 
@@ -493,7 +523,9 @@ class HyperrealIndex:
 
         return {mod_position: group for mod_position, group in matching_rows}
 
-    def _match_range_encoded_literal_feature(self, field, index_value):
+    def _match_range_encoded_literal_feature(
+        self, field, index_value
+    ) -> tuple[BitMap, int, int]:
 
         # Pick the literal value - if this isn't present then we can return immediately
         include_row = list(
@@ -504,11 +536,12 @@ class HyperrealIndex:
         )
 
         if not include_row:
-            return BitMap()
+            return BitMap(), 0, 0
         else:
             include_docs = include_row[0][0]
 
         # Now we retrieve the value that is just prior to the actual value.
+        # This may not exist if we retrieved the smallest value for this field.
         exclude_row = list(
             self.db.execute(
                 """
@@ -522,11 +555,14 @@ class HyperrealIndex:
         )
 
         if exclude_row:
-            return include_docs - exclude_row[0][1]
-        else:
-            return include_docs
+            include_docs -= exclude_row[0][1]
 
-    def _match_slice_feature(self, field, index_value_start, index_value_end):
+        # Note that the position count is always zero for a range-encoded field.
+        return include_docs, len(include_docs), 0
+
+    def _match_slice_feature(
+        self, field, index_value_start, index_value_end
+    ) -> tuple[BitMap, int, int]:
 
         if index_value_start is None and index_value_end is None:
             raise ValueError(
@@ -545,7 +581,7 @@ class HyperrealIndex:
         matching = list(
             self.db.execute(
                 f"""
-                SELECT roaring_union(doc_ids) 
+                SELECT roaring_union(doc_ids), sum(position_count)
                 from inverted_index 
                 {where_clause}
                 """,
@@ -554,9 +590,10 @@ class HyperrealIndex:
         )
 
         if matching:
-            return BitMap.deserialize(matching[0][0])
+            matching_docs = BitMap.deserialize(matching[0][0])
+            return matching_docs, len(matching_docs), matching[0][1]
         else:
-            return BitMap()
+            return BitMap(), 0, 0
 
     def _match_slice_feature_pos(self, field, index_value_start, index_value_end):
 
@@ -591,7 +628,7 @@ class HyperrealIndex:
 
     def _match_range_encoded_slice_feature(
         self, field, index_value_start, index_value_end
-    ):
+    ) -> tuple[BitMap, int, int]:
 
         if index_value_start is None and index_value_end is None:
             raise ValueError(
@@ -651,9 +688,10 @@ class HyperrealIndex:
             if include_row:
                 include_docs = include_row[0][1]
 
-        return include_docs - exclude_docs
+        matching_docs = include_docs - exclude_docs
+        return matching_docs, len(matching_docs), 0
 
-    def _iter_docs_for_features(self, field_values):
+    def _iter_docs_for_features(self, field_values: FieldValues):
         """
         Turn a FieldValues Clause into an iterable of values and docs.
 
@@ -662,9 +700,6 @@ class HyperrealIndex:
 
 
         """
-        # TODO: update nomenclature and make types clear
-        # TODO: what is the public interface? Is it just match_any, match_all?
-        # TODO: should I validate the types as well?
 
         if field_values.field not in self.field_handlers:
             raise ValueError(
@@ -727,12 +762,12 @@ class HyperrealIndex:
                 )
 
     def match_any(self, *field_value_clauses):
-        """Evaluate an OR query across a set of FieldValues."""
+        """Evaluate an OR query across all FieldValues."""
 
         feature_docs = (
             (value, docs)
             for field_values in field_value_clauses
-            for value, docs in self._iter_docs_for_features(field_values)
+            for value, (docs, _, _) in self._iter_docs_for_features(field_values)
         )
 
         result_docs = BitMap()
@@ -742,12 +777,12 @@ class HyperrealIndex:
 
         return result_docs
 
-    def match_all(self, *field_value_clauses):
-        """Evaluate an AND query"""
+    def match_all(self, *field_value_clauses: FieldValues):
+        """Evaluate an AND query over all specified FieldValues."""
         feature_docs = (
             (value, docs)
             for field_values in field_value_clauses
-            for value, docs in self._iter_docs_for_features(field_values)
+            for value, (docs, _, _) in self._iter_docs_for_features(field_values)
         )
 
         _, result_docs = next(feature_docs)
@@ -757,7 +792,18 @@ class HyperrealIndex:
 
         return result_docs
 
-    def match_phrase(self, field_phrase):
+    def match_phrase(self, field_phrase: FieldValues):
+        """
+        Identify documents matching the given phrase.
+
+        The values in the provided FieldValue object are treated as the consecutive
+        words in the query. For example:
+
+        FieldValues('text', values=['to', 'be', 'or', 'not', 'to', 'be'])
+
+        will search for the phrase "to be or not to be" in the text field.
+
+        """
 
         feature_positions = self._iter_pos_for_features(field_phrase)
 
@@ -793,55 +839,92 @@ class HyperrealIndex:
         else:
             return BitMap()
 
-    def groups_to_docs(self, field, positions):
+    def groups_to_docs(self, field: str, group_positions) -> BitMap:
+        """Convert a set of positional matches to doc_ids."""
 
-        pos_docs, pos_doc_starts = list(
+        group_docs, doc_group_starts = list(
             self.db.execute(
-                "SELECT group_doc_ids, doc_group_starts from field_summary where field = ?",
+                """
+                SELECT 
+                    group_doc_ids, 
+                    doc_group_starts 
+                from field_summary 
+                where field = ?
+                """,
                 [field],
             )
         )[0]
 
         docs = BitMap()
 
-        for p in positions:
-            docs.add(pos_docs[pos_doc_starts.rank(p) - 1])
+        for g in group_positions:
+            docs.add(group_docs[doc_group_starts.rank(g) - 1])
 
         return docs
 
 
 @dc.dataclass
 class FieldValues:
-    # Clause or Expression orr FeatureGroup or FieldValuesClause?
-    # Empty value list matches all docs in field?
-    # Empty field matches all docs?
     """
     The basic building block for querying and retrieving documents by their contents.
+
+    A FieldValues object indicates a specific set of values on a specific field that
+    might be used to match content in the index in some manor.
 
     """
 
     field: str
-    values: list = dc.field(default_factory=list)
-    statistics: collections.defaultdict[list] = dc.field(
-        default_factory=lambda: collections.defaultdict(list)
-    )
-    range_encoded: bool = False
+    values: list[field_value] = dc.field(default_factory=list)
+    statistics: dict[str, Iterable[int | float]] = dc.field(default_factory=dict)
 
-    def to_html(self, idx: HyperrealIndex):
-        pass
+    def __post_init__(self):
 
-    def sort_by(self, statistics_key: str, ascending=True):
+        n_values = len(self.values)
+        invalid_stats = []
+
+        for stat_key, stat_values in self.statistics.items():
+            n_stats = len(stat_values)
+            if n_stats != n_values:
+                invalid_stats.append((stat_key, n_stats))
+
+        if invalid_stats:
+            raise ValueError(
+                f"""
+                The number of statistics values don't match the number of values 
+                ({n_values}) for the following fields: {invalid_stats}
+                """
+            )
+
+    def order_by(
+        self, stat_name: str, descending: bool = True, keep_n_values: int = None
+    ):
         """
-        Return a new FieldValues object with values sorted by the given statistic.
+        Return a new FieldValues object with the values sorted according to `stat_name`.
 
         """
 
-        v
+        if stat_name not in self.statistics:
+            raise KeyError(
+                f"{stat_name=} not present on these field values. "
+                f"Valid stat_names are {self.statistics.keys()}"
+            )
 
-        return FieldValues(
-            field=self.field,
+        to_order = self.statistics[stat_name]
+        sort_order = sorted(
+            range(len(to_order)), key=to_order.__getitem__, reverse=descending
         )
 
+        if keep_n_values is not None:
+            sort_order = sort_order[:keep_n_values]
 
-# Building queries? Build up clauses out of field values - these are the basic building
-# blocks of complex queries - query nodes take
+        return type(self)(
+            self.field,
+            values=[self.values[i] for i in sort_order],
+            statistics={
+                key: [stats[i] for i in sort_order]
+                for key, stats in self.statistics.items()
+            },
+        )
+
+    # def __str__(self):
+    #     return f"FieldValues {self.field}: {', '.join(str(v) for v in self.values)}"
