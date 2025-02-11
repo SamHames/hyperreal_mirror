@@ -66,7 +66,6 @@ class IndexPlugin:
 
         self.setup_validate_migrations()
 
-        # TODO: work out the appropriate way to fix the typing
         self.idx = idx
 
     def post_index_rebuild(self) -> None:

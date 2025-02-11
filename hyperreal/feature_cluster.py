@@ -3,13 +3,16 @@ Cluster features on a given index, to provide a navigable index to a corpus.
 
 """
 
+from __future__ import annotations
+
 import dataclasses as dc
 import typing
 
 from .index_plugin import Migration, IndexPlugin
 
 if typing.TYPE_CHECKING:
-    from .index_core import FieldValues
+    from .index_core import Feature, FeatureStatistics, HyperrealIndex
+
 
 cluster_migration = Migration(
     from_version=None,
@@ -51,10 +54,11 @@ cluster_migration = Migration(
 
 
 @dc.dataclass
-class Cluster:
+class FeatureCluster:
 
+    idx: HyperrealIndex
     cluster_id: typing.Optional[int] = None
-    features: list = dc.field(default_factory=list)
+    features: set[Feature] | FeatureStatistics = dc.field(default_factory=set)
     statistics: dict = dc.field(default_factory=dict)
 
 
@@ -65,63 +69,32 @@ class FeatureClustering(IndexPlugin):
     current_version = "1"
     migrations = [cluster_migration]
 
+    def post_index(self):
+        """Regenerate docs matching each cluster and individual feature statistics."""
+        # TODO
+        pass
+
     @property
-    def cluster_ids(self):
+    def cluster_ids(self) -> list[int]:
         """Return the list of all defined clusters."""
         rows = self.idx.db.execute("select cluster_id from cluster")
         return [row[0] for row in rows]
 
-    def post_index(self):
-        """Regenerate docs matching each cluster and individual features statistics."""
-        # TODO
+    def load_cluster(self, cluster_id: int):
+        """Load the given cluster."""
         pass
 
-    def pivot_clusters_by_query(self, query):
+    def load_clustering(self):
+        """Load all clusters."""
+        pass
+
+    def pivot_clusters_by_query(self, query_result):
         # TODO: it feels like this should also return either field values or queries?
         # That's beginning to feel like the unifying interface that makes this work...
         # Can we attach some statistics to queries or to field values or something like
         # that. (Can we make field values a base query?).
         pass
 
-    def _construct_mmap(self, queries, mmap_path):
-        """
-        Materialise queries into a file suitable for memory mapping.
-
-        This enables performance optimisation in three ways:
-
-        - by skipping the SQLite overhead of retrieving features through the blob
-          interface: this is not normally an issue for even complex queries, but for
-          clustering we access every provided feature on every iteration.
-        - by materialising arbitrary queries once at the beginning of the clustering
-          process.
-        - by representing the provided queries as a compact integer offset, enabling
-          intermediate parts of the clustering process to be represented by memory
-          efficient arrays.
-
-        """
-
-        current_start = 0
-        starts = array.array("q", (0 for _ in features))
-        ends = array.array("q", (0 for _ in features))
-
-        with idx, open(mmap_path, "wb") as mm:
-            for i, query in enumerate(queries):
-                docs = query.evalaute(self.idx)
-                docs.run_optimize()
-                docs.shrink_to_fit()
-                docs = docs.serialize()
-
-                size = len(docs)
-
-                mm.write(docs)
-
-                starts[i] = current_start
-                current_start += size
-                ends[i] = current_start
-
-        return starts, ends
-
-    # A feature can be in at most one cluster.
     def delete_cluster(self, cluster_id):
         pass
 
@@ -278,6 +251,46 @@ class FeatureClustering(IndexPlugin):
             cluster_id: {features[feature_id] for feature_id in cluster_features}
             for cluster_id, cluster_features in leaf_features.items()
         }
+
+
+def _construct_mmap(idx, features, mmap_path):
+    """
+    Materialise features into a file suitable for memory mapping.
+
+    This enables performance optimisation in three ways:
+
+    - by skipping the SQLite overhead of retrieving features through the blob
+      interface: this is not normally an issue for even complex features, but for
+      clustering we access every provided feature on every iteration.
+    - by materialising arbitrary features once at the beginning of the clustering
+      process.
+    - by representing the provided features as a compact integer offset, enabling
+      intermediate parts of the clustering process to be represented by memory
+      efficient arrays.
+
+    """
+
+    current_start = 0
+    starts = array.array("q", (0 for _ in features))
+    ends = array.array("q", (0 for _ in features))
+
+    # TODO: make sure to close the index - think about the interface here.
+    with idx, open(mmap_path, "wb") as mm:
+        for i, feature in enumerate(features):
+            docs = idx[feature]
+            docs.run_optimize()
+            docs.shrink_to_fit()
+            docs = docs.serialize()
+
+            size = len(docs)
+
+            mm.write(docs)
+
+            starts[i] = current_start
+            current_start += size
+            ends[i] = current_start
+
+    return starts, ends
 
 
 def _score_proposed_moves(pool, mmap_file, clustering, check_features, top_k, offsets):

@@ -1,14 +1,15 @@
 """
 
-indexable_docs format
-
 rebuild is the core interface -- and is grafted onto the main Index object. Everything
 else comes from the provided corpus.
 
 Citation: the flat index position format.
 Citation: roaring bitmaps.
 
-Pointer to a description of the index layout on disk - possibly in the docs folder?
+TODO: document indexable_docs format 
+
+TODO: Pointer to a description of the index layout on disk - possibly in the docs
+folder?
 
 """
 
@@ -34,6 +35,7 @@ def build_index(
     pool: cf.Executor,
     doc_batch_size: int = 1000,
     max_workers: Optional[int] = None,
+    passage_group_size=16,
 ):
     """
     (Re)Build the index of the given corpus at the given database.
@@ -78,6 +80,7 @@ def build_index(
                     current_doc_id,
                     doc_key_batch,
                     doc_batch_size,
+                    passage_group_size,
                 )
             )
 
@@ -88,7 +91,7 @@ def build_index(
             start_doc_id, merge_from = segment.result()
             _merge_into(start_doc_id, merge_from, merge_segments)
 
-        _finalise_into(merge_segments, db_path)
+        _finalise_into(merge_segments, db_path, passage_group_size)
 
 
 def _batch(sequence, batch_size):
@@ -168,6 +171,7 @@ def _make_segment(
     start_doc_id: int,
     doc_keys: Iterable[corpus.DocKey],
     doc_batch_size: int,
+    passage_group_size: int,
 ):
     """Make an on-disk segment representing the index for this group of documents."""
 
@@ -198,7 +202,9 @@ def _make_segment(
                 batch_segment_header,
                 insert_order,
                 field_positions,
-            ) = _prepare_doc_batch(corp, next_doc_id, field_positions, batch_docs)
+            ) = _prepare_doc_batch(
+                corp, next_doc_id, field_positions, batch_docs, passage_group_size
+            )
 
             # Write this batch to the staging segment.
             _stage_doc_batch(
@@ -256,7 +262,9 @@ class _FieldBatchHeader:
     stored_sorted: bool = False
 
 
-def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys, group_size=8):
+def _prepare_doc_batch(
+    corpus, start_doc_id, field_positions, doc_keys, passage_group_size
+):
     """
     Process this group of docs into a Python structure suitable for serialising.
 
@@ -331,19 +339,24 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys, group_si
                 next_position = start_position = field_positions[field]
 
                 for value in values:
-                    group, offset = divmod(next_position, group_size)
+                    group, offset = divmod(next_position, passage_group_size)
                     batch_field[value].group_positions[offset].add(group)
                     next_position += 1
 
-                # After a field in a document finishes, advance by group_size(-1 because
-                # we already advanced after the last position). This leaves 'holes'
-                # and 'wastes' space, but means we don't have to worry about document
-                # boundaries for offsets < group_size. This also means that documents
-                # never overlap in a group.
+                # After a field in a document finishes, move the position counter so as
+                # to consume the remainder of the current group, and consume the next
+                # group, leaving a blank group between. The blank group simplifies all
+                # handling of edge cases for both passage and positional queries, as we
+                # don't need to worry about overlapping documents unless the checked
+                # offset is large.
 
-                # TODO: do we need to optimise this in some way, how do we pick the
-                # groupsize and the offset size range here reasonably?
-                next_position += group_size - 1
+                # Note: subtract 1 as we just added a value before, which might have
+                # pushed us into a new group already.
+                group, offset = divmod(next_position - 1, passage_group_size)
+                remaining_in_group = passage_group_size - offset
+                next_position += passage_group_size + remaining_in_group - 1
+
+                assert next_position % passage_group_size == 0
 
                 # Keep track of the doc-positional mapping
                 batch_segment_header[field].docs_w_positions.add(doc_id)
@@ -351,10 +364,10 @@ def _prepare_doc_batch(corpus, start_doc_id, field_positions, doc_keys, group_si
                 # the [start, end) range - this will be redundant for all of the
                 # instances except the first and last.
                 batch_segment_header[field].doc_group_ranges.add(
-                    start_position // group_size
+                    start_position // passage_group_size
                 )
                 batch_segment_header[field].doc_group_ranges.add(
-                    next_position // group_size
+                    next_position // passage_group_size
                 )
 
                 batch_segment_header[field].positions_indexed += position_count
@@ -581,7 +594,7 @@ def _merge_into(first_doc_id, from_segment, to_segment):
             raise
 
 
-def _finalise_into(from_segment, to_final):
+def _finalise_into(from_segment, to_final, passage_group_size):
     """
     Merge everything into the final destination index database.
 
@@ -598,6 +611,11 @@ def _finalise_into(from_segment, to_final):
         try:
             db.execute("attach ? as 'final'", [str(to_final)])
             db.execute("begin")
+
+            db.execute(
+                "replace into index_setting values(?, ?)",
+                ("passage_group_size", passage_group_size),
+            )
 
             # new doc_keys
             db.execute("DELETE from final.doc_key")

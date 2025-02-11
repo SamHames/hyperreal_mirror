@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 
 from pyroaring import AbstractBitMap, BitMap
 
-from .index_core import HyperrealIndex, FieldValues
+from .index_core import HyperrealIndex, Feature
 
 
 @runtime_checkable
@@ -34,7 +34,7 @@ class Query(Protocol):
 
 class MatchAny(Query):
 
-    def __init__(self, *args: Query | FieldValues | AbstractBitMap):
+    def __init__(self, *args: Query | Feature | AbstractBitMap):
         self.args = args
 
         # TODO - validate input arguments in general?
@@ -57,15 +57,15 @@ class MatchAny(Query):
             if isinstance(arg, AbstractBitMap):
                 result |= arg
 
-            elif isinstance(arg, FieldValues):
-                result |= idx.match_any(arg)
+            elif isinstance(arg, tuple):
+                result |= idx[arg][0]
 
         return result
 
 
 class MatchAll(Query):
 
-    def __init__(self, *args: Query | FieldValues | AbstractBitMap):
+    def __init__(self, *args: Query | Feature | AbstractBitMap):
         self.args = args
 
     def evaluate(self, idx: HyperrealIndex):
@@ -77,29 +77,29 @@ class MatchAll(Query):
         if isinstance(self.args[0], Query):
             result = self.args[0].evaluate(idx)
 
-        elif isinstance(self.args[0], FieldValues):
-            result = idx.match_all(self.args[0])
-
         elif isinstance(self.args[0], AbstractBitMap):
             result = self.args[0]
+
+        elif isinstance(self.args[0], tuple):
+            result = idx[self.args[0]][0]
 
         for arg in self.args[1:]:
 
             if isinstance(arg, Query):
                 result &= arg.evaluate(idx)
 
-            elif isinstance(arg, FieldValues):
-                result &= idx.match_all(arg)
-
             elif isinstance(arg, AbstractBitMap):
                 result &= arg
+
+            elif isinstance(arg, tuple):
+                result &= idx[0][0]
 
         return result
 
 
 class MatchPhrase(Query):
-    def __init__(self, field_phrase: FieldValues):
-        self.field_phrase = field_phrase
+    def __init__(self, *features):
+        self.features = features
 
     def evalute(self, idx: HyperrealIndex):
-        return idx.match_phrase(self.field_phrase)
+        return idx.match_phrase(*features)

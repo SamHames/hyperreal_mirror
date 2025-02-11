@@ -16,7 +16,7 @@ Corpus requirements
 - streamable, don't hold documents in memory, encourage only holding the one document
 - efficiently retrieve arbitrary sets of documents
 
-Indexable docs format -> link to the index_builder documentation.
+TODO: Indexable docs format -> link to the index_builder documentation.
 
 Links to a corpus design guide in the docs?
 Links to the examples gallery.
@@ -202,6 +202,8 @@ def boundary_tokeniser(text: str) -> list[str]:
     ]
 
 
+# TODO: Add a corpus for the standard folder full of text files. Possibly using the
+# folder as some kind of metadata
 class TextfileParagraphsCorpus(HyperrealCorpus):
 
     def __init__(
