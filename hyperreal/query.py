@@ -6,22 +6,28 @@ serialising and displaying queries as HTML and in other formats.
 
 """
 
-from typing import Protocol, runtime_checkable
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable, TYPE_CHECKING
 
 from pyroaring import AbstractBitMap, BitMap
 
-from .index_core import HyperrealIndex, Feature
+if TYPE_CHECKING:
+    from .index_core import HyperrealIndex, Feature
 
 
 @runtime_checkable
 class Query(Protocol):
-    # TODO: make this a fragment, and make sure it prints nicely.
+
+    args: list
+
     def evaluate(self, idx: HyperrealIndex) -> BitMap:
         pass
 
     def to_html(self, idx: HyperrealIndex) -> str:
         pass
 
+    # TODO: make this a fragment, and make sure it prints nicely.
     # serialize_index, html, str? Can we do something there with that?
     # Serialising to str is serialising to a querystring in a url?
     # Also that means the from_str serialisation matters :)
@@ -40,6 +46,8 @@ class MatchAny(Query):
         # TODO - validate input arguments in general?
         # This should probably only need to be in the init for each - the validation
         # will take place at each layer.
+        # TODO - a bitmap is a valid query, but do we actually want to be able to
+        # serialise it? Could possibly only serialise queries and features...
 
     def evaluate(self, idx: HyperrealIndex):
 
@@ -94,12 +102,16 @@ class MatchAll(Query):
             elif isinstance(arg, tuple):
                 result &= idx[0][0]
 
+            # If the result set is already empty, we can return empty straight away.
+            if not result:
+                return result
+
         return result
 
 
 class MatchPhrase(Query):
-    def __init__(self, *features):
-        self.features = features
+    def __init__(self, *args: Feature):
+        self.args = args
 
     def evalute(self, idx: HyperrealIndex):
-        return idx.match_phrase(*features)
+        return idx.match_phrase(*args)

@@ -141,6 +141,7 @@ class HyperrealIndex:
             """
         )
         self.db.execute("pragma journal_mode=WAL")
+        self.db.execute("pragma foreign_keys=ON")
 
         try:
             self.db.execute("begin")
@@ -275,10 +276,7 @@ class HyperrealIndex:
                     handler.stored_sorted,
                 ) == (1, 0, True)
 
-                _field_handlers[field] = (
-                    handler,
-                    range_encoded,
-                )
+                _field_handlers[field] = (handler, range_encoded, cardinality)
 
             self._field_handlers = _field_handlers
 
@@ -435,7 +433,7 @@ class HyperrealIndex:
 
         self.db.execute("release doc_ids_to_keys")
 
-    def field_features(self, field: str, min_docs=1) -> FeatureStatistics:
+    def field_features(self, field: str, min_docs: int = 1) -> FeatureStatistics:
         """
         Return the indexed features for field.
 
@@ -448,7 +446,7 @@ class HyperrealIndex:
         # TODO: min_docs can't be set with a range encoded field as it may filter
         # things in appropriately...
 
-        handler, range_encoded = self.field_handlers[field]
+        handler, range_encoded, _ = self.field_handlers[field]
 
         features = {}
 
@@ -530,7 +528,7 @@ class HyperrealIndex:
         value_spec = feature[1:]
 
         try:
-            handler, range_encoded = self.field_handlers[field]
+            handler, range_encoded, _ = self.field_handlers[field]
         except KeyError:
             raise KeyError(f"Field '{field}' does not exist on this index.")
 
@@ -769,7 +767,7 @@ class HyperrealIndex:
         if field not in self.field_handlers:
             raise ValueError(f"Field '{field}' does not exist on this index.")
 
-        handler, _ = self.field_handlers[field]
+        handler, _, _ = self.field_handlers[field]
 
         for field, value in features:
             if isinstance(value, slice):

@@ -5,9 +5,22 @@ Cluster features on a given index, to provide a navigable index to a corpus.
 
 from __future__ import annotations
 
+import array
+import collections
+import concurrent.futures as cf
+import contextlib
 import dataclasses as dc
+import itertools
+import math
+import mmap
+import os
+import random
+import tempfile
 import typing
 
+from pyroaring import BitMap
+
+from . import query
 from .index_plugin import Migration, IndexPlugin
 
 if typing.TYPE_CHECKING:
@@ -29,24 +42,70 @@ cluster_migration = Migration(
         )
         """,
         """
-        CREATE table cluster_feature (
+        CREATE table feature_cluster (
             field text not null,
             value,
             value_start,
             value_end,
-            cluster_id integer not null,
+            cluster_id integer not null references cluster on delete cascade,
             doc_count integer default 0,
-            primary key (field, value),
-            -- Note that this relies on SQLite and other databases handling of unique
-            -- with nulls - typically for unique constraints all nulls are considered
-            -- distinct so a field, value of ('text', null) is distinct from a separate
-            -- ('text', null) value.
-            unique(field, value),
-            unique(field, value_start, value_end),
             constraint at_least_one_value check(
                 coalesce(value, value_start, value_end) is not null
             )
         )
+        """,
+        """
+        CREATE unique index cluster_field_value on feature_cluster(field, value) 
+        where value_start is null and value_end is null 
+        """,
+        """
+        CREATE unique index cluster_field_value_start on feature_cluster(
+            field, value_start, value_end
+        ) 
+        where value is null 
+        """,
+        """
+        CREATE index cluster_feature on feature_cluster(cluster_id, doc_count desc);
+        -- Allow efficiently retrieving features for a given cluster
+        """,
+        """
+        CREATE index feature_null_doc_count on feature_cluster(
+            -- Allow efficiently retrieving features that need statistics created
+            field, value, value_start, value_end
+        ) where doc_count is null;
+        """,
+        """
+        CREATE table changed_cluster(
+            /* 
+            Track any clusters that have their saved features changed.
+
+            This is necessary to know which clusters need to be cleaned up, or have
+            their docs rematerialised.
+
+            */
+            cluster_id integer primary key references cluster
+        );
+        """,
+        """
+        CREATE trigger changing_cluster after insert on changed_cluster
+        begin
+            insert or ignore into cluster(cluster_id) values (new.cluster_id);
+        end
+        """,
+        """
+        CREATE trigger insert_changed_clusters before insert on feature_cluster
+        begin
+            -- Track clusters of inserted features
+            insert or ignore into changed_cluster(cluster_id) values (new.cluster_id);
+        end;
+        """,
+        """
+        CREATE trigger delete_changed_clusters before delete on feature_cluster
+        begin
+            -- Track clusters of deleted features
+            insert or ignore into changed_cluster(cluster_id) 
+                values (old.cluster_id);
+        end;
         """,
     ],
     description="Create the main tables for holding a clustering of features.",
@@ -54,7 +113,7 @@ cluster_migration = Migration(
 
 
 @dc.dataclass
-class FeatureCluster:
+class DisplayCluster:
 
     idx: HyperrealIndex
     cluster_id: typing.Optional[int] = None
@@ -62,8 +121,15 @@ class FeatureCluster:
     statistics: dict = dc.field(default_factory=dict)
 
 
+if typing.TYPE_CHECKING:
+    Clustering = dict[typing.Hashable, set[Feature] | FeatureStatistics]
+
+
 class FeatureClustering(IndexPlugin):
-    """ """
+    """
+    The materialised state and configuration of clusters of features on an index.
+
+    """
 
     plugin_name = "feature_clusters"
     current_version = "1"
@@ -71,8 +137,98 @@ class FeatureClustering(IndexPlugin):
 
     def post_index(self):
         """Regenerate docs matching each cluster and individual feature statistics."""
-        # TODO
-        pass
+
+        self.idx.db.execute("savepoint post_index")
+        self.idx.db.executemany(
+            "insert or ignore into changed_cluster values(?)",
+            ((c,) for c in self.cluster_ids),
+        )
+        self._update_changed_clusters()
+
+        # Clear out the feature_cluster table statistics, so they can be regenerated.
+        self.idx.db.execute("update feature_cluster set doc_count = null")
+
+        self._update_feature_statistics()
+
+        self.idx.db.execute("release post_index")
+
+    def _row_from_feature(self, feature: Feature):
+
+        field = feature[0]
+        handler, _ = self.idx.field_handlers[field]
+
+        if len(feature) == 2:
+            value = feature[1]
+            return (field, handler.to_index(value), None, None)
+        elif len(feature) == 3:
+            value_start, value_end = feature[1:]
+            if value_start is not None:
+                value_start = handler.to_index(value_start)
+            if value_end is not None:
+                value_end = handler.to_index(value_end)
+
+            return (field, None, value_start, value_end)
+        else:
+            raise ValueError(f"Invalid {feature=}")
+
+    def _feature_from_row(self, row):
+        """
+        Extract a feature from the selected row.
+
+        The first four rows of the query must be field, value, value_start, value_end.
+
+        This will return a feature, followed by the remaining contents of the row.
+
+        """
+
+        field, value, value_start, value_end = row[:4]
+        rest_of_row = row[4:]
+
+        handler, _ = self.idx.field_handlers[field]
+
+        if value is not None:
+            feature = (field, handler.from_index(value))
+
+        else:
+            if value_start is not None:
+                value_start = handler.from_index(value_start)
+            if value_end is not None:
+                value_end = handler.from_index(value_end)
+
+            feature = (field, value_start, value_end)
+
+        return feature, rest_of_row
+
+    def _update_changed_clusters(self):
+        self.idx.db.execute("savepoint _update_changed_clusters")
+
+        changed_clusters = self.idx.db.execute("select cluster_id from changed_cluster")
+
+        for (cluster_id,) in changed_clusters:
+            pass
+
+        self.idx.db.execute("release _update_changed_clusters")
+
+    def _update_feature_statistics(self):
+        self.idx.db.execute("savepoint _update_feature_statistics")
+
+        to_update = self.idx.db.execute(
+            """
+            SELECT field, value, value_start, value_end, rowid
+            from feature_cluster 
+            where doc_count is null
+            """
+        )
+
+        for row in to_update:
+            feature, [rowid] = self._feature_from_row(row)
+            _, doc_count, _ = self.idx[feature]
+            self.idx.db.execute(
+                "update feature_cluster set doc_count = ? where rowid = ?",
+                (doc_count, rowid),
+            )
+
+        self.idx.db.execute("release _update_feature_statistics")
 
     @property
     def cluster_ids(self) -> list[int]:
@@ -80,182 +236,334 @@ class FeatureClustering(IndexPlugin):
         rows = self.idx.db.execute("select cluster_id from cluster")
         return [row[0] for row in rows]
 
-    def load_cluster(self, cluster_id: int):
-        """Load the given cluster."""
+    def create_new_empty_cluster(self) -> int:
+        """
+        Create a new empty cluster, returning the new cluster_id.
+
+        """
+        self.idx.db.execute("savepoint create_new_cluster")
+        self.idx.db.execute("insert into cluster(cluster_id) values(null)")
+        cluster_id = list(self.idx.db.execute("select last_insert_rowid()"))[0][0]
+        self.idx.db.execute("release create_new_cluster")
+
+        return cluster_id
+
+    def _replace_features_for_cluster(self, cluster_id, features):
+        self.idx.db.execute("savepoint _replace_features_for_cluster")
+
+        self.idx.db.executemany(
+            """
+            REPLACE into feature_cluster(
+                field, value, value_start, value_end, cluster_id
+            )
+            values(?, ?, ?, ?, ?)
+            """,
+            ((*self._row_from_feature(f), cluster_id) for f in features),
+        )
+
+        self.idx.db.execute("release _replace_features_for_cluster")
+
+    def create_cluster_from_features(self, features: Iterable[Feature]) -> int:
+        """
+        Create a new cluster from the given features.
+
+        Features that are present on the clustering will be reassigned to the new
+        cluster.
+
+        """
+
+        self.idx.db.execute("savepoint create_cluster_from_features")
+        new_cluster_id = self.create_new_empty_cluster()
+
+        self._replace_features_for_cluster(new_cluster_id, features)
+
+        self.idx.db.execute("savepoint create_cluster_from_features")
+
+    def update_clustering(self, clustering: Clustering):
+        """
+        Update the clustering, ensuring all defined features are on the given clusters.
+
+        This function will reassign features if already present, add new features if not
+        present, and will leave all features not referenced as they are. New clusters
+        will be created to match any cluster_ids that aren't already present.
+
+        See also: replace_clustering. To completely replace a clustering.
+
+        """
+        self.idx.db.execute("savepoint update_clustering")
+
+        for cluster_id, features in clustering.items():
+            self._replace_features_for_cluster(cluster_id, features)
+
+        self.idx.db.execute("savepoint update_clustering")
+
+    def replace_clustering(self, clustering: Clustering):
+        """
+        Delete the currently defined clustering, and create a new clustering.
+
+        """
+
+        self.idx.db.execute("savepoint replace_clustering")
+
+        self.delete_clusters(self.cluster_ids)
+
+        for cluster_id, features in clustering.items():
+            self._replace_features_for_cluster(cluster_id, features)
+
+        self.idx.db.execute("savepoint replace_clustering")
+
+    def delete_clusters(self, cluster_ids: Iterable[int]) -> None:
         pass
 
-    def load_clustering(self):
-        """Load all clusters."""
+    def delete_features(self, features: Iterable[Feature]) -> None:
+        """Delete specified features from the clustering (if present)."""
         pass
 
-    def pivot_clusters_by_query(self, query_result):
-        # TODO: it feels like this should also return either field values or queries?
-        # That's beginning to feel like the unifying interface that makes this work...
-        # Can we attach some statistics to queries or to field values or something like
-        # that. (Can we make field values a base query?).
+    def cluster_docs(self, cluster_id: int) -> BitMap:
+        """Return the documents matching the given bitmap."""
         pass
 
-    def delete_cluster(self, cluster_id):
-        pass
+    def lookup_cluster_for_feature(self, feature: Feature) -> Optional[int]:
+        """
+        Return the cluster_id of the given feature (if present).
 
-    def set_feature_cluster(self):
-        pass
+        Returns None if the feature is not assigned to any cluster.
 
-    def save_clustering(self, clustering):
-        pass
+        """
 
-    def save_cluster(self, cluster_id, cluster):
-        pass
+    def suggested_clustering_fields(self):
+        """
+        Returns suggested fields for creating a clustering.
 
-    def convert_clustering_to_target_clusters(self, clustering):
-        pass
+        The suggested fields are the fields that are indexed as more than one value
+        per document, such as tokens for text and tags for other documents.
 
-    def refine_clustering(
+        """
+
+        # TODO: check an optional attribute on the corpus.
+
+        return {
+            field
+            for field, (_, _, cardinality) in self.idx.field_handlers.items()
+            if cardinality > 1
+        }
+
+    def initialise_random_clustering(
         self,
-        clustering: list[Cluster],
-        target_clusters: typing.Optional[int] = None,
-        iterations=10,
-        layer_sizes=None,
-        random_seed=None,
-        layer_checks=2,
-        feature_fraction_termination_tolerance=0.05,
+        n_clusters: int,
+        min_docs: int = 10,
+        include_fields=None,
     ):
         """
-        Given a clustering, refine it for the given number of iterations.
+        If include_fields is None, will create initial clusters using
+        suggested_clustering_fields.
 
         """
+        if include_fields is not None:
+            indexed_fields = set(self.idx.field_handlers)
+
+            if invalid_fields := set(include_fields) - indexed_fields:
+                raise ValueError(f"Fields {include_fields} do not exist on this index.")
+
+            fields = set(include_fields)
+
+        else:
+            fields = self.suggested_clustering_fields()
+
+        valid_features = []
+
+        for field in fields:
+            valid_features.extend(self.idx.field_features(field, min_docs=min_docs))
+
+        random.shuffle(valid_features)
+
+        clusters = {i: set(valid_features[i::n_clusters]) for i in range(n_clusters)}
+
+        return clusters
+
+    def _refine_clustering(
+        self,
+        clustering: Clustering,
+        iterations: int = 10,
+        random_seed: typing.Optional[int] = None,
+        group_test_n_clusters: typing.Optional[int] = None,
+        random_group_checks: int = 1,
+        moving_feature_fraction_tolerance: float = 0.05,
+    ) -> Clustering:
+
+        # TODO: work out better way to manage state. Might be better to pass in a
+        # random.Random object instead as an optional parameter? To allow keeping it
+        # consistent across a chain of results.
         rand = random.Random(random_seed)
 
-        # Construct equally sized random clusters for the initialisation.
-        features = list(features)
-        feature_ids = list(range(len(features)))
-        rand.shuffle(feature_ids)
-        n_features = len(feature_ids)
+        # Part 1, as preparation we'll convert all the features into integer surrogate
+        # keys for memory mapping.
+        surrogate_clusters = {}
+        features = []
+        current_feature_id = 0
 
-        # This is the clustering initialisation
-        leaf_features = {
-            leaf_id: set(feature_ids[leaf_id::n_clusters])
-            for leaf_id in range(n_clusters)
+        # Generate surrogate identifiers for each feature, and reconstruct the
+        # clustering with respect to these surrogates.
+        for cluster, cluster_features in clustering.items():
+            feature_ids = set()
+
+            for f in cluster_features:
+                features.append(f)
+                feature_ids.add(current_feature_id)
+                current_feature_id += 1
+
+            surrogate_clusters[cluster] = feature_ids
+
+        # Inverse mapping from surrogate id to cluster.
+        surrogate_feature_cluster = {
+            f_id: cluster_id
+            for cluster_id, surrogates in surrogate_clusters.items()
+            for f_id in surrogates
         }
-        # This is the index of features to clusters to make moves easier to compute.
-        feature_leaves = {
-            feature_id: leaf_id
-            for leaf_id, fs in leaf_features.items()
-            for feature_id in fs
-        }
 
-        leaf_ids = list(leaf_features.keys())
+        n_features = len(features)
+        n_clusters = len(surrogate_clusters)
+        # will be used to randomise the order of feature checks for moving between
+        # clusters.
+        feature_check_order = array.array("q", surrogate_feature_cluster)
 
-        layer_sizes = layer_sizes or []
+        leaf_ids = list(surrogate_clusters.keys())
 
-        last_layer = n_clusters
-        for layer_size in layer_sizes:
-            if layer_size / last_layer > 0.5:
-                raise ValueError(
-                    "Each layer needs to be at most half the size of the last."
-                )
-            if layer_size <= 2:
-                raise ValueError("Layer size should be larger than 2 groups.")
-            last_layer = layer_size
+        if (
+            group_test_n_clusters is not None
+            and group_test_n_clusters > n_clusters * 0.5
+        ):
+            raise ValueError(
+                f"{group_test_n_clusters=} must be less than half of {n_clusters=} to "
+                "have any benefit"
+            )
 
         # Construct the mmap of index features for faster loading/saving
         with tempfile.TemporaryDirectory() as tmpdir:
             working_file = os.path.join(tmpdir, "mmap.temp")
 
-            # Defer the construction of the memory map to the background process - this
-            # also avoids the awkwardness of the with idx: construction closing the idx
-            # passed in...
-            future = idx.pool.submit(construct_mmap, idx, features, working_file)
+            # Construct the mmap in the background - this might take a little bit.
+            future = self.idx.pool.submit(
+                _construct_mmap, self.idx, features, working_file
+            )
             offsets = future.result()
 
-            all_features = set(feature_leaves)
+            all_features = set(surrogate_feature_cluster)
 
             for iteration in range(iterations):
 
-                if layer_sizes:
+                if group_test_n_clusters is None:
 
-                    # Generate the hierarchy of leaves to check against
-                    rand.shuffle(leaf_ids)
-
-                    # We're going to generate surrogate keys for all of the layers
-                    # so all references to a cluster are to a single integer.
-                    key_maps = {leaf_id: leaf_id for leaf_id in leaf_ids}
-                    next_key = max(leaf_features) + 1
-
-                    layer_features = [leaf_features]
-
-                    for layer_size in layer_sizes:
-                        next_layer_features = list(layer_features[-1])
-                        rand.shuffle(next_layer_features)
-
-                        group_features = {}
-                        for i in range(layer_size):
-                            group = tuple(next_layer_features[i::layer_size])
-                            key_maps[next_key] = group
-                            group_features[next_key] = set.union(
-                                *(layer_features[-1][subgroup] for subgroup in group)
-                            )
-                            next_key += 1
-                        layer_features.append(group_features)
-
-                    # Dense check against the coarsest layer to initialise
+                    # Slow path: check all features against all clusters.
                     check_features = {
-                        cluster_key: all_features for cluster_key in layer_features[-1]
+                        leaf_id: all_features
+                        for leaf_id, lf in surrogate_clusters.items()
                     }
-
-                    for i, layer in enumerate(reversed(layer_features[1:])):
-                        objective_estimate, best_move_scores = _score_proposed_moves(
-                            idx,
-                            working_file,
-                            layer,
-                            check_features,
-                            layer_checks,
-                            offsets,
-                        )
-
-                        check_features = collections.defaultdict(set)
-                        for feature_id, scores in best_move_scores.items():
-                            for _, group in scores:
-                                for subgroup in key_maps[group]:
-                                    check_features[subgroup].add(feature_id)
 
                 else:
-                    # At the top level of granularity, check all features against the
-                    # combined clusters. Note that at every layer we always check a feature
-                    # against it's current cluster, regardless of where the best move is
-                    # estimated to be.
-                    check_features = {
-                        leaf_id: all_features for leaf_id, lf in leaf_features.items()
+                    # Fast and approximate path: conduct group tests, checking features
+                    # against unions of clusters to avoid checking all features against
+                    # all clusters.
+                    rand.shuffle(leaf_ids)
+
+                    group_keys = [
+                        leaf_ids[i::group_test_n_clusters]
+                        for i in range(group_test_n_clusters)
+                    ]
+
+                    group_cluster_features = {
+                        i: set.union(*(surrogate_clusters[c] for c in keys))
+                        for i, keys in enumerate(group_keys)
                     }
 
-                objective_estimate, best_move_scores = _score_proposed_moves(
-                    idx, working_file, leaf_features, check_features, 1, offsets
-                )
+                    group_check_features = {
+                        i: all_features for i, _ in enumerate(group_keys)
+                    }
 
-                possible_moves, moves_made = _apply_moves(
-                    best_move_scores, feature_ids, leaf_features, feature_leaves, rand
-                )
-
-                idx.logger.info(
-                    f"{iteration=}, {objective_estimate=}, {possible_moves=}, {moves_made=}"
-                )
-
-                if possible_moves / n_features < feature_fraction_termination_tolerance:
-                    idx.logger.info(
-                        f"Terminating at {iteration=} due to small number of moves."
+                    objective_estimate, best_moves = _score_proposed_moves(
+                        self.idx.pool,
+                        working_file,
+                        group_cluster_features,
+                        group_check_features,
+                        offsets,
                     )
+
+                    check_features = collections.defaultdict(set)
+
+                    for feature_id, best_cluster_group in enumerate(best_moves):
+                        # Test against the best group, plus a random sample of other
+                        # groups.
+                        random_groups = rand.sample(group_keys, random_group_checks)
+                        best_group = group_keys[best_cluster_group]
+                        test_clusters = itertools.chain(best_group, *random_groups)
+
+                        for cluster_id in test_clusters:
+                            check_features[cluster_id].add(feature_id)
+
+                objective_estimate, best_clusters = _score_proposed_moves(
+                    self.idx.pool,
+                    working_file,
+                    surrogate_clusters,
+                    check_features,
+                    offsets,
+                )
+
+                rand.shuffle(feature_check_order)
+                possible_moves, moves_made = _apply_moves(
+                    best_clusters,
+                    feature_check_order,
+                    surrogate_clusters,
+                    surrogate_feature_cluster,
+                    rand,
+                )
+
+                if possible_moves / n_features < moving_feature_fraction_tolerance:
                     break
 
         # Convert the feature_ids back to features for the return
         return {
             cluster_id: {features[feature_id] for feature_id in cluster_features}
-            for cluster_id, cluster_features in leaf_features.items()
+            for cluster_id, cluster_features in surrogate_clusters.items()
         }
 
+    def refine_clustering(
+        self,
+        cluster_ids: typing.Optional[Iterable[int]] = None,
+        target_clusters: typing.Optional[int] = None,
+        iterations: int = 10,
+        layer_sizes: typing.Optional[list[int]] = None,
+        random_seed: typing.Optional[int] = None,
+        layer_checks: int = 2,
+        moving_feature_fraction_tolerance: float = 0.05,
+    ):
+        """
+        Refine the current clustering defined on the index.
 
-def _construct_mmap(idx, features, mmap_path):
+        This is an interface over the refine_clustering function that is specific to the
+        materialised representation of a feature clustering on an index. If you'd like
+        to experiment more see the _refine_clustering which does not save the resulting
+        state.
+
+        TODO: see also: _refine_clustering for a more low level clustering.
+
+        """
+
+        refined_clustering, objective, cluster_objectives = self._refine_clustering(
+            clustering,
+            target_clusters=target_clusters,
+            iterations=iterations,
+            layer_sizes=layer_sizes,
+            random_seed=random_seed,
+            layer_checks=layer_checks,
+            moving_feature_fraction_tolerance=moving_feature_fraction_tolerance,
+        )
+
+
+def _construct_mmap(
+    idx, features_or_queries: Iterable[Feature | query.Query], mmap_path
+):
     """
-    Materialise features into a file suitable for memory mapping.
+    Materialise features or queries into a file suitable for memory mapping.
 
     This enables performance optimisation in three ways:
 
@@ -267,17 +575,25 @@ def _construct_mmap(idx, features, mmap_path):
     - by representing the provided features as a compact integer offset, enabling
       intermediate parts of the clustering process to be represented by memory
       efficient arrays.
+    - the resulting array is used as a memory map, meaning we don't need to hold the
+      whole set in memory at once, and we only need to keep the page cache for the
+      specific sections we need out of the full index.
 
     """
 
     current_start = 0
-    starts = array.array("q", (0 for _ in features))
-    ends = array.array("q", (0 for _ in features))
+    starts = array.array("q", (0 for _ in features_or_queries))
+    ends = array.array("q", (0 for _ in features_or_queries))
 
     # TODO: make sure to close the index - think about the interface here.
     with idx, open(mmap_path, "wb") as mm:
-        for i, feature in enumerate(features):
-            docs = idx[feature]
+        for i, feature_or_query in enumerate(features_or_queries):
+
+            if isinstance(feature_or_query, query.Query):
+                docs = query.evaluate(idx)
+            else:
+                docs = idx[feature_or_query][0]
+
             docs.run_optimize()
             docs.shrink_to_fit()
             docs = docs.serialize()
@@ -293,7 +609,7 @@ def _construct_mmap(idx, features, mmap_path):
     return starts, ends
 
 
-def _score_proposed_moves(pool, mmap_file, clustering, check_features, top_k, offsets):
+def _score_proposed_moves(pool, mmap_file, clustering, check_features, offsets):
     """Score the proposed sets of moves between clusters."""
 
     futures = set()
@@ -318,11 +634,10 @@ def _score_proposed_moves(pool, mmap_file, clustering, check_features, top_k, of
         )
 
     objective_estimate = 0
-    best_moves = {
-        feature: [(-math.inf, -1)] * top_k
-        for cluster_id, features in clustering.items()
-        for feature in features
-    }
+
+    n_features = len(offsets[0])
+    best_clusters = array.array("q", (-1 for _ in range(n_features)))
+    best_scores = array.array("d", (-math.inf for _ in range(n_features)))
 
     for future in cf.as_completed(futures):
         result = future.result()
@@ -330,9 +645,11 @@ def _score_proposed_moves(pool, mmap_file, clustering, check_features, top_k, of
         objective_estimate += objective
 
         for feature, delta in zip(move_features, move_scores):
-            heapq.heappushpop(best_moves[feature], (delta, test_cluster))
+            if delta > best_scores[feature]:
+                best_scores[feature] = delta
+                best_clusters[feature] = test_cluster
 
-    return objective_estimate, best_moves
+    return objective_estimate, best_clusters
 
 
 def _apply_moves(move_scores, check_feature_order, clustering, feature_clusters, rand):
@@ -348,7 +665,7 @@ def _apply_moves(move_scores, check_feature_order, clustering, feature_clusters,
 
     for feature in check_feature_order:
 
-        _, best_cluster = max(move_scores[feature])
+        best_cluster = move_scores[feature]
         current_cluster = feature_clusters[feature]
 
         # This is not a move
