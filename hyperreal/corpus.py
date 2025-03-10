@@ -52,7 +52,6 @@ class SchemaValidationError(Exception):
     """Used for problems with creating a schema of value_handlers."""
 
 
-# TODO: Should this be a protocol instead?
 class HyperrealCorpus:
 
     handler_registry: set[value_handlers.ValueHandler] = default_handlers
@@ -161,6 +160,57 @@ class HyperrealCorpus:
 
         Highlighting via specific features to match? Or via specific positions to pull
         out of the match?
+
+        TODO: Highlight spec, and specification of granularity (concordances, passages,
+        matching)
+
+        """
+
+        for key, indexable_doc in self.indexable_docs(doc_keys):
+
+            # TODO: Process fields in a consistent order?
+            # Or in the order that they are indexed?
+            # Or overriden via a parameter on the method, or even the index?
+            # Or even optionally, omitting some fields somewhere?
+            fields = indexable_doc.keys()
+
+            to_render = []
+
+            for field in fields:
+                values = indexable_doc[field]
+
+                to_render.append(h("dt")(field))
+
+                if isinstance(values, list):
+
+                    handler = self.type_handlers[type(values[0])]
+                    rendered_field = h("dd")(
+                        [h("span")(handler.to_html(value)) for value in values]
+                    )
+
+                elif isinstance(values, set):
+
+                    arbitrary_value = values.pop()
+                    values.add(arbitrary_value)
+
+                    handler = self.type_handlers[type(arbitrary_value)]
+                    rendered_field = h("dd")(
+                        h("ul")([h("li")(handler.to_html(value)) for value in values])
+                    )
+
+                else:
+                    handler = self.type_handlers[type(values)]
+                    rendered_field = h("dd")(handler.to_html(values))
+
+                to_render.append(rendered_field)
+
+            yield key, h("dl")(to_render)
+
+    def str_indexable_docs(
+        self, doc_keys: Iterable[DocKey], highlight_spec: Optional = None
+    ):
+        """
+        A string version of documents as indexed.
 
         """
         pass

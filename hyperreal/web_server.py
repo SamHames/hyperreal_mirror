@@ -1,49 +1,72 @@
 """
 The web server component.
 
-Note that this is quite rudimentary and is intended as a local view of a system rather
-than a fully web hosted offering. Core functionality like authentication and
-authorisation are out of scope right now.
+The target environment for this server is to be launched from a Jupyter notebook,
+through an environment like BinderHub. The functionality is quite rudimentary and is
+intended as a local view of a single index rather than a fully web hosted offering.
+
+Out of scope for this component right now are:
+
+- authentication and authorisation
+- multi-user/collaboration
+- supporting the process of indexing and clustering - for now this requires indexing
+  and clustering to be done and the complete index passed to the server
 
 """
 
 import asyncio
 import tornado
 
+from tinyhtml import h
+
 from .index_core import HyperrealIndex
+from . import web_rendering
 
 
 class HyperrealRequestHandler(tornado.web.RequestHandler):
     """
-    A regular tornado RequestHandler with some shortcuts.
+    A regular tornado RequestHandler with a shortcut to access the served index.
 
-    Makes the index being served available on self.index, as this needs to be accessed
-    often.
+    Makes available the following shortcuts:
+
+    self.idx: the HyperrealIndex being served
+    self.feature_clusters: the feature clusters plugin.
 
     """
 
     def initialize(self):
         self.idx = self.application.settings["hyperreal_idx"]
+        self.feature_clusters = self.idx.p.feature_clusters
 
 
-class FeatureListHandler(HyperrealRequestHandler):
-    async def get(self, field):
-
+class IndexedFieldOverview(HyperrealRequestHandler):
+    def get(self, field):
         min_docs = int(self.get_argument("min_docs", "10"))
         features = self.idx.field_features(field, min_docs=min_docs)
+        linkable_fields = self.idx.field_handlers
 
-        for i, ((field, value), stats) in enumerate(features.items()):
-            stat_line = f"{value}, {', '.join(str(s) for s in stats.values())}\n"
-            self.write(stat_line)
+        self.write(
+            web_rendering.indexed_field_page(field, features, linkable_fields).render()
+        )
 
-            if i % 1000 == 0:
-                await self.flush()
+
+class ClusterHandler(HyperrealRequestHandler):
+    def get(self, cluster_id):
+        pass
+
+
+class MainHandler(HyperrealRequestHandler):
+    def get(self):
+        table_fields = self.idx.indexed_field_summary
+        self.write(web_rendering.home_page(table_fields).render())
 
 
 def make_app(hyperreal_idx: HyperrealIndex):
     return tornado.web.Application(
         handlers=[
-            (r"/feature-list/([^/]+)", FeatureListHandler),
+            (r"/", MainHandler),
+            (r"/indexed-field/([^/]+)", IndexedFieldOverview),
+            (r"/cluster/([0-9]+)", ClusterHandler),
         ],
         hyperreal_idx=hyperreal_idx,
     )

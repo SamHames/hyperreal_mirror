@@ -23,11 +23,13 @@ from __future__ import annotations
 import collections
 import concurrent.futures as cf
 import dataclasses as dc
+from functools import cached_property
 import itertools
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Optional, Hashable
 
 from pyroaring import AbstractBitMap, BitMap, BitMap64
+from tinyhtml import h, raw, frag
 
 from . import corpus, db_utilities, index_builder, value_handlers, index_plugin
 from .feature_cluster import FeatureClustering
@@ -58,8 +60,11 @@ core_migration = index_plugin.Migration(
             -- defined on a field. Is there a more precise naming for each?
             -- TODO: we also want the number of unique values on a field for display
             -- purposes.
-            max_cardinality,
             value_handler_name,
+            max_doc_cardinality,
+            unique_value_count,
+            min_value,
+            max_value,
             stored_sorted,
             doc_count,
             doc_ids roaring_bitmap,
@@ -259,7 +264,7 @@ class HyperrealIndex:
 
             field_details = self.db.execute(
                 """
-                SELECT field, value_handler_name, max_cardinality, position_count 
+                SELECT field, value_handler_name, max_doc_cardinality, position_count 
                 from field_summary
                 """
             )
@@ -315,6 +320,40 @@ class HyperrealIndex:
         # The schema might have changed, so invalidate if present.
         self._field_handlers = None
         self._passage_group_size = passage_group_size
+        del self.indexed_field_summary
+
+    @cached_property
+    def indexed_field_summary(self):
+
+        header = [
+            "Field",
+            "Value Type",
+            "cardinality?",
+            "Unique Values",
+            "Mininum Value",
+            "Maximum Value",
+            "Sortable",
+            "Number of Documents",
+            "Number of Positions",
+        ]
+        return [header] + list(
+            self.db.execute(
+                """
+                SELECT 
+                    field, 
+                    value_handler_name, 
+                    max_doc_cardinality, 
+                    unique_value_count,
+                    min_value,
+                    max_value,
+                    stored_sorted,
+                    doc_count,
+                    position_count
+                from field_summary
+                order by field
+                """
+            )
+        )
 
     @property
     def max_doc_id(self) -> Optional[int]:
@@ -864,3 +903,129 @@ class HyperrealIndex:
             docs.add(group_docs[doc_group_starts.rank(g) - 1])
 
         return docs
+
+
+class FeatureStatsRenderer:
+    def __init__(
+        self,
+        idx,
+        order_by_stat=None,
+        reverse=True,
+        top_k=None,
+        display_stats=None,
+        drop_stat_values=None,
+    ):
+        """
+        Class to control rendering a specific set of statistics derived from an index.
+
+        This handles all of the details like ordering, truncating and selection of
+        measures to display.
+
+        """
+        self.idx = idx
+
+        if top_k is not None and order_by_stat is None:
+            raise ValueError("order_by must be specified for top_k")
+
+        self.order_by_stat = order_by_stat
+        self.reverse = reverse
+        self.top_k = top_k
+        self.display_stats = display_stats or []
+
+        self.field_handlers = {
+            field: handler for field, (handler, _, _) in idx.field_handlers.items()
+        }
+
+        # Should this be a dictionary to sets, one per statistic?
+        # self.drop_stat_values = drop_stat_values or set()
+
+        # Probably also need something to apply a custom class? Ie, to differentiate
+        # a facet from a cluster, from a list of clusters?
+
+    def key_render_order(self, stats):
+        """
+        Return the list of keys to render and their order.
+
+        This applies:
+
+            - sorting by the selected statistic
+            - selection of the top_k keys
+            - dropping any keys with a statistic value in drop_stat_values
+            - truncation of values?
+
+        """
+        # Drop values *before* sorting
+        # if self.drop_stat_values:
+        #     keep_keys = [key for key ]
+
+        if self.order_by_stat is not None:
+            key_order = sorted(
+                stats.keys(),
+                key=lambda k: stats[k][self.order_by_stat],
+                reverse=self.reverse,
+            )
+
+            if self.top_k is not None:
+                key_order = key_order[: self.top_k]
+        else:
+            key_order = stats.keys()
+
+        return key_order
+
+    def to_rows(self, stats):
+
+        key_order = self.key_render_order(stats)
+
+        header = ["field", "value", "value_start", "value_end", *self.display_stats]
+        rows = []
+
+        for key in key_order:
+            field = key[0]
+            values = key[1:]
+
+            if len(values) == 1:
+                value = [*values, None, None]
+            else:
+                value = [None, *values]
+
+            key_stats = stats[key]
+            stats_row = [key_stats[s] for s in self.display_stats]
+
+            row = [field, *value, *stats_row]
+
+            rows.append(row)
+
+        return rows
+
+    def to_html_dl(self, stats):
+
+        key_order = self.key_render_order(stats)
+
+        last_field = None
+
+        elements = []
+
+        for key in key_order:
+            field = key[0]
+            values = key[1:]
+
+            if field != last_field:
+                elements.append(h("dt")(field))
+
+            if len(values) == 1:
+                elements.append(h("dd")(self.field_handlers[field].to_html(values[0])))
+            elif len(values) == 2:
+                elements.append(
+                    h("dd")(
+                        self.field_handlers[field].to_html(values[0]),
+                        ":",
+                        self.field_handlers[field].to_html(values[1]),
+                    )
+                )
+
+            last_field = field
+
+        return h("dd")(elements)
+
+    def to_str(self, stats):
+        pass

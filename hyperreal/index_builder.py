@@ -147,7 +147,7 @@ def _init_segment(db_path):
         CREATE table if not exists segment_header(
             field,
             first_doc_id,
-            max_cardinality,
+            max_doc_cardinality,
             value_handler_name,
             stored_sorted,
             doc_count,
@@ -257,7 +257,7 @@ class _FieldBatchHeader:
     docs_w_positions: BitMap = dc.field(default_factory=BitMap)
     doc_group_ranges: BitMap = dc.field(default_factory=BitMap)
     positions_indexed: int = 0
-    max_cardinality: int = 0
+    max_doc_cardinality: int = 0
     value_handler_name: str = ""
     stored_sorted: bool = False
 
@@ -317,8 +317,8 @@ def _prepare_doc_batch(
                 container_type = "none"
 
             # Accumulate the cardinalities observed (as-indexed).
-            batch_segment_header[field].max_cardinality = max(
-                batch_segment_header[field].max_cardinality, value_count
+            batch_segment_header[field].max_doc_cardinality = max(
+                batch_segment_header[field].max_doc_cardinality, value_count
             )
 
             # Actually index the values at the document level.
@@ -484,7 +484,7 @@ def _stage_doc_batch(
             (
                 field,
                 first_doc_id,
-                header_row.max_cardinality,
+                header_row.max_doc_cardinality,
                 header_row.value_handler_name,
                 header_row.stored_sorted,
                 len(header_row.docs),
@@ -565,7 +565,7 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                     select
                         field,
                         ?,
-                        max(max_cardinality),
+                        max(max_doc_cardinality),
                         value_handler_name,
                         stored_sorted,
                         sum(doc_count),
@@ -660,8 +660,13 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                 INSERT into final.field_summary 
                     select
                         field, 
-                        max(max_cardinality),
                         value_handler_name,
+                        max(max_doc_cardinality),
+                        -- These are value summary rows - we'll update them after 
+                        -- the next step.
+                        null,
+                        null,
+                        null,
                         -- This is guaranteed to be the same across the field so we can
                         -- rely on SQLite behaviour to grab an arbitrary row.
                         stored_sorted,
@@ -686,7 +691,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
             db.execute("DELETE from final.position_index")
             field_processing = db.execute(
                 """
-                SELECT field, max_cardinality, stored_sorted, position_count
+                SELECT field, max_doc_cardinality, stored_sorted, position_count
                 from field_summary
                 order by field
                 """
@@ -694,12 +699,12 @@ def _finalise_into(from_segment, to_final, passage_group_size):
 
             for (
                 field,
-                max_cardinality,
+                max_doc_cardinality,
                 stored_sorted,
                 position_count,
             ) in field_processing:
 
-                if (max_cardinality, stored_sorted, position_count) == (1, 1, 0):
+                if (max_doc_cardinality, stored_sorted, position_count) == (1, 1, 0):
 
                     # Generate the initial merged values
                     merged = db.execute(
@@ -774,6 +779,18 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                         """,
                         [field],
                     )
+
+            db.execute(
+                """
+                UPDATE final.field_summary as fs
+                    set
+                        (unique_value_count, min_value, max_value) = (
+                            select count(*), min(value), max(value) 
+                            from inverted_index ii 
+                            where ii.field = fs.field
+                        )
+                """
+            )
 
             db.execute("commit")
 

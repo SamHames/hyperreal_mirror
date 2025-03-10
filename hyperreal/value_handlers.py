@@ -25,6 +25,8 @@ from collections.abc import Hashable, Sequence
 from datetime import date, datetime
 from typing import Optional, Protocol
 
+from tinyhtml import h, frag
+
 
 class ValueHandler(Protocol):
     """
@@ -51,7 +53,7 @@ class ValueHandler(Protocol):
         """Transform to an SQLite compatible datatype such as text, blog or numeric."""
         return value
 
-    def to_html(self, value) -> str:
+    def to_html(self, value) -> frag | str:
         """Transform for rich display in the web interface."""
         return self.to_str(value)
 
@@ -141,7 +143,7 @@ class DateHandler(ValueHandler):
     def to_html(self, value):
         # TODO: should the output be a string that is treated as raw HTML always, or
         # should a str be escaped and only known HTML renderables be included as is?
-        return f"<time>{value.isoformat()}</time>"
+        return h("time")(value.isoformat())
 
     def from_str(self, value):
         return date.fromisoformat(value)
