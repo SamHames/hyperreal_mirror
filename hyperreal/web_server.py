@@ -58,6 +58,14 @@ class ClusterHandler(HyperrealRequestHandler):
 class MainHandler(HyperrealRequestHandler):
     def get(self):
         table_fields = self.idx.indexed_field_summary
+
+        for row in table_fields[1:]:
+            # Conver the value to HTML
+            field = row[0]
+            min_value, max_value = row[4:6]
+
+            row[4:6] = handler.to_html(min_value), handler.to_html(max_value)
+
         self.write(web_rendering.home_page(table_fields).render())
 
 

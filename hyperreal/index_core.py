@@ -332,12 +332,15 @@ class HyperrealIndex:
             "Unique Values",
             "Mininum Value",
             "Maximum Value",
-            "Sortable",
             "Number of Documents",
             "Number of Positions",
+            "Sortable",
+            "Range Encoded",
         ]
-        return [header] + list(
-            self.db.execute(
+
+        rows = list(
+            list(row)
+            for row in self.db.execute(
                 """
                 SELECT 
                     field, 
@@ -346,14 +349,27 @@ class HyperrealIndex:
                     unique_value_count,
                     min_value,
                     max_value,
-                    stored_sorted,
                     doc_count,
-                    position_count
+                    position_count,
+                    stored_sorted,
+                    stored_sorted = 1 and max_doc_cardinality = 1 as range_encoded 
                 from field_summary
                 order by field
                 """
             )
         )
+
+        for row in rows:
+            field = row[0]
+            handler = self.field_handlers[field][0]
+
+            min_value, max_value = row[4:6]
+
+            row[4:6] = handler.from_index(min_value), handler.from_index(max_value)
+            row[-2] = bool(row[-2])
+            row[-1] = bool(row[-1])
+
+        return [header] + rows
 
     @property
     def max_doc_id(self) -> Optional[int]:
