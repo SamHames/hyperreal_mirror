@@ -492,42 +492,51 @@ class HyperrealIndex:
         """
         Return the indexed features for field.
 
-        The keys of the returned object are the features, the values are dictionaries
-        describing the features.
+        The keys of the returned dictionary are the features, the values are
+        dictionaries describing the statistics of the features.
 
         TODO: document link to tabulation.
 
         """
-        # TODO: min_docs can't be set with a range encoded field as it may filter
-        # things in appropriately...
 
         handler, range_encoded, _ = self.field_handlers[field]
 
         features = {}
 
-        rows = self.db.execute(
-            """
-            SELECT value, doc_count, position_count
-            from inverted_index
-            where field = ?
-                and doc_count >= ?
-            order by value
-            """,
-            [field, min_docs],
-        )
         if range_encoded:
 
-            # # Range encoded values need to be diffed, as they're a cumulative
-            # # sum
-            # doc_counts_diff = [doc_counts[0]]
+            rows = self.db.execute(
+                """
+                SELECT value, doc_count
+                from inverted_index
+                where field = ?
+                order by value
+                """,
+                [field],
+            )
 
-            # for d in doc_counts[1:]:
-            #     doc_counts_diff.append(d - doc_counts_diff[-1])
+            previous_doc_count = 0
 
-            # stats = {"doc_count": doc_counts_diff}
-            pass
+            for value, cumulative_doc_count in rows:
+                doc_count = cumulative_doc_count - previous_doc_count
+                if doc_count >= min_docs:
+                    feature = (field, handler.from_index(value))
+                    stats = {"doc_count": doc_count}
+                    features[feature] = stats
+
+                previous_doc_count = cumulative_doc_count
 
         else:
+            rows = self.db.execute(
+                """
+                SELECT value, doc_count, position_count
+                from inverted_index
+                where field = ?
+                    and doc_count >= ?
+                order by value
+                """,
+                [field, min_docs],
+            )
             for value, doc_count, position_count in rows:
                 feature = (field, handler.from_index(value))
                 stats = {"doc_count": doc_count, "position_count": position_count}
