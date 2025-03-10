@@ -53,8 +53,25 @@ class ValueHandler(Protocol):
         """Transform to an SQLite compatible datatype such as text, blog or numeric."""
         return value
 
-    def to_html(self, value) -> frag | str:
-        """Transform for rich display in the web interface."""
+    def to_html(self, value) -> frag | int | float | str:
+        """
+        Transform for rich display in the web interface.
+
+        Standard types like str's and numbers will be encoded and escaped by default.
+        If you want the output to be rendered as HTML without escaping, the return
+        value needs to be a type supported by tinyhtml for rendering:
+
+        - a tinyhtml frag OR
+        - an object supporting _repr_html_ as used in Jupyter notebooks OR
+        - an object supporting __html__, as used in Jinja, MarkupSafe and some other
+          templating systems.
+
+        If you have a str you want to include as is without escaping, use
+        `tinyhtml.raw`:
+
+        > raw('should <not> be escaped</not>')
+
+        """
         return self.to_str(value)
 
     def from_str(self, value: str):
@@ -141,8 +158,6 @@ class DateHandler(ValueHandler):
         return value.isoformat()
 
     def to_html(self, value):
-        # TODO: should the output be a string that is treated as raw HTML always, or
-        # should a str be escaped and only known HTML renderables be included as is?
         return h("time")(value.isoformat())
 
     def from_str(self, value):

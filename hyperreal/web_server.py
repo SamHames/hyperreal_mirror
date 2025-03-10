@@ -11,6 +11,8 @@ Out of scope for this component right now are:
 - multi-user/collaboration
 - supporting the process of indexing and clustering - for now this requires indexing
   and clustering to be done and the complete index passed to the server
+- securely handling user-generated content: certain things (such as corpus specific CSS)
+  are not meaningfully escaped or validated
 
 """
 
@@ -25,7 +27,7 @@ from . import web_rendering
 
 class HyperrealRequestHandler(tornado.web.RequestHandler):
     """
-    A regular tornado RequestHandler with a shortcut to access the served index.
+    A regular tornado RequestHandler with access shortcuts to the served index.
 
     Makes available the following shortcuts:
 
@@ -39,7 +41,7 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
         self.feature_clusters = self.idx.p.feature_clusters
 
 
-class IndexedFieldOverview(HyperrealRequestHandler):
+class IndexedField(HyperrealRequestHandler):
     def get(self, field):
         min_docs = int(self.get_argument("min_docs", "10"))
         features = self.idx.field_features(field, min_docs=min_docs)
@@ -50,6 +52,15 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         )
 
 
+class IndexedFieldOverview(HyperrealRequestHandler):
+    def get(self):
+        linkable_fields = self.idx.field_handlers
+
+        self.write(
+            web_rendering.indexed_field_page("Overview", {}, linkable_fields).render()
+        )
+
+
 class ClusterHandler(HyperrealRequestHandler):
     def get(self, cluster_id):
         pass
@@ -57,11 +68,13 @@ class ClusterHandler(HyperrealRequestHandler):
 
 class MainHandler(HyperrealRequestHandler):
     def get(self):
-        table_fields = self.idx.indexed_field_summary
+        table_fields = [list(row) for row in self.idx.indexed_field_summary.copy()]
 
         for row in table_fields[1:]:
             # Conver the value to HTML
             field = row[0]
+            handler = self.idx.field_handlers[field][0]
+
             min_value, max_value = row[4:6]
 
             row[4:6] = handler.to_html(min_value), handler.to_html(max_value)
@@ -73,10 +86,12 @@ def make_app(hyperreal_idx: HyperrealIndex):
     return tornado.web.Application(
         handlers=[
             (r"/", MainHandler),
-            (r"/indexed-field/([^/]+)", IndexedFieldOverview),
+            (r"/indexed-field/", IndexedFieldOverview),
+            (r"/indexed-field/([^/]+)", IndexedField),
             (r"/cluster/([0-9]+)", ClusterHandler),
         ],
         hyperreal_idx=hyperreal_idx,
+        autoreload=True,
     )
 
 

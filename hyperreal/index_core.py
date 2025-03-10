@@ -325,7 +325,7 @@ class HyperrealIndex:
     @cached_property
     def indexed_field_summary(self):
 
-        header = [
+        header = (
             "Field",
             "Value Type",
             "cardinality?",
@@ -336,7 +336,7 @@ class HyperrealIndex:
             "Number of Positions",
             "Sortable",
             "Range Encoded",
-        ]
+        )
 
         rows = list(
             list(row)
@@ -369,7 +369,7 @@ class HyperrealIndex:
             row[-2] = bool(row[-2])
             row[-1] = bool(row[-1])
 
-        return [header] + rows
+        return [header] + [tuple(row) for row in rows]
 
     @property
     def max_doc_id(self) -> Optional[int]:
