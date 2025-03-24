@@ -930,10 +930,36 @@ class HyperrealIndex:
         return docs
 
 
-class FeatureStatsRenderer:
+# Corpus interface for specifying facets to compute:
+# 1. A callable that returns keys in order that they should be rendered.
+# 2. A concrete set of features to render, or a callable to retrieve those features?
+#
+# Example Use cases?
+# 1. Show me the timeline trend by month of this particular things
+# 2. Show me the top 20 most common speakers who used this word
+# 3. Show me the 20 most similar time periods to this query
+
+
+class KeyedStatsSelector:
+    def __init__(
+        self,
+        reverse=True,
+        first_k=None,
+    ):
+        """
+        Specifies how to select from and order a KeyedStats selector.
+
+        """
+
+    def __call__(self, feature_stats):
+        return
+
+
+class FeatureStatsSorterFilterer:
     def __init__(
         self,
         idx,
+        order_by_field_value=None,
         order_by_stat=None,
         reverse=True,
         top_k=None,
@@ -941,10 +967,9 @@ class FeatureStatsRenderer:
         drop_stat_values=None,
     ):
         """
-        Class to control rendering a specific set of statistics derived from an index.
+        Specifies how to sort and order the keys in a feature stats object.
 
-        This handles all of the details like ordering, truncating and selection of
-        measures to display.
+        Can also produce some
 
         """
         self.idx = idx
@@ -955,7 +980,7 @@ class FeatureStatsRenderer:
         self.order_by_stat = order_by_stat
         self.reverse = reverse
         self.top_k = top_k
-        self.display_stats = display_stats or []
+        self.display_stats = display_stats
 
         self.field_handlers = {
             field: handler for field, (handler, _, _) in idx.field_handlers.items()
@@ -1001,7 +1026,7 @@ class FeatureStatsRenderer:
 
         key_order = self.key_render_order(stats)
 
-        header = ["field", "value", "value_start", "value_end", *self.display_stats]
+        header = ["field", "value", "value_end", *self.display_stats]
         rows = []
 
         for key in key_order:
@@ -1051,6 +1076,12 @@ class FeatureStatsRenderer:
             last_field = field
 
         return h("dd")(elements)
+
+    def to_html_table(self, stats):
+        key_order = self.key_render_order(stats)
+
+        for feature in key_order:
+            pass
 
     def to_str(self, stats):
         pass

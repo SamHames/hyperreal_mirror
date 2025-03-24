@@ -28,6 +28,8 @@ class Query(Protocol):
     # Serialising to str is serialising to a querystring in a url?
     # Also that means the from_str serialisation matters :)
 
+    # TODO: how to handle the different contexts of features?
+
     def evaluate(self, idx: HyperrealIndex) -> BitMap:
         pass
 

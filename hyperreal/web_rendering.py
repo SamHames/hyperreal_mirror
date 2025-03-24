@@ -6,6 +6,8 @@ is passed in to this is primarily self-rendering objects from other parts of Hyp
 
 """
 
+from urllib.parse import quote
+
 from tinyhtml import h, html, frag, raw
 
 
@@ -57,18 +59,38 @@ main {
 }
 
 .column {
-    overflow: auto;
+    overflow: scroll;
     flex: 1;
+    flex-basis: 40ch;
+}
+
+pre {
+    white-space: pre-wrap;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.stack > * {
+  margin-block: 0;
+} 
+
+.stack > * + * {
+  margin-block-start: 2rem;
 }
 
 """
 
 
-def generate_nav(links, klass=None, label=None):
+def generate_nav(label, links, klass=None):
     """Generate a navigation element."""
 
-    label = h("span", id="navlabel")(label) if label else None
-    return h("nav")(
+    nav_id = f"nav-{label}"
+    label = h("span", id=nav_id)(label)
+    return h("nav", aria_labelled_by=nav_id)(
         label,
         h("ul", klass="cluster")(
             h("li")(h("a", href=href)(link_text) if href else link_text)
@@ -83,11 +105,13 @@ def full_page(
     """Render a complete page with navigation and a page title."""
 
     nav_links = [("Home", "/"), ("Feature Lists", "/indexed-field/")]
-    main_nav = generate_nav(nav_links)
+    main_nav = generate_nav("Main", nav_links)
 
-    sub_nav = (
-        generate_nav(sub_nav_links, label=sub_nav_label) if sub_nav_links else None
-    )
+    sub_nav_links = sub_nav_links or {}
+    sub_nav = [
+        generate_nav(sub_nav_label, sub_nav_links)
+        for sub_nav_label, sub_nav_links in sub_nav_links.items()
+    ]
 
     extra_css = extra_css or ""
 
@@ -104,15 +128,63 @@ def full_page(
     )
 
 
-def indexed_field_page(field, features, indexed_fields, order_by="value"):
+def list_docs(docs):
+
+    # TODO: render selected documents via key and id through the web interface.
+    # especially when we get to annotation.
+    return h("ul", klass="stack")(h("li", klass="doc")(doc) for _, _, doc in docs)
+
+
+# TODO: should these be accumulated into a mixin for the web interface?
+# IE - all of these methods requiring the index get the index from self?
+def feature_overview_link(handler, feature):
+    field, value = feature
+
+    href = f"/indexed-field/{field}?v={handler.to_url(value)}"
+
+    return h("a", href=href)(value)
+
+
+def indexed_field_page(idx, indexed_fields, docs, field, features, order_by="value"):
     """Lists all of the features in a field."""
 
-    content = h("ol")(h("li")(f"{field}: {value}") for field, value in features.keys())
+    handler = idx.field_handlers[field][0]
 
-    sub_nav_links = [(f, f"/indexed-field/{f}") for f in indexed_fields]
+    # Cases to handle: range encoded fields and the default presentations of keys? range
+    # features Not showing positions on fields for which it isn't relevant? Ie, based
+    # on what is known about the field as indexed
+    content = list_docs(docs), h("table")(
+        h("caption")(f"Matching documents and positions for field {field}"),
+        h("thead")(
+            h("tr")(h("th", scope="col")(name) for name in ["Feature", "Documents"])
+        ),
+        (
+            h("tr")(
+                h("th", scope="row")(feature_overview_link(handler, feature)),
+                h("td")(stats["doc_count"]),
+            )
+            for feature, stats in features.items()
+        ),
+    )
+
+    sub_nav_links = {
+        "Indexed Fields": [(f, f"/indexed-field/{f}") for f in indexed_fields]
+    }
     return full_page(
         f"Feature summary for field: {field}",
-        [content],
+        content,
+        sub_nav_links=sub_nav_links,
+        sub_nav_label="Indexed Fields",
+    )
+
+
+def index_field_overview(indexed_fields):
+    sub_nav_links = {
+        "Indexed Fields": [(f, f"/indexed-field/{f}") for f in indexed_fields]
+    }
+    return full_page(
+        f"Feature summary for field: {field}",
+        [],
         sub_nav_links=sub_nav_links,
         sub_nav_label="Indexed Fields",
     )

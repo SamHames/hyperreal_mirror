@@ -47,8 +47,25 @@ class IndexedField(HyperrealRequestHandler):
         features = self.idx.field_features(field, min_docs=min_docs)
         linkable_fields = self.idx.field_handlers
 
+        docs = []
+        value = self.get_argument("v", None)
+
+        if value:
+            handler = self.idx.field_handlers[field][0]
+            feature = (field, handler.from_url(value))
+            matching_docs, count, positions = self.idx[feature]
+
+            # TODO: random sampling/ordering/pagination?
+            docs = self.idx.html_docs(matching_docs[:20])
+
         self.write(
-            web_rendering.indexed_field_page(field, features, linkable_fields).render()
+            web_rendering.indexed_field_page(
+                self.idx,
+                linkable_fields,
+                docs,
+                field,
+                features,
+            ).render()
         )
 
 
@@ -57,7 +74,13 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         linkable_fields = self.idx.field_handlers
 
         self.write(
-            web_rendering.indexed_field_page("Overview", {}, linkable_fields).render()
+            web_rendering.indexed_field_page(
+                self.idx,
+                linkable_fields,
+                [],
+                None,
+                {},
+            ).render()
         )
 
 
@@ -82,7 +105,7 @@ class MainHandler(HyperrealRequestHandler):
         self.write(web_rendering.home_page(table_fields).render())
 
 
-def make_app(hyperreal_idx: HyperrealIndex):
+def make_index_server(hyperreal_idx: HyperrealIndex):
     return tornado.web.Application(
         handlers=[
             (r"/", MainHandler),
@@ -96,7 +119,6 @@ def make_app(hyperreal_idx: HyperrealIndex):
 
 
 async def serve_index(hyperreal_index):
-    app = make_app(hyperreal_index)
+    app = make_index_server(hyperreal_index)
     app.listen(9999)
-    shutdown_event = asyncio.Event()
-    await shutdown_event.wait()
+    await asyncio.Event().wait()

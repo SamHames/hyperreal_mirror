@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Hashable, Sequence
 from datetime import date, datetime
 from typing import Optional, Protocol
+from urllib.parse import quote, unquote
 
 from tinyhtml import h, frag
 
@@ -37,6 +38,7 @@ class ValueHandler(Protocol):
 
     - For storage as a value in the SQLite database representing the `index`.
     - For rendering as HTML through the web interface.
+    - For rendering as a URL query parameter
     - For transforming to and from a string for CSV and when generating URLs.
 
     """
@@ -73,6 +75,16 @@ class ValueHandler(Protocol):
 
         """
         return self.to_str(value)
+
+    def to_url(self, value) -> str:
+        """
+        Return a URL safe version of a string.
+
+        """
+        return quote(self.to_str(value))
+
+    def from_url(self, value):
+        return self.from_str(unquote(value))
 
     def from_str(self, value: str):
         """Create a Python object from the string representation."""
