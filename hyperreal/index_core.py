@@ -94,6 +94,11 @@ core_migration = index_plugin.Migration(
             foreign key (field, value) references inverted_index
         )
         """,
+        """
+        CREATE index feature_doc_count on inverted_index(
+            field, doc_count desc, value, position_count
+        )
+        """,
     ],
     description="Initialise the core tables for holding the index of the corpus.",
 )
