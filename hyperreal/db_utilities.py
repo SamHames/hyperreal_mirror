@@ -7,6 +7,7 @@ working with SQLite and roaring bitmaps easier.
 
 """
 
+from functools import wraps
 import sqlite3
 
 import pyroaring
@@ -113,3 +114,34 @@ class RoaringShiftUnion:
 
     def finalize(self):
         return save_bitmap(self.bitmap)
+
+
+def atomic(func):
+    """
+    A decorator that nests SQLite savepoints around method calls.
+
+    This assumes that self has a .db, as initialised using a normal IndexPlugin class.
+
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        self = args[0]
+        try:
+            self.db.execute(f'savepoint "{func.__name__}"')
+
+            results = func(*args, **kwargs)
+
+            return results
+
+        except Exception:
+            # Rewind to the previous savepoint, then release it in the finally
+            # This is necessary to behave nicely whether we are operating
+            # inside a larger transaction or just in autocommit mode.
+            self.db.execute(f'rollback to "{func.__name__}"')
+            raise
+
+        finally:
+            self.db.execute(f'release "{func.__name__}"')
+
+    return wrapper

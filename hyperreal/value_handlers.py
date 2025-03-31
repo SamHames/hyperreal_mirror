@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Hashable, Sequence
 from datetime import date, datetime
 from typing import Optional, Protocol
-from urllib.parse import quote, unquote
+from urllib.parse import quote_plus, unquote
 
 from tinyhtml import h, frag
 
@@ -81,7 +81,7 @@ class ValueHandler(Protocol):
         Return a URL safe version of a string.
 
         """
-        return quote(self.to_str(value))
+        return quote_plus(self.to_str(value))
 
     def from_url(self, value):
         return self.from_str(unquote(value))

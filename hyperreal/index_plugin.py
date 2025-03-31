@@ -67,6 +67,7 @@ class IndexPlugin:
         self.setup_validate_migrations()
 
         self.idx = idx
+        self.db = idx.db
 
     def post_index_rebuild(self) -> None:
         """

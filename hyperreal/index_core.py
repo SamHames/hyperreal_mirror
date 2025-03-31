@@ -27,6 +27,7 @@ from functools import cached_property
 import itertools
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Optional, Hashable
+from urllib.parse import quote_plus, urlencode
 
 from pyroaring import AbstractBitMap, BitMap, BitMap64
 from tinyhtml import h, raw, frag
@@ -292,6 +293,89 @@ class HyperrealIndex:
 
         return self._field_handlers
 
+    def feature_to_html(self, feature):
+        """Render the values for feature as a tuple of html renderable values."""
+
+        field = feature[0]
+        handler = self.field_handlers[field][0]
+
+        if len(feature) == 2:
+            value = feature[1]
+            return field, handler.to_html(value)
+
+        elif len(feature) == 3:
+            value_start, value_end = feature[1:]
+
+            if value_start is None and value_end is None:
+                raise ValueError("At least one of start or end range must not be None.")
+
+            if value_start is not None:
+                value_start = handler.to_html(value_start)
+            else:
+                value_start = ""
+
+            if value_end is not None:
+                value_end = handler.to_html(value_end)
+            else:
+                value_end = ""
+
+            return field, h("span")(value_start, "-", value_end)
+
+        else:
+            raise ValueError("A feature can only have 2 or 3 elements.")
+
+    def feature_to_url_query(self, feature):
+        """Render the given feature as a query string."""
+
+        field = feature[0]
+        handler = self.field_handlers[field][0]
+
+        query = [("f", quote_plus(field))]
+
+        if len(feature) == 2:
+            value = feature[1]
+            query.append(("v", handler.to_url(value)))
+
+        elif len(feature) == 3:
+            value_start, value_end = feature[1:]
+
+            if value_start is not None:
+                query.append(("v1", handler.to_url(value_start)))
+
+            if value_end is not None:
+                query.append(("v2", handler.to_url(value_end)))
+
+        else:
+            raise ValueError("A feature can only have 2 or 3 elements.")
+
+        return "&".join(f"{key}={value}" for key, value in query)
+
+    def feature_to_index(self, feature):
+        """Convert the given feature to index values."""
+
+        field = feature[0]
+        handler = self.field_handlers[field][0]
+
+        query = [("f", quote_plus(field))]
+
+        if len(feature) == 2:
+            value = feature[1]
+            return (field, handler.to_index(value))
+
+        elif len(feature) == 3:
+            value_start, value_end = feature[1:]
+
+            if value_start is not None:
+                value_start = handler.to_index(value_start)
+
+            if value_end is not None:
+                value_end = handler.to_index(value_end)
+
+            return (field, value_start, value_end)
+
+        else:
+            raise ValueError("A feature can only have 2 or 3 elements.")
+
     def __getstate__(self):
         return self.index_path, self.corpus
 
@@ -325,11 +409,13 @@ class HyperrealIndex:
         # The schema might have changed, so invalidate if present.
         self._field_handlers = None
         self._passage_group_size = passage_group_size
-        del self.indexed_field_summary
+        if hasattr(self, "indexed_field_summary"):
+            del self.indexed_field_summary
 
     @cached_property
     def indexed_field_summary(self):
 
+        # TODO: use the featurestats framework for this too.
         header = (
             "Field",
             "Value Type",
@@ -538,7 +624,7 @@ class HyperrealIndex:
                 from inverted_index
                 where field = ?
                     and doc_count >= ?
-                order by value
+                order by doc_count desc
                 """,
                 [field, min_docs],
             )

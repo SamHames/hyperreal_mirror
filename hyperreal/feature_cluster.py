@@ -21,6 +21,7 @@ import typing
 from pyroaring import BitMap
 
 from . import query
+from .db_utilities import atomic
 from .index_plugin import Migration, IndexPlugin
 
 if typing.TYPE_CHECKING:
@@ -41,38 +42,21 @@ cluster_migration = Migration(
             doc_ids roaring_bitmap
         )
         """,
+        # For now this doesn't handle range encode features as they make the data model
+        # a lot more complex. Possibly range encoded features won't be that useful
+        # anyway.
         """
         CREATE table feature_cluster (
             field text not null,
             value,
-            value_start,
-            value_end,
             cluster_id integer not null references cluster on delete cascade,
-            doc_count integer default 0,
-            constraint at_least_one_value check(
-                coalesce(value, value_start, value_end) is not null
-            )
+            doc_count integer,
+            primary key (field, value)
         )
-        """,
-        """
-        CREATE unique index cluster_field_value on feature_cluster(field, value) 
-        where value_start is null and value_end is null 
-        """,
-        """
-        CREATE unique index cluster_field_value_start on feature_cluster(
-            field, value_start, value_end
-        ) 
-        where value is null 
         """,
         """
         CREATE index cluster_feature on feature_cluster(cluster_id, doc_count desc);
         -- Allow efficiently retrieving features for a given cluster
-        """,
-        """
-        CREATE index feature_null_doc_count on feature_cluster(
-            -- Allow efficiently retrieving features that need statistics created
-            field, value, value_start, value_end
-        ) where doc_count is null;
         """,
         """
         CREATE table changed_cluster(
@@ -83,7 +67,7 @@ cluster_migration = Migration(
             their docs rematerialised.
 
             */
-            cluster_id integer primary key references cluster
+            cluster_id integer primary key references cluster on delete cascade
         );
         """,
         """
@@ -135,134 +119,85 @@ class FeatureClustering(IndexPlugin):
     current_version = "1"
     migrations = [cluster_migration]
 
+    @atomic
     def post_index(self):
         """Regenerate docs matching each cluster and individual feature statistics."""
-
-        self.idx.db.execute("savepoint post_index")
-        self.idx.db.executemany(
+        self.db.executemany(
             "insert or ignore into changed_cluster values(?)",
             ((c,) for c in self.cluster_ids),
         )
         self._update_changed_clusters()
 
         # Clear out the feature_cluster table statistics, so they can be regenerated.
-        self.idx.db.execute("update feature_cluster set doc_count = null")
+        self.db.execute("update feature_cluster set doc_count = null")
 
         self._update_feature_statistics()
 
-        self.idx.db.execute("release post_index")
-
-    def _row_from_feature(self, feature: Feature):
-
-        field = feature[0]
-        handler, _ = self.idx.field_handlers[field]
-
-        if len(feature) == 2:
-            value = feature[1]
-            return (field, handler.to_index(value), None, None)
-        elif len(feature) == 3:
-            value_start, value_end = feature[1:]
-            if value_start is not None:
-                value_start = handler.to_index(value_start)
-            if value_end is not None:
-                value_end = handler.to_index(value_end)
-
-            return (field, None, value_start, value_end)
-        else:
-            raise ValueError(f"Invalid {feature=}")
-
-    def _feature_from_row(self, row):
-        """
-        Extract a feature from the selected row.
-
-        The first four rows of the query must be field, value, value_start, value_end.
-
-        This will return a feature, followed by the remaining contents of the row.
-
-        """
-
-        field, value, value_start, value_end = row[:4]
-        rest_of_row = row[4:]
-
-        handler, _ = self.idx.field_handlers[field]
-
-        if value is not None:
-            feature = (field, handler.from_index(value))
-
-        else:
-            if value_start is not None:
-                value_start = handler.from_index(value_start)
-            if value_end is not None:
-                value_end = handler.from_index(value_end)
-
-            feature = (field, value_start, value_end)
-
-        return feature, rest_of_row
-
+    @atomic
     def _update_changed_clusters(self):
-        self.idx.db.execute("savepoint _update_changed_clusters")
 
-        changed_clusters = self.idx.db.execute("select cluster_id from changed_cluster")
+        changed_clusters = self.db.execute("select cluster_id from changed_cluster")
 
         for (cluster_id,) in changed_clusters:
             pass
 
-        self.idx.db.execute("release _update_changed_clusters")
-
+    @atomic
     def _update_feature_statistics(self):
-        self.idx.db.execute("savepoint _update_feature_statistics")
 
-        to_update = self.idx.db.execute(
+        to_update = self.db.execute(
             """
-            SELECT field, value, value_start, value_end, rowid
+            SELECT 
+                field, 
+                value
             from feature_cluster 
             where doc_count is null
             """
         )
 
-        for row in to_update:
+        for feature in to_update:
             feature, [rowid] = self._feature_from_row(row)
             _, doc_count, _ = self.idx[feature]
-            self.idx.db.execute(
+            self.db.execute(
                 "update feature_cluster set doc_count = ? where rowid = ?",
                 (doc_count, rowid),
             )
 
-        self.idx.db.execute("release _update_feature_statistics")
-
     @property
     def cluster_ids(self) -> list[int]:
         """Return the list of all defined clusters."""
-        rows = self.idx.db.execute("select cluster_id from cluster")
+        rows = self.db.execute("select cluster_id from cluster")
         return [row[0] for row in rows]
 
+    @atomic
     def create_new_empty_cluster(self) -> int:
         """
         Create a new empty cluster, returning the new cluster_id.
 
         """
-        self.idx.db.execute("savepoint create_new_cluster")
-        self.idx.db.execute("insert into cluster(cluster_id) values(null)")
-        cluster_id = list(self.idx.db.execute("select last_insert_rowid()"))[0][0]
-        self.idx.db.execute("release create_new_cluster")
+        self.db.execute("insert into cluster(cluster_id) values(null)")
+        cluster_id = list(self.db.execute("select last_insert_rowid()"))[0][0]
 
         return cluster_id
 
+    @atomic
     def _replace_features_for_cluster(self, cluster_id, features):
-        self.idx.db.execute("savepoint _replace_features_for_cluster")
 
-        self.idx.db.executemany(
-            """
-            REPLACE into feature_cluster(
-                field, value, value_start, value_end, cluster_id
-            )
-            values(?, ?, ?, ?, ?)
-            """,
-            ((*self._row_from_feature(f), cluster_id) for f in features),
+        # Delete the existing features for the cluster
+        self.db.execute(
+            "DELETE from feature_cluster where cluster_id = ?", [cluster_id]
         )
 
-        self.idx.db.execute("release _replace_features_for_cluster")
+        # Delete existing features that might be assigned to another cluster.
+        self.delete_features(features)
 
+        self.db.executemany(
+            """
+            INSERT into feature_cluster(field, value, cluster_id) values(?, ?, ?)
+            """,
+            ((*self.idx.feature_to_index(f), cluster_id) for f in features),
+        )
+
+    @atomic
     def create_cluster_from_features(self, features: Iterable[Feature]) -> int:
         """
         Create a new cluster from the given features.
@@ -272,13 +207,11 @@ class FeatureClustering(IndexPlugin):
 
         """
 
-        self.idx.db.execute("savepoint create_cluster_from_features")
         new_cluster_id = self.create_new_empty_cluster()
 
         self._replace_features_for_cluster(new_cluster_id, features)
 
-        self.idx.db.execute("savepoint create_cluster_from_features")
-
+    @atomic
     def update_clustering(self, clustering: Clustering):
         """
         Update the clustering, ensuring all defined features are on the given clusters.
@@ -290,46 +223,46 @@ class FeatureClustering(IndexPlugin):
         See also: replace_clustering. To completely replace a clustering.
 
         """
-        self.idx.db.execute("savepoint update_clustering")
 
         for cluster_id, features in clustering.items():
             self._replace_features_for_cluster(cluster_id, features)
 
-        self.idx.db.execute("savepoint update_clustering")
-
+    @atomic
     def replace_clustering(self, clustering: Clustering):
         """
         Delete the currently defined clustering, and create a new clustering.
 
         """
 
-        self.idx.db.execute("savepoint replace_clustering")
-
         self.delete_clusters(self.cluster_ids)
 
         for cluster_id, features in clustering.items():
             self._replace_features_for_cluster(cluster_id, features)
 
-        self.idx.db.execute("savepoint replace_clustering")
-
+    @atomic
     def delete_clusters(self, cluster_ids: Iterable[int]) -> None:
-        pass
 
+        self.db.executemany(
+            "delete from cluster where cluster_id = ?",
+            [(cluster_id,) for cluster_id in cluster_ids],
+        )
+
+    @atomic
     def delete_features(self, features: Iterable[Feature]) -> None:
         """Delete specified features from the clustering (if present)."""
-        pass
+
+        self.db.executemany(
+            "DELETE from feature_cluster where (field, value) = (?, ?)",
+            (self.idx.feature_to_index(f) for f in features),
+        )
 
     def cluster_docs(self, cluster_id: int) -> BitMap:
         """Return the documents matching the given bitmap."""
-        pass
-
-    def lookup_cluster_for_feature(self, feature: Feature) -> Optional[int]:
-        """
-        Return the cluster_id of the given feature (if present).
-
-        Returns None if the feature is not assigned to any cluster.
-
-        """
+        return list(
+            self.db.execute(
+                "SELECT doc_ids from cluster where cluster_id = ?", [cluster_id]
+            )
+        )[0][0]
 
     def suggested_clustering_fields(self):
         """
@@ -348,6 +281,14 @@ class FeatureClustering(IndexPlugin):
             if cardinality > 1
         }
 
+    def cluster_features(self, cluster_id, top_k=None):
+        """Return a FeatureStats for the given cluster_id."""
+        pass
+
+    def facet_clusters_by_query(self, query, cluster_ids=None):
+        """Facet the clusters by the given query."""
+        pass
+
     def initialise_random_clustering(
         self,
         n_clusters: int,
@@ -355,6 +296,8 @@ class FeatureClustering(IndexPlugin):
         include_fields=None,
     ):
         """
+        Return a randomly initialised clustering for the given number of clusters.
+
         If include_fields is None, will create initial clusters using
         suggested_clustering_fields.
 
@@ -526,6 +469,7 @@ class FeatureClustering(IndexPlugin):
             for cluster_id, cluster_features in surrogate_clusters.items()
         }
 
+    @atomic
     def refine_clustering(
         self,
         cluster_ids: typing.Optional[Iterable[int]] = None,

@@ -240,9 +240,9 @@ if not newsgroups_idx.indexed_field_summary:
 # )
 
 
-ngs = newsgroups_idx.field_features("newsgroup")
+# ngs = newsgroups_idx.field_features("newsgroup")
 
-pivot = newsgroups_idx.facet_features(ngs, newsgroups_idx[("body", "sanctions")][0])
+# pivot = newsgroups_idx.facet_features(ngs, newsgroups_idx[("body", "sanctions")][0])
 
 # renderer = FeatureStatsRenderer(
 #     newsgroups_idx,
@@ -326,27 +326,24 @@ pivot = newsgroups_idx.facet_features(ngs, newsgroups_idx[("body", "sanctions")]
 
 # # # What can we do with a Clustering?
 # #
-# clustering = newsgroups_idx.p.feature_clusters
+clustering = newsgroups_idx.p.feature_clusters
 
-# random_clustering = clustering.initialise_random_clustering(256, min_docs=50)
+if not clustering.cluster_ids:
 
-# new_clustering = clustering._refine_clustering(
-#     random_clustering, group_test_n_clusters=32, iterations=100
-# )
+    random_clustering = clustering.initialise_random_clustering(
+        256, min_docs=10, include_fields=["body"]
+    )
 
-# for cluster_id, features in new_clustering.items():
-#     print()
-#     for f in features:
-#         print(f)
+    new_clustering = clustering._refine_clustering(
+        random_clustering, group_test_n_clusters=16, iterations=25
+    )
 
+    clustering.replace_clustering(new_clustering)
 
-# phrase = [("body", "united"), ("body", "states")]
-# phrase_docs = newsgroups_idx.match_phrase(phrase)
-# print(len(newsgroups_idx.match_phrase(phrase)))
-# print(len(newsgroups_idx.match_all(phrase)))
-# # %timeit newsgroups_idx.match_phrase(phrase)
-# # %timeit newsgroups_idx.match_all(phrase)
-
+    # for cluster_id, features in new_clustering.items():
+    #     print()
+    #     for f in features:
+    #         print(f)
 
 # +
 import asyncio

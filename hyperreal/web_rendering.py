@@ -6,6 +6,7 @@ is passed in to this is primarily self-rendering objects from other parts of Hyp
 
 """
 
+import math
 from urllib.parse import quote
 
 from tinyhtml import h, html, frag, raw
@@ -24,6 +25,15 @@ default_css = """
     padding: 0;
 }
 
+:root {
+  --ratio: 1.618;
+  --s-2: calc(var(--s-1) / var(--ratio));
+  --s-1: calc(var(--s0) / var(--ratio));
+  --s0: 1rem;
+  --s1: calc(var(--s0) * var(--ratio));
+  --s2: calc(var(--s1) * var(--ratio));
+}
+
 .cluster {
     display: flex;
     flex-wrap: wrap;
@@ -36,7 +46,7 @@ nav ul {
 
 header {
     padding: 0.5em;
-    background-color: lightcyan;
+    background-color: #efefef;
     height: fit-content;
 }
 
@@ -62,6 +72,7 @@ main {
     overflow: scroll;
     flex: 1;
     flex-basis: 40ch;
+    margin: var(--s-1);
 }
 
 pre {
@@ -79,10 +90,102 @@ pre {
 } 
 
 .stack > * + * {
-  margin-block-start: 2rem;
+  margin-block-start: var(--space, 1rem);
 }
 
+dl {
+    min-width: 10em;
+}
+
+dl a {
+    text-decoration: none;
+    min-width: 50%;
+    display: inline-block;
+}
+
+dt {
+    font-weight: bold;
+}
+
+dd {
+    margin-left: var(--s-1);
+}
+
+.bar::before {
+    height: 0.5em;
+    width: var(--w);
+    content: "";
+    display: inline-block;
+    margin-inline-end: var(--s-1);
+    vertical-align: middle;
+    background: repeating-linear-gradient(
+        90deg,
+        gray,
+        gray 0.995em,
+        white 0.01em,
+        white 0.02em
+    );
+}
+
+
 """
+
+
+def render_features_as_dl(
+    feature_stats,
+    feature_order=None,
+    url_key=None,
+    display_stat=None,
+    bar_stat=None,
+    bar_norm=None,
+    klass=False,
+):
+
+    feature_order = feature_order or feature_stats.keys()
+
+    items = []
+    last_field = None
+
+    for feature in feature_order:
+        field, html_value = feature
+        details = feature_stats[feature]
+
+        if field != last_field:
+            items.append(h("dt")(field))
+
+        style = False
+
+        if bar_stat is not None:
+            bar_width = math.log10(details[bar_stat])
+
+            # if bar_norm is not None:
+            #     bar_width /= bar_norm
+
+            # bar_width = max(bar_width**0.5 * 10, 0.1)
+
+            style = f"--w: {bar_width:.2f}em;"
+
+        display = None
+        if display_stat is not None:
+            display = details[display_stat]
+
+        if url_key is not None:
+            href = details[url_key]
+            items.append(
+                h("dd")(
+                    h("a", klass="bar", style=style, href=href)(html_value), display
+                )
+            )
+        else:
+            items.append(h("dd", klass="bar", style=style)(html_value, display))
+
+        last_field = field
+
+    if klass:
+        klass = f"stack {klass}"
+    else:
+        klass = "stack"
+    return h("dl", klass=klass)(items)
 
 
 def generate_nav(label, links, klass=None):
@@ -143,39 +246,6 @@ def feature_overview_link(handler, feature):
     href = f"/indexed-field/{field}?v={handler.to_url(value)}"
 
     return h("a", href=href)(value)
-
-
-def indexed_field_page(idx, indexed_fields, docs, field, features, order_by="value"):
-    """Lists all of the features in a field."""
-
-    handler = idx.field_handlers[field][0]
-
-    # Cases to handle: range encoded fields and the default presentations of keys? range
-    # features Not showing positions on fields for which it isn't relevant? Ie, based
-    # on what is known about the field as indexed
-    content = list_docs(docs), h("table")(
-        h("caption")(f"Matching documents and positions for field {field}"),
-        h("thead")(
-            h("tr")(h("th", scope="col")(name) for name in ["Feature", "Documents"])
-        ),
-        (
-            h("tr")(
-                h("th", scope="row")(feature_overview_link(handler, feature)),
-                h("td")(stats["doc_count"]),
-            )
-            for feature, stats in features.items()
-        ),
-    )
-
-    sub_nav_links = {
-        "Indexed Fields": [(f, f"/indexed-field/{f}") for f in indexed_fields]
-    }
-    return full_page(
-        f"Feature summary for field: {field}",
-        content,
-        sub_nav_links=sub_nav_links,
-        sub_nav_label="Indexed Fields",
-    )
 
 
 def index_field_overview(indexed_fields):
