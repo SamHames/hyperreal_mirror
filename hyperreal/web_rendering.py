@@ -99,7 +99,6 @@ dl {
 
 dl a {
     text-decoration: none;
-    min-width: 50%;
     display: inline-block;
 }
 
@@ -108,36 +107,41 @@ dt {
 }
 
 dd {
-    margin-left: var(--s-1);
+    margin-inline-start: var(--s-1);
 }
 
-.bar::before {
-    height: 0.5em;
-    width: var(--w);
-    content: "";
-    display: inline-block;
+dd > * {
     margin-inline-end: var(--s-1);
-    vertical-align: middle;
-    background: repeating-linear-gradient(
-        90deg,
-        gray,
-        gray 0.995em,
-        white 0.01em,
-        white 0.02em
-    );
 }
 
+.area-mark {
+    height: calc(var(--w));
+    width: calc(var(--w));
+    display: inline-block;
+    vertical-align: middle;
+    background: black;
+    margin-inline-end: var(--s-1);
+}
 
 """
 
 
-def render_features_as_dl(
+def calculate_root_scaling(total_doc_count, min_mapping_size=0.1):
+    """
+    Calculate a simple root factor for visualising marks.
+
+    """
+    return math.log10(min_mapping_size) / (-math.log10(total_doc_count))
+
+
+def render_feature_stats_as_dl(
     feature_stats,
     feature_order=None,
     url_key=None,
     display_stat=None,
-    bar_stat=None,
-    bar_norm=None,
+    area_stat=None,
+    total_doc_count=None,
+    stat_type="count",
     klass=False,
 ):
 
@@ -145,6 +149,10 @@ def render_features_as_dl(
 
     items = []
     last_field = None
+
+    root_scale = 0.5
+    if total_doc_count:
+        root_scale = calculate_root_scaling(total_doc_count)
 
     for feature in feature_order:
         field, html_value = feature
@@ -155,15 +163,9 @@ def render_features_as_dl(
 
         style = False
 
-        if bar_stat is not None:
-            bar_width = math.log10(details[bar_stat])
-
-            # if bar_norm is not None:
-            #     bar_width /= bar_norm
-
-            # bar_width = max(bar_width**0.5 * 10, 0.1)
-
-            style = f"--w: {bar_width:.2f}em;"
+        if area_stat is not None:
+            area_side = details[area_stat] ** root_scale
+            style = f"--w: {area_side:.2f}lh;"
 
         display = None
         if display_stat is not None:
@@ -173,11 +175,20 @@ def render_features_as_dl(
             href = details[url_key]
             items.append(
                 h("dd")(
-                    h("a", klass="bar", style=style, href=href)(html_value), display
+                    h("a", style=style, href=href)(
+                        h("div", klass="area-mark")(), html_value
+                    ),
+                    h("span")(display),
                 )
             )
         else:
-            items.append(h("dd", klass="bar", style=style)(html_value, display))
+            items.append(
+                h("dd", style=style)(
+                    h("div", klass="area-mark")(),
+                    html_value,
+                    h("span")(display),
+                )
+            )
 
         last_field = field
 
@@ -238,51 +249,20 @@ def list_docs(docs):
     return h("ul", klass="stack")(h("li", klass="doc")(doc) for _, _, doc in docs)
 
 
-# TODO: should these be accumulated into a mixin for the web interface?
-# IE - all of these methods requiring the index get the index from self?
-def feature_overview_link(handler, feature):
-    field, value = feature
+def render_field_table(index_summary):
 
-    href = f"/indexed-field/{field}?v={handler.to_url(value)}"
+    header = ["Field"] + list(next(iter(index_summary.values())).keys())
 
-    return h("a", href=href)(value)
-
-
-def index_field_overview(indexed_fields):
-    sub_nav_links = {
-        "Indexed Fields": [(f, f"/indexed-field/{f}") for f in indexed_fields]
-    }
-    return full_page(
-        f"Feature summary for field: {field}",
-        [],
-        sub_nav_links=sub_nav_links,
-        sub_nav_label="Indexed Fields",
-    )
-
-
-def link_to_indexed_field_overview(field):
-    return h("a", href=f"/indexed-field/{field}")(field)
-
-
-def home_page(index_summary_table):
-    """Render the home_page."""
-
-    header = index_summary_table[0]
-    data = index_summary_table[1:]
-
-    # TODO: probably need an attribute for title and description on the corpus?
-    table = h("table")(
+    return h("table")(
         h("caption")("Overview of the indexed fields for this collection."),
         h("thead")(h("tr")(h("th", scope="col")(col_name) for col_name in header)),
         h("tbody")(
             (
                 h("tr")(
-                    h("th", scope="row")(link_to_indexed_field_overview(row[0])),
-                    (h("td")(item) for item in row[1:]),
+                    h("th", scope="row")(key),
+                    (h("td")(item) for item in stats.values()),
                 )
-                for row in data
+                for key, stats in index_summary.items()
             )
         ),
     )
-
-    return full_page("Hyperreal Home", [table])

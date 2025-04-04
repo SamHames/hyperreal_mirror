@@ -293,6 +293,35 @@ class HyperrealIndex:
 
         return self._field_handlers
 
+    def feature_from_index(self, feature):
+        """
+        Convert a tuple of values loaded from the index to a feature.
+
+        """
+        field = feature[0]
+        handler = self.field_handlers[field][0]
+
+        if len(feature) == 2:
+            value = feature[1]
+            return field, handler.from_index(value)
+
+        elif len(feature) == 3:
+            value_start, value_end = feature[1:]
+
+            if value_start is None and value_end is None:
+                raise ValueError("At least one of start or end range must not be None.")
+
+            if value_start is not None:
+                value_start = handler.from_index(value_start)
+
+            if value_end is not None:
+                value_end = handler.from_index(value_end)
+
+            return field, value_start, value_end
+
+        else:
+            raise ValueError("A feature can only have 2 or 3 elements.")
+
     def feature_to_html(self, feature):
         """Render the values for feature as a tuple of html renderable values."""
 
@@ -415,9 +444,7 @@ class HyperrealIndex:
     @cached_property
     def indexed_field_summary(self):
 
-        # TODO: use the featurestats framework for this too.
-        header = (
-            "Field",
+        stats_keys = (
             "Value Type",
             "cardinality?",
             "Unique Values",
@@ -429,8 +456,8 @@ class HyperrealIndex:
             "Range Encoded",
         )
 
-        rows = list(
-            list(row)
+        indexed_fields = {
+            row[0]: dict(zip(stats_keys, row[1:]))
             for row in self.db.execute(
                 """
                 SELECT 
@@ -448,19 +475,18 @@ class HyperrealIndex:
                 order by field
                 """
             )
-        )
+        }
 
-        for row in rows:
-            field = row[0]
+        for field, stats in indexed_fields.items():
+
             handler = self.field_handlers[field][0]
 
-            min_value, max_value = row[4:6]
+            stats["Mininum Value"] = handler.from_index(stats["Mininum Value"])
+            stats["Maximum Value"] = handler.from_index(stats["Maximum Value"])
+            stats["Sortable"] = bool(stats["Sortable"])
+            stats["Range Encoded"] = bool(stats["Range Encoded"])
 
-            row[4:6] = handler.from_index(min_value), handler.from_index(max_value)
-            row[-2] = bool(row[-2])
-            row[-1] = bool(row[-1])
-
-        return [header] + [tuple(row) for row in rows]
+        return indexed_fields
 
     @property
     def max_doc_id(self) -> Optional[int]:
@@ -594,6 +620,8 @@ class HyperrealIndex:
 
         features = {}
 
+        total_doc_count = self.total_doc_count
+
         if range_encoded:
 
             rows = self.db.execute(
@@ -612,7 +640,10 @@ class HyperrealIndex:
                 doc_count = cumulative_doc_count - previous_doc_count
                 if doc_count >= min_docs:
                     feature = (field, handler.from_index(value))
-                    stats = {"doc_count": doc_count}
+                    stats = {
+                        "doc_count": doc_count,
+                        "relative_doc_count": doc_count / total_doc_count,
+                    }
                     features[feature] = stats
 
                 previous_doc_count = cumulative_doc_count
@@ -630,7 +661,11 @@ class HyperrealIndex:
             )
             for value, doc_count, position_count in rows:
                 feature = (field, handler.from_index(value))
-                stats = {"doc_count": doc_count, "position_count": position_count}
+                stats = {
+                    "doc_count": doc_count,
+                    "position_count": position_count,
+                    "relative_doc_count": doc_count / total_doc_count,
+                }
 
                 features[feature] = stats
 
@@ -713,6 +748,28 @@ class HyperrealIndex:
                 "A feature can be at most three elements long "
                 f"(field, range_start, range_end) - got {feature}"
             )
+
+    @db_utilities.atomic
+    def match_any(self, features):
+        """Return documents matching *any* of the features provided (boolean OR)."""
+        result = BitMap()
+
+        for f in features:
+            result |= self[f]
+
+        return result
+
+    @db_utilities.atomic
+    def match_all(self, features):
+        """Return documents matching *all* of the features provided (boolean AND)."""
+        iter_features = iter(features)
+
+        result = self[next(iter_features)]
+
+        for f in iter_features:
+            result |= self[f]
+
+        return result
 
     def _match_literal_feature(self, field, index_value) -> tuple[BitMap, int, int]:
 

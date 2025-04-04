@@ -704,6 +704,8 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                 position_count,
             ) in field_processing:
 
+                # TODO: should probably have a check on the cardinality of the values
+                # in the field - if there's one doc/value then this is a waste of space.
                 if (max_doc_cardinality, stored_sorted, position_count) == (1, 1, 0):
 
                     # Generate the initial merged values

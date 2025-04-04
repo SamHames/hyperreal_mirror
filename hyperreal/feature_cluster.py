@@ -139,28 +139,27 @@ class FeatureClustering(IndexPlugin):
         changed_clusters = self.db.execute("select cluster_id from changed_cluster")
 
         for (cluster_id,) in changed_clusters:
-            pass
+            features = self.cluster_features(cluster_id)
+            cluster_docs = self.idx.match_any(features)
+
+            self.db.execute(
+                "UPDATE cluster set doc_count = ?, doc_ids = ? where cluster_id = ?",
+                [len(cluster_docs), doc_ids, cluster_id],
+            )
 
     @atomic
     def _update_feature_statistics(self):
-
-        to_update = self.db.execute(
+        self.db.execute(
             """
-            SELECT 
-                field, 
-                value
-            from feature_cluster 
+            UPDATE feature_cluster fc
+                set doc_count = (
+                    select doc_count
+                    from inverted_index ii
+                    where (fc.field, fc.value) = (ii.field, ii.value)
+                )
             where doc_count is null
             """
         )
-
-        for feature in to_update:
-            feature, [rowid] = self._feature_from_row(row)
-            _, doc_count, _ = self.idx[feature]
-            self.db.execute(
-                "update feature_cluster set doc_count = ? where rowid = ?",
-                (doc_count, rowid),
-            )
 
     @property
     def cluster_ids(self) -> list[int]:
@@ -179,7 +178,6 @@ class FeatureClustering(IndexPlugin):
 
         return cluster_id
 
-    @atomic
     def _replace_features_for_cluster(self, cluster_id, features):
 
         # Delete the existing features for the cluster
@@ -273,7 +271,7 @@ class FeatureClustering(IndexPlugin):
 
         """
 
-        # TODO: check an optional attribute on the corpus.
+        # TODO: check an optional attribute on the corpus?
 
         return {
             field

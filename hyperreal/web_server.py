@@ -58,11 +58,11 @@ class IndexedField(HyperrealRequestHandler):
         }
 
         total_doc_count = self.idx.total_doc_count
-        rendered_features = web_rendering.render_features_as_dl(
+        rendered_features = web_rendering.render_feature_stats_as_dl(
             features,
             url_key="url",
-            bar_stat="doc_count",
-            bar_norm=total_doc_count,
+            area_stat="relative_doc_count",
+            total_doc_count=total_doc_count,
             display_stat="doc_count",
         )
 
@@ -96,15 +96,17 @@ class IndexedField(HyperrealRequestHandler):
 
 class IndexedFieldOverview(HyperrealRequestHandler):
     def get(self):
-        linkable_fields = self.idx.field_handlers
-
+        sub_nav_links = {
+            "Indexed Fields": [
+                (f, f"/indexed-field/{f}") for f in self.idx.field_handlers
+            ]
+        }
         self.write(
-            web_rendering.indexed_field_page(
-                self.idx,
-                linkable_fields,
+            web_rendering.full_page(
+                f"Indexed Feature Overview",
                 [],
-                None,
-                {},
+                sub_nav_links=sub_nav_links,
+                sub_nav_label="Indexed Fields",
             ).render()
         )
 
@@ -116,18 +118,29 @@ class BrowseClusters(HyperrealRequestHandler):
 
 class MainHandler(HyperrealRequestHandler):
     def get(self):
-        table_fields = [list(row) for row in self.idx.indexed_field_summary.copy()]
 
-        for row in table_fields[1:]:
-            # Conver the value to HTML
-            field = row[0]
+        rendered_fields = {}
+
+        for field, stats in self.idx.indexed_field_summary.items():
+
+            row = stats.copy()
             handler = self.idx.field_handlers[field][0]
 
-            min_value, max_value = row[4:6]
+            row["Mininum Value"] = handler.to_html(row["Mininum Value"])
+            row["Maximum Value"] = handler.to_html(row["Maximum Value"])
 
-            row[4:6] = handler.to_html(min_value), handler.to_html(max_value)
+            key = h("a", href=self.reverse_url("field-features", field))(field)
 
-        self.write(web_rendering.home_page(table_fields).render())
+            rendered_fields[key] = row
+
+        table = web_rendering.render_field_table(rendered_fields)
+
+        self.write(
+            web_rendering.full_page(
+                f"Overview of Indexed Fields",
+                [table],
+            ).render()
+        )
 
 
 def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
