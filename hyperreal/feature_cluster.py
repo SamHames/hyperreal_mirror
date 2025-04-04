@@ -119,21 +119,36 @@ class FeatureClustering(IndexPlugin):
     current_version = "1"
     migrations = [cluster_migration]
 
-    @atomic
-    def post_index(self):
+    def post_index_rebuild(self):
         """Regenerate docs matching each cluster and individual feature statistics."""
-        self.db.executemany(
-            "insert or ignore into changed_cluster values(?)",
-            ((c,) for c in self.cluster_ids),
+        self.db.execute(
+            """
+            INSERT or ignore into changed_cluster
+                select cluster_id from cluster
+            """,
         )
+        # TODO, probably want to do some of this in parallel.
         self._update_changed_clusters()
 
         # Clear out the feature_cluster table statistics, so they can be regenerated.
-        self.db.execute("update feature_cluster set doc_count = null")
+        self.db.execute(
+            """
+            UPDATE feature_cluster
+                set doc_count = (
+                    select doc_count
+                    from inverted_index ii
+                    where (feature_cluster.field, feature_cluster.value) = 
+                        (ii.field, ii.value)
+                )
+            where doc_count is null
+            """
+        )
 
+    def post_transaction(self):
+        """Update clusters and feature statistics after any transaction."""
         self._update_feature_statistics()
+        self._update_changed_clusters()
 
-    @atomic
     def _update_changed_clusters(self):
 
         changed_clusters = self.db.execute("select cluster_id from changed_cluster")
@@ -144,18 +159,18 @@ class FeatureClustering(IndexPlugin):
 
             self.db.execute(
                 "UPDATE cluster set doc_count = ?, doc_ids = ? where cluster_id = ?",
-                [len(cluster_docs), doc_ids, cluster_id],
+                [len(cluster_docs), cluster_docs, cluster_id],
             )
 
-    @atomic
     def _update_feature_statistics(self):
         self.db.execute(
             """
-            UPDATE feature_cluster fc
+            UPDATE feature_cluster
                 set doc_count = (
                     select doc_count
                     from inverted_index ii
-                    where (fc.field, fc.value) = (ii.field, ii.value)
+                    where (feature_cluster.field, feature_cluster.value) = 
+                        (ii.field, ii.value)
                 )
             where doc_count is null
             """
@@ -164,8 +179,15 @@ class FeatureClustering(IndexPlugin):
     @property
     def cluster_ids(self) -> list[int]:
         """Return the list of all defined clusters."""
-        rows = self.db.execute("select cluster_id from cluster")
-        return [row[0] for row in rows]
+        rows = self.db.execute("select cluster_id, doc_count from cluster")
+        total_docs = self.idx.total_doc_count
+        return {
+            cluster_id: {
+                "doc_count": doc_count,
+                "relative_doc_count": doc_count / total_docs,
+            }
+            for cluster_id, doc_count in rows
+        }
 
     @atomic
     def create_new_empty_cluster(self) -> int:
@@ -186,7 +208,7 @@ class FeatureClustering(IndexPlugin):
         )
 
         # Delete existing features that might be assigned to another cluster.
-        self.delete_features(features)
+        self._delete_features(features)
 
         self.db.executemany(
             """
@@ -210,29 +232,15 @@ class FeatureClustering(IndexPlugin):
         self._replace_features_for_cluster(new_cluster_id, features)
 
     @atomic
-    def update_clustering(self, clustering: Clustering):
+    def replace_clusters(self, clustering: Clustering):
         """
-        Update the clustering, ensuring all defined features are on the given clusters.
+        Replace the given clusters on the index.
 
-        This function will reassign features if already present, add new features if not
-        present, and will leave all features not referenced as they are. New clusters
-        will be created to match any cluster_ids that aren't already present.
-
-        See also: replace_clustering. To completely replace a clustering.
+        If the given clusters already exist they will be removed first. Features
+        assigned to other clusters will be moved. Features present on the initial
+        clustering but not the replacement will be deleted.
 
         """
-
-        for cluster_id, features in clustering.items():
-            self._replace_features_for_cluster(cluster_id, features)
-
-    @atomic
-    def replace_clustering(self, clustering: Clustering):
-        """
-        Delete the currently defined clustering, and create a new clustering.
-
-        """
-
-        self.delete_clusters(self.cluster_ids)
 
         for cluster_id, features in clustering.items():
             self._replace_features_for_cluster(cluster_id, features)
@@ -245,14 +253,17 @@ class FeatureClustering(IndexPlugin):
             [(cluster_id,) for cluster_id in cluster_ids],
         )
 
-    @atomic
-    def delete_features(self, features: Iterable[Feature]) -> None:
-        """Delete specified features from the clustering (if present)."""
-
+    def _delete_features(self, features):
         self.db.executemany(
             "DELETE from feature_cluster where (field, value) = (?, ?)",
             (self.idx.feature_to_index(f) for f in features),
         )
+
+    @atomic
+    def delete_features(self, features: Iterable[Feature]) -> None:
+        """Delete specified features from the clustering (if present)."""
+
+        self._delete_features(features)
 
     def cluster_docs(self, cluster_id: int) -> BitMap:
         """Return the documents matching the given bitmap."""
@@ -280,8 +291,37 @@ class FeatureClustering(IndexPlugin):
         }
 
     def cluster_features(self, cluster_id, top_k=None):
-        """Return a FeatureStats for the given cluster_id."""
-        pass
+        """Return features and associated statistics for the given cluster."""
+        top_k = top_k or 2**32
+
+        features = self.db.execute(
+            """
+            SELECT
+                field, value, doc_count
+            from feature_cluster
+            where cluster_id = ?
+            order by doc_count desc
+            limit ?
+            """,
+            [cluster_id, top_k],
+        )
+
+        total_docs = self.idx.total_doc_count
+
+        return {
+            self.idx.feature_from_index((field, value)): {
+                "docs_count": docs_count,
+                "relative_doc_count": docs_count / total_docs,
+            }
+            for field, value, docs_count in features
+        }
+
+    @atomic
+    def clustering(self, top_k=None):
+        return {
+            cluster_id: self.cluster_features(cluster_id, top_k=top_k)
+            for cluster_id in self.cluster_ids
+        }
 
     def facet_clusters_by_query(self, query, cluster_ids=None):
         """Facet the clusters by the given query."""
@@ -499,6 +539,8 @@ class FeatureClustering(IndexPlugin):
             layer_checks=layer_checks,
             moving_feature_fraction_tolerance=moving_feature_fraction_tolerance,
         )
+
+        self.replace_clustering(refined_clustering)
 
 
 def _construct_mmap(

@@ -55,15 +55,6 @@ class IndexPlugin:
 
     def __init__(self, idx: "HyperrealIndex"):
 
-        if not self.plugin_name.isidentifier():
-            raise ValueError(
-                f"plugin_name must be a valid python identifier, got {plugin_name=}"
-            )
-        if keyword.iskeyword(self.plugin_name):
-            raise ValueError(
-                f"plugin_name must not be a Python keyword, got {plugin_name=}"
-            )
-
         self.setup_validate_migrations()
 
         self.idx = idx
@@ -75,6 +66,16 @@ class IndexPlugin:
 
         This is designed to enable things like recalculating saved results after a
         corpus has changed, such as by adding new documents.
+
+        """
+        return
+
+    def post_transaction(self) -> None:
+        """
+        Optionally override to specify actions to take after any transaction completes.
+
+        This is designed to enable house keeping functionality such as updating derived
+        statistics after making state changes.
 
         """
         return

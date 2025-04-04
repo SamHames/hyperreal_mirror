@@ -38,7 +38,7 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
 
     def initialize(self):
         self.idx = self.application.settings["hyperreal_idx"]
-        self.feature_clusters = self.idx.p.feature_clusters
+        self.feature_clusters = self.idx.plugins["feature_clusters"]
 
 
 class IndexedField(HyperrealRequestHandler):
@@ -98,7 +98,8 @@ class IndexedFieldOverview(HyperrealRequestHandler):
     def get(self):
         sub_nav_links = {
             "Indexed Fields": [
-                (f, f"/indexed-field/{f}") for f in self.idx.field_handlers
+                (f, self.reverse_url("field-features", f))
+                for f in self.idx.field_handlers
             ]
         }
         self.write(
@@ -113,7 +114,22 @@ class IndexedFieldOverview(HyperrealRequestHandler):
 
 class BrowseClusters(HyperrealRequestHandler):
     def get(self):
-        pass
+
+        top_k = int(self.get_argument("top_k", "10"))
+
+        cluster_stats = self.feature_clusters.cluster_ids
+        clustering = self.feature_clusters.clustering(top_k=int(top_k))
+
+        rendered = web_rendering.render_feature_clustering(
+            clustering, cluster_stats, self.idx.total_doc_count
+        )
+
+        self.write(
+            web_rendering.full_page(
+                f"Browse Feature Clusters",
+                [rendered],
+            ).render()
+        )
 
 
 class MainHandler(HyperrealRequestHandler):
@@ -148,14 +164,16 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
         handlers=[
             tornado.web.url(rf"{base_path}/", MainHandler, name="home"),
             tornado.web.url(
-                rf"{base_path}/indexed-field/", IndexedFieldOverview, name="field-index"
+                rf"{base_path}/indexed-field/?",
+                IndexedFieldOverview,
+                name="field-index",
             ),
             tornado.web.url(
                 rf"{base_path}/indexed-field/([^/]+)",
                 IndexedField,
                 name="field-features",
             ),
-            tornado.web.url(rf"{base_path}/browse/", BrowseClusters, name="browse"),
+            tornado.web.url(rf"{base_path}/browse/?", BrowseClusters, name="browse"),
         ],
         hyperreal_idx=hyperreal_idx,
         autoreload=True,

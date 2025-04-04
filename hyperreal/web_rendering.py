@@ -93,17 +93,9 @@ pre {
   margin-block-start: var(--space, 1rem);
 }
 
-dl {
-    min-width: 10em;
-}
-
 dl a {
     text-decoration: none;
     display: inline-block;
-}
-
-dt {
-    font-weight: bold;
 }
 
 dd {
@@ -121,6 +113,17 @@ dd > * {
     vertical-align: middle;
     background: black;
     margin-inline-end: var(--s-1);
+}
+
+
+.feature-cluster {
+}
+
+.feature-cluster > * {
+    margin-inline-end: var(--s1);
+    margin-block-end: var(--s1);
+    max-width: 10em;
+    overflow: scroll;
 }
 
 """
@@ -141,8 +144,7 @@ def render_feature_stats_as_dl(
     display_stat=None,
     area_stat=None,
     total_doc_count=None,
-    stat_type="count",
-    klass=False,
+    klass="stack",
 ):
 
     feature_order = feature_order or feature_stats.keys()
@@ -159,13 +161,13 @@ def render_feature_stats_as_dl(
         details = feature_stats[feature]
 
         if field != last_field:
-            items.append(h("dt")(field))
+            items.append(h("dt")(h("em")(field)))
 
         style = False
 
         if area_stat is not None:
             area_side = details[area_stat] ** root_scale
-            style = f"--w: {area_side:.2f}lh;"
+            style = f"--w: {area_side:.3f}lh;"
 
         display = None
         if display_stat is not None:
@@ -192,11 +194,28 @@ def render_feature_stats_as_dl(
 
         last_field = field
 
-    if klass:
-        klass = f"stack {klass}"
-    else:
-        klass = "stack"
     return h("dl", klass=klass)(items)
+
+
+def render_feature_clustering(clustering, cluster_stats, total_doc_count):
+
+    clusters = []
+
+    for cluster_id, features in clustering.items():
+
+        clusters.append(
+            h("li")(
+                h("h2")(cluster_id),
+                render_feature_stats_as_dl(
+                    features,
+                    area_stat="relative_doc_count",
+                    total_doc_count=total_doc_count,
+                    klass="stack",
+                ),
+            )
+        )
+
+    return h("ul", klass="cluster feature-cluster")(clusters)
 
 
 def generate_nav(label, links, klass=None):
@@ -218,7 +237,11 @@ def full_page(
 ):
     """Render a complete page with navigation and a page title."""
 
-    nav_links = [("Home", "/"), ("Feature Lists", "/indexed-field/")]
+    nav_links = [
+        ("Home", "/"),
+        ("Feature Lists", "/indexed-field/"),
+        ("Browse", "/browse"),
+    ]
     main_nav = generate_nav("Main", nav_links)
 
     sub_nav_links = sub_nav_links or {}

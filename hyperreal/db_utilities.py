@@ -120,15 +120,28 @@ def atomic(func):
     """
     A decorator that nests SQLite savepoints around method calls.
 
-    This assumes that self has a .db, as initialised using a normal IndexPlugin class.
+    This assumes that self has a .db and a .idx attribute, as initialised using a normal
+    IndexPlugin class.
+
+    This decorator will also call the post_transaction method on self when succesfully
+    completing a full set of nested transactions.
 
     """
 
     @wraps(func)
     def wrapper(*args, **kwargs):
         self = args[0]
+
+        # This could be used on the core, or a plugin.
+        if hasattr(self, "idx"):
+            idx = self.idx
+        else:
+            idx = self
+
         try:
             self.db.execute(f'savepoint "{func.__name__}"')
+
+            idx._transaction_level += 1
 
             results = func(*args, **kwargs)
 
@@ -142,6 +155,12 @@ def atomic(func):
             raise
 
         finally:
+            idx._transaction_level -= 1
+
+            if idx._transaction_level == 0:
+                for plugin in idx.plugins.values():
+                    plugin.post_transaction()
+
             self.db.execute(f'release "{func.__name__}"')
 
     return wrapper

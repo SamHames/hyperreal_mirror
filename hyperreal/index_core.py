@@ -136,7 +136,10 @@ class HyperrealIndex:
         self.pool = pool
         self.db = db_utilities.connect_sqlite(index_path)
         self._provided_plugins = plugins or []
-        self.p = SimpleNamespace()
+        self.plugins = dict()
+
+        # Used for the atomic wrapper available for plugins to store state on the index.
+        self._transaction_level = 0
 
         # TODO: validate all the details of the plugins are consistent - unique
         # plugin_names etc.
@@ -182,17 +185,17 @@ class HyperrealIndex:
     def _init_plugins(self):
         """Initialise plugins, ensuring all migrations have been run."""
 
-        for PluginClass in self._provided_plugins:
+        for plugin_init in self._provided_plugins:
 
             # Initialise the plugin class with this index.
-            plugin = PluginClass(self)
+            plugin = plugin_init(self)
 
             # Check version against the index and run migrations if necessary.
             self._ensure_migrated(plugin)
 
             # Finally make the plugin available against the appropriate namespace in the
             # index.
-            setattr(self.p, plugin.plugin_name, plugin)
+            self.plugins[plugin.plugin_name] = plugin
 
     def _ensure_migrated(self, plugin: index_plugin.IndexPlugin):
 
@@ -435,6 +438,7 @@ class HyperrealIndex:
             passage_group_size=passage_group_size,
         )
 
+        # TODO: call post_index_rebuild on plugins.
         # The schema might have changed, so invalidate if present.
         self._field_handlers = None
         self._passage_group_size = passage_group_size
@@ -749,25 +753,26 @@ class HyperrealIndex:
                 f"(field, range_start, range_end) - got {feature}"
             )
 
-    @db_utilities.atomic
     def match_any(self, features):
         """Return documents matching *any* of the features provided (boolean OR)."""
         result = BitMap()
 
         for f in features:
-            result |= self[f]
+            result |= self[f][0]
 
         return result
 
-    @db_utilities.atomic
     def match_all(self, features):
         """Return documents matching *all* of the features provided (boolean AND)."""
+        if not features:
+            return BitMap()
+
         iter_features = iter(features)
 
-        result = self[next(iter_features)]
+        result = self[next(iter_features)][0]
 
         for f in iter_features:
-            result |= self[f]
+            result |= self[f][0]
 
         return result
 
