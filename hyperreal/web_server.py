@@ -115,7 +115,7 @@ class IndexedFieldOverview(HyperrealRequestHandler):
 class BrowseClusters(HyperrealRequestHandler):
     def get(self):
 
-        top_k = int(self.get_argument("top_k", "10"))
+        top_k = int(self.get_argument("top_k", "20"))
 
         cluster_stats = self.feature_clusters.cluster_ids
         clustering = self.feature_clusters.clustering(top_k=int(top_k))

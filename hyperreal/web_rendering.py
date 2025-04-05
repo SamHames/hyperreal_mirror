@@ -27,11 +27,12 @@ default_css = """
 
 :root {
   --ratio: 1.618;
-  --s-2: calc(var(--s-1) / var(--ratio));
-  --s-1: calc(var(--s0) / var(--ratio));
   --s0: 1rem;
   --s1: calc(var(--s0) * var(--ratio));
   --s2: calc(var(--s1) * var(--ratio));
+  --s-1: calc(var(--s0) / var(--ratio));
+  --s-2: calc(var(--s-1) / var(--ratio));
+  --s-3: calc(var(--s-2) / var(--ratio))
 }
 
 .cluster {
@@ -106,6 +107,10 @@ dd > * {
     margin-inline-end: var(--s-1);
 }
 
+dt::after {
+    content: ":";
+}
+
 .area-mark {
     height: calc(var(--w));
     width: calc(var(--w));
@@ -116,14 +121,15 @@ dd > * {
 }
 
 
-.feature-cluster {
+.feature-clustering {
 }
 
-.feature-cluster > * {
+.feature-clustering > * {
     margin-inline-end: var(--s1);
     margin-block-end: var(--s1);
-    max-width: 10em;
+    --space: var(--s-3);
     overflow: scroll;
+    width: 10em;
 }
 
 """
@@ -215,7 +221,7 @@ def render_feature_clustering(clustering, cluster_stats, total_doc_count):
             )
         )
 
-    return h("ul", klass="cluster feature-cluster")(clusters)
+    return h("ul", klass="cluster feature-clustering")(clusters)
 
 
 def generate_nav(label, links, klass=None):
