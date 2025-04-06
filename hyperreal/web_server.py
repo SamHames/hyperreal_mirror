@@ -21,7 +21,7 @@ import tornado
 
 from tinyhtml import h
 
-from .index_core import HyperrealIndex, sort_filter_table
+from .index_core import HyperrealIndex, sort_filter_table, apply_filter_table
 from . import web_rendering
 
 
@@ -123,6 +123,7 @@ class BrowseClusters(HyperrealRequestHandler):
         c = self.get_argument("c", None)
 
         matching_docs = None
+        area_stat = "relative_doc_count"
 
         if f is None and c is None:
             cluster_stats = self.feature_clusters.cluster_ids
@@ -137,8 +138,7 @@ class BrowseClusters(HyperrealRequestHandler):
 
         elif c is not None:
             cluster_id = int(c)
-            matching_docs = self.feature_clusters.cluster_docs[cluster_id]
-            count = len(matching_docs)
+            matching_docs, count = self.feature_clusters.cluster_docs(cluster_id)
 
         else:
             raise Exception()
@@ -146,17 +146,34 @@ class BrowseClusters(HyperrealRequestHandler):
         docs = []
         if matching_docs is not None:
             docs = self.idx.html_docs(matching_docs[:20])
-            cluster_stats = self.feature_clusters.cluster_ids
+            cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
             cluster_order = sort_filter_table(
-                cluster_stats, order_by="relative_doc_count"
+                cluster_stats, order_by="jaccard_similarity", keep_above=0
             )
-            clustering = self.feature_clusters.clustering(top_k=int(top_k))
+            faceted = self.feature_clusters.facet_clustering_by_query(
+                matching_docs, cluster_order
+            )
 
-        # Update the clustering to include a url link
+            clustering = {
+                cluster_id: apply_filter_table(
+                    features,
+                    order_by="jaccard_similarity",
+                    first_k=int(top_k),
+                    keep_above=0,
+                )
+                for cluster_id, features in faceted.items()
+            }
+
+            area_stat = "jaccard_similarity"
+
+        # Update the clusters and features to include a url link
+        base_url = self.reverse_url("browse")
+
         for cluster_id in cluster_order:
+            cluster_query = f"c={cluster_id}"
+            cluster_stats[cluster_id]["url"] = base_url + cluster_query
 
             for f, stats in clustering[cluster_id].items():
-                base_url = self.reverse_url("browse")
                 query_string = self.idx.feature_to_url_query(f)
                 stats["url"] = base_url + query_string
 
@@ -166,6 +183,7 @@ class BrowseClusters(HyperrealRequestHandler):
             self.idx.total_doc_count,
             cluster_order=cluster_order,
             url_key="url",
+            area_stat=area_stat,
         )
 
         self.write(

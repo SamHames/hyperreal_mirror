@@ -22,6 +22,7 @@ from pyroaring import BitMap
 
 from . import query
 from .db_utilities import atomic
+from .index_builder import _batch
 from .index_plugin import Migration, IndexPlugin
 
 if typing.TYPE_CHECKING:
@@ -60,7 +61,7 @@ cluster_migration = Migration(
         """,
         """
         CREATE table changed_cluster(
-            /* 
+            /*
             Track any clusters that have their saved features changed.
 
             This is necessary to know which clusters need to be cleaned up, or have
@@ -87,7 +88,7 @@ cluster_migration = Migration(
         CREATE trigger delete_changed_clusters before delete on feature_cluster
         begin
             -- Track clusters of deleted features
-            insert or ignore into changed_cluster(cluster_id) 
+            insert or ignore into changed_cluster(cluster_id)
                 values (old.cluster_id);
         end;
         """,
@@ -137,7 +138,7 @@ class FeatureClustering(IndexPlugin):
                 set doc_count = (
                     select doc_count
                     from inverted_index ii
-                    where (feature_cluster.field, feature_cluster.value) = 
+                    where (feature_cluster.field, feature_cluster.value) =
                         (ii.field, ii.value)
                 )
             where doc_count is null
@@ -169,7 +170,7 @@ class FeatureClustering(IndexPlugin):
                 set doc_count = (
                     select doc_count
                     from inverted_index ii
-                    where (feature_cluster.field, feature_cluster.value) = 
+                    where (feature_cluster.field, feature_cluster.value) =
                         (ii.field, ii.value)
                 )
             where doc_count is null
@@ -269,9 +270,10 @@ class FeatureClustering(IndexPlugin):
         """Return the documents matching the given bitmap."""
         return list(
             self.db.execute(
-                "SELECT doc_ids from cluster where cluster_id = ?", [cluster_id]
+                "SELECT doc_ids, doc_count from cluster where cluster_id = ?",
+                [cluster_id],
             )
-        )[0][0]
+        )[0]
 
     def suggested_clustering_fields(self):
         """
@@ -323,9 +325,46 @@ class FeatureClustering(IndexPlugin):
             for cluster_id in self.cluster_ids
         }
 
+    @atomic
     def facet_clusters_by_query(self, query, cluster_ids=None):
         """Facet the clusters by the given query."""
-        pass
+
+        cluster_scores = self.cluster_ids
+
+        q_len = len(query)
+
+        if cluster_ids is not None:
+            cluster_scores = {
+                cluster_id: cluster_scores[cluster_id] for cluster_id in cluster_ids
+            }
+
+        for cluster_id, stats in cluster_scores.items():
+
+            docs, doc_count = self.cluster_docs(cluster_id)
+
+            inter = query.intersection_cardinality(docs)
+            stats["hits"] = inter
+
+            # Compute some other derived statistics
+            stats["jaccard_similarity"] = inter / (doc_count + q_len - inter)
+            stats["feature_proportion"] = inter / doc_count
+            stats["query_proportion"] = inter / q_len
+
+        return cluster_scores
+
+    @atomic
+    def facet_clustering_by_query(self, query, cluster_ids=None):
+        """Facet the features in each cluster by the given query."""
+
+        cluster_ids = cluster_ids or self.cluster_ids
+        clustering = {}
+
+        for cluster_id in cluster_ids:
+
+            features = self.cluster_features(cluster_id)
+            clustering[cluster_id] = self.idx.facet_features(query, features)
+
+        return clustering
 
     def initialise_random_clustering(
         self,

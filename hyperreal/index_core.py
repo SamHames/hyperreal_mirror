@@ -706,7 +706,9 @@ class HyperrealIndex:
         return features
 
     def facet_features(
-        self, features: Iterable[Feature], query: AbstractBitMap
+        self,
+        query: AbstractBitMap,
+        features: Iterable[Feature],
     ) -> FeatureStatistics:
         """
         Intersect the docs matching each feature with the provided query.
@@ -1123,17 +1125,33 @@ class HyperrealIndex:
 # 3. Show me the 20 most similar time periods to this query
 
 
-def sort_filter_table(table, order_by=None, reverse=True, first_k=None):
+def sort_filter_table(
+    table, order_by=None, reverse=True, first_k=None, keep_above=None
+):
     if order_by is not None:
+
+        if keep_above is not None:
+            keys = (k for k in table.keys() if table[k][order_by] > keep_above)
+        else:
+            keys = table.keys()
+
         key_order = sorted(
-            table.keys(),
+            keys,
             key=lambda k: table[k][order_by],
             reverse=reverse,
         )
 
         if first_k is not None:
             key_order = key_order[:first_k]
+
     else:
         key_order = list(table.keys())
 
     return key_order
+
+
+def apply_filter_table(
+    table, order_by=None, reverse=True, first_k=None, keep_above=None
+):
+    key_order = sort_filter_table(table, order_by, reverse, first_k, keep_above)
+    return {key: table[key] for key in key_order}

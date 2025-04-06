@@ -128,6 +128,7 @@ dt::after {
     vertical-align: middle;
     background: black;
     margin-inline-end: var(--s-1);
+    border-radius: 50%;
 }
 
 .feature-clustering {
@@ -147,6 +148,7 @@ dt::after {
     padding: var(--s-2);
     text-align: right;
     border-bottom: solid;
+    margin-block-end: var(--s-2);
 }
 
 .cluster-header h2 {
@@ -223,7 +225,12 @@ def render_feature_stats_as_dl(
 
 
 def render_feature_clustering(
-    clustering, cluster_stats, total_doc_count, cluster_order=None, url_key=None
+    clustering,
+    cluster_stats,
+    total_doc_count,
+    cluster_order=None,
+    area_stat="relative_doc_count",
+    url_key=None,
 ):
 
     cluster_order = cluster_order or clustering.keys()
@@ -232,22 +239,24 @@ def render_feature_clustering(
 
     for cluster_id in cluster_order:
 
+        stats = cluster_stats[cluster_id]
+
         features = clustering[cluster_id]
 
-        cluster_width = calculate_area_mark(
-            cluster_stats[cluster_id]["relative_doc_count"], total_doc_count
-        )
+        cluster_width = calculate_area_mark(stats[area_stat], total_doc_count)
         style = f"--w: {cluster_width:.3f}lh"
 
         clusters.append(
             h("li")(
                 h("div", klass="cluster-header")(
-                    h("h2")(cluster_id),
-                    h("div", klass="area-mark", style=style)(),
+                    h("a", href=stats["url"])(
+                        h("h2")(cluster_id),
+                        h("div", klass="area-mark", style=style)(),
+                    )
                 ),
                 render_feature_stats_as_dl(
                     features,
-                    area_stat="relative_doc_count",
+                    area_stat=area_stat,
                     total_doc_count=total_doc_count,
                     url_key=url_key,
                 ),
