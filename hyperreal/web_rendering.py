@@ -33,6 +33,7 @@ default_css = """
     --s-1: calc(var(--s0) / var(--ratio));
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
+    --header: #efefef;
 }
 
 .cluster {
@@ -40,19 +41,29 @@ default_css = """
     flex-wrap: wrap;
 }
 
-nav ul {
-    list-style: none;
-    margin-bottom: 0.5em;
-}
-
 header {
     padding: var(--s0);
-    background-color: #efefef;
+    background-color: var(--header);
     height: fit-content;
+    border-bottom: solid;
 }
 
+nav ul {
+    list-style: none;
+    margin-bottom: var(--s-1);
+}
+
+.nav-label {
+    margin-inline-end: var(--s-1);
+}
+
+.inlined {
+    display: inline-block;
+}
+
+
 ul li {
-    margin-right: 0.5em;
+    margin-right: var(--s-1);
 }
 
 body {
@@ -98,6 +109,10 @@ dl a {
     display: inline-block;
 }
 
+dd {
+    margin-inline-start: var(--s-1);
+}
+
 dd > * {
     margin-inline-end: var(--s-1);
 }
@@ -125,6 +140,19 @@ dt::after {
     --space: var(--s-3);
     width: 10em;
     overflow: scroll;
+}
+
+.cluster-header {
+    background: var(--header);
+    padding: var(--s-2);
+    text-align: right;
+    border-bottom: solid;
+}
+
+.cluster-header h2 {
+    display: inline-block;
+    font-size: 100%;
+    margin-inline-end: var(--s-1);
 }
 
 """
@@ -172,7 +200,7 @@ def render_feature_stats_as_dl(
 
         display = None
         if display_stat is not None:
-            display = details[display_stat]
+            display = h("span")(details[display_stat])
 
         if url_key is not None:
             href = details[url_key]
@@ -181,16 +209,12 @@ def render_feature_stats_as_dl(
                     h("a", style=style, href=href)(
                         h("div", klass="area-mark")(), html_value
                     ),
-                    h("span")(display),
+                    display,
                 )
             )
         else:
             items.append(
-                h("dd", style=style)(
-                    h("div", klass="area-mark")(),
-                    html_value,
-                    h("span")(display),
-                )
+                h("dd", style=style)(h("div", klass="area-mark")(), html_value, display)
             )
 
         last_field = field
@@ -210,10 +234,17 @@ def render_feature_clustering(
 
         features = clustering[cluster_id]
 
+        cluster_width = calculate_area_mark(
+            cluster_stats[cluster_id]["relative_doc_count"], total_doc_count
+        )
+        style = f"--w: {cluster_width:.3f}lh"
+
         clusters.append(
             h("li")(
-                h("div", klass="area-mark", style="--w: ")(),
-                h("h2")(cluster_id),
+                h("div", klass="cluster-header")(
+                    h("h2")(cluster_id),
+                    h("div", klass="area-mark", style=style)(),
+                ),
                 render_feature_stats_as_dl(
                     features,
                     area_stat="relative_doc_count",
@@ -229,13 +260,18 @@ def render_feature_clustering(
 def generate_nav(label, links, klass=None):
     """Generate a navigation element."""
 
-    nav_id = f"nav-{label}"
-    label = h("span", id=nav_id)(label)
+    # Make sure this is a valid HTML id
+    nav_label = "-".join(label.split())
+
+    nav_id = f"nav-{nav_label}"
+    label = h("span", klass="nav-label", id=nav_id)(label)
     return h("nav", aria_labelled_by=nav_id)(
         label,
-        h("ul", klass="cluster")(
-            h("li")(h("a", href=href)(link_text) if href else link_text)
-            for link_text, href in links
+        h("div", klass="inlined")(
+            h("ul", klass="cluster")(
+                h("li")(h("a", href=href)(link_text) if href else link_text)
+                for link_text, href in links
+            ),
         ),
     )
 
