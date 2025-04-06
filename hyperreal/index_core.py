@@ -26,6 +26,7 @@ import dataclasses as dc
 from functools import cached_property
 import itertools
 import math
+import random
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Optional, Hashable
 from urllib.parse import quote_plus, urlencode
@@ -1155,3 +1156,25 @@ def apply_filter_table(
 ):
     key_order = sort_filter_table(table, order_by, reverse, first_k, keep_above)
     return {key: table[key] for key in key_order}
+
+
+def random_sample_bitmap(bitmap, k, random_instance=None):
+    """
+    Take up to k random samples without replacement from bitmap.
+
+    If there are fewer than k entries, all entries will be returned in a randomised
+    order.
+
+    """
+
+    sampler = random_instance or random
+
+    b = len(bitmap)
+
+    # If the bitmap is smaller than k, sample everything.
+    k = min(k, b)
+
+    # Note that we can't return a bitmap as that will order the return results. This
+    # might mean that displayed documents correlate with the order of processing of the
+    # collection.
+    return [bitmap[i] for i in sampler.sample(range(b), k)]

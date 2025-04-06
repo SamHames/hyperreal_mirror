@@ -21,7 +21,12 @@ import tornado
 
 from tinyhtml import h
 
-from .index_core import HyperrealIndex, sort_filter_table, apply_filter_table
+from .index_core import (
+    HyperrealIndex,
+    sort_filter_table,
+    apply_filter_table,
+    random_sample_bitmap,
+)
 from . import web_rendering
 
 
@@ -145,7 +150,8 @@ class BrowseClusters(HyperrealRequestHandler):
 
         docs = []
         if matching_docs is not None:
-            docs = self.idx.html_docs(matching_docs[:20])
+            sample_docs = random_sample_bitmap(matching_docs, 20)
+            docs = self.idx.html_docs(sample_docs)
             cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
             cluster_order = sort_filter_table(
                 cluster_stats, order_by="jaccard_similarity", keep_above=0
