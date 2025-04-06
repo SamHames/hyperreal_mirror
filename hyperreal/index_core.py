@@ -25,6 +25,7 @@ import concurrent.futures as cf
 import dataclasses as dc
 from functools import cached_property
 import itertools
+import math
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Optional, Hashable
 from urllib.parse import quote_plus, urlencode
@@ -273,7 +274,7 @@ class HyperrealIndex:
 
             field_details = self.db.execute(
                 """
-                SELECT field, value_handler_name, max_doc_cardinality, position_count 
+                SELECT field, value_handler_name, max_doc_cardinality, position_count
                 from field_summary
                 """
             )
@@ -319,6 +320,35 @@ class HyperrealIndex:
 
             if value_end is not None:
                 value_end = handler.from_index(value_end)
+
+            return field, value_start, value_end
+
+        else:
+            raise ValueError("A feature can only have 2 or 3 elements.")
+
+    def feature_from_url(self, feature):
+        """
+        Convert a tuple of values loaded from the index to a feature.
+
+        """
+        field = feature[0]
+        handler = self.field_handlers[field][0]
+
+        if len(feature) == 2:
+            value = feature[1]
+            return field, handler.from_url(value)
+
+        elif len(feature) == 3:
+            value_start, value_end = feature[1:]
+
+            if value_start is None and value_end is None:
+                raise ValueError("At least one of start or end range must not be None.")
+
+            if value_start is not None:
+                value_start = handler.from_url(value_start)
+
+            if value_end is not None:
+                value_end = handler.from_url(value_end)
 
             return field, value_start, value_end
 
@@ -464,17 +494,17 @@ class HyperrealIndex:
             row[0]: dict(zip(stats_keys, row[1:]))
             for row in self.db.execute(
                 """
-                SELECT 
-                    field, 
-                    value_handler_name, 
-                    max_doc_cardinality, 
+                SELECT
+                    field,
+                    value_handler_name,
+                    max_doc_cardinality,
                     unique_value_count,
                     min_value,
                     max_value,
                     doc_count,
                     position_count,
                     stored_sorted,
-                    stored_sorted = 1 and max_doc_cardinality = 1 as range_encoded 
+                    stored_sorted = 1 and max_doc_cardinality = 1 as range_encoded
                 from field_summary
                 order by field
                 """
@@ -781,9 +811,9 @@ class HyperrealIndex:
         matching = list(
             self.db.execute(
                 """
-                SELECT 
-                    doc_ids, doc_count, position_count 
-                from inverted_index 
+                SELECT
+                    doc_ids, doc_count, position_count
+                from inverted_index
                 where (field, value) = (?, ?)
                 """,
                 (field, index_value),
@@ -799,10 +829,10 @@ class HyperrealIndex:
 
         matching_rows = self.db.execute(
             """
-            SELECT 
-                mod_position, 
-                group_ids 
-            from position_index 
+            SELECT
+                mod_position,
+                group_ids
+            from position_index
             where (field, value) = (?, ?)
             """,
             (field, index_value),
@@ -832,8 +862,8 @@ class HyperrealIndex:
         exclude_row = list(
             self.db.execute(
                 """
-                SELECT max(value), doc_ids 
-                from inverted_index 
+                SELECT max(value), doc_ids
+                from inverted_index
                 where field = ?
                     and value < ?
                 """,
@@ -869,7 +899,7 @@ class HyperrealIndex:
             self.db.execute(
                 f"""
                 SELECT roaring_union(doc_ids), sum(position_count)
-                from inverted_index 
+                from inverted_index
                 {where_clause}
                 """,
                 args,
@@ -900,8 +930,8 @@ class HyperrealIndex:
 
         matching = self.db.execute(
             f"""
-            SELECT mod_position, roaring_union(groups) 
-            from position_index 
+            SELECT mod_position, roaring_union(groups)
+            from position_index
             {where_clause}
             group by mod_position
             """,
@@ -933,8 +963,8 @@ class HyperrealIndex:
             exclude_row = list(
                 self.db.execute(
                     """
-                    SELECT max(value), doc_ids 
-                    from inverted_index 
+                    SELECT max(value), doc_ids
+                    from inverted_index
                     where field = ? and value < ?
                     """,
                     [field, index_value_start],
@@ -949,8 +979,8 @@ class HyperrealIndex:
             include_docs = list(
                 self.db.execute(
                     """
-                    SELECT max(value), doc_ids 
-                    from inverted_index 
+                    SELECT max(value), doc_ids
+                    from inverted_index
                     where field = ?
                     """,
                     [field],
@@ -964,8 +994,8 @@ class HyperrealIndex:
             include_row = list(
                 self.db.execute(
                     """
-                    SELECT max(value), doc_ids 
-                    from inverted_index 
+                    SELECT max(value), doc_ids
+                    from inverted_index
                     where field = ? and value < ?
                     """,
                     [field, index_value_end],
@@ -1065,10 +1095,10 @@ class HyperrealIndex:
         group_docs, doc_group_starts = list(
             self.db.execute(
                 """
-                SELECT 
-                    group_doc_ids, 
-                    doc_group_starts 
-                from field_summary 
+                SELECT
+                    group_doc_ids,
+                    doc_group_starts
+                from field_summary
                 where field = ?
                 """,
                 [field],
@@ -1093,148 +1123,17 @@ class HyperrealIndex:
 # 3. Show me the 20 most similar time periods to this query
 
 
-class KeyedStatsSelector:
-    def __init__(
-        self,
-        reverse=True,
-        first_k=None,
-    ):
-        """
-        Specifies how to select from and order a KeyedStats selector.
+def sort_filter_table(table, order_by=None, reverse=True, first_k=None):
+    if order_by is not None:
+        key_order = sorted(
+            table.keys(),
+            key=lambda k: table[k][order_by],
+            reverse=reverse,
+        )
 
-        """
+        if first_k is not None:
+            key_order = key_order[:first_k]
+    else:
+        key_order = list(table.keys())
 
-    def __call__(self, feature_stats):
-        return
-
-
-class FeatureStatsSorterFilterer:
-    def __init__(
-        self,
-        idx,
-        order_by_field_value=None,
-        order_by_stat=None,
-        reverse=True,
-        top_k=None,
-        display_stats=None,
-        drop_stat_values=None,
-    ):
-        """
-        Specifies how to sort and order the keys in a feature stats object.
-
-        Can also produce some
-
-        """
-        self.idx = idx
-
-        if top_k is not None and order_by_stat is None:
-            raise ValueError("order_by must be specified for top_k")
-
-        self.order_by_stat = order_by_stat
-        self.reverse = reverse
-        self.top_k = top_k
-        self.display_stats = display_stats
-
-        self.field_handlers = {
-            field: handler for field, (handler, _, _) in idx.field_handlers.items()
-        }
-
-        # Should this be a dictionary to sets, one per statistic?
-        # self.drop_stat_values = drop_stat_values or set()
-
-        # Probably also need something to apply a custom class? Ie, to differentiate
-        # a facet from a cluster, from a list of clusters?
-
-    def key_render_order(self, stats):
-        """
-        Return the list of keys to render and their order.
-
-        This applies:
-
-            - sorting by the selected statistic
-            - selection of the top_k keys
-            - dropping any keys with a statistic value in drop_stat_values
-            - truncation of values?
-
-        """
-        # Drop values *before* sorting
-        # if self.drop_stat_values:
-        #     keep_keys = [key for key ]
-
-        if self.order_by_stat is not None:
-            key_order = sorted(
-                stats.keys(),
-                key=lambda k: stats[k][self.order_by_stat],
-                reverse=self.reverse,
-            )
-
-            if self.top_k is not None:
-                key_order = key_order[: self.top_k]
-        else:
-            key_order = stats.keys()
-
-        return key_order
-
-    def to_rows(self, stats):
-
-        key_order = self.key_render_order(stats)
-
-        header = ["field", "value", "value_end", *self.display_stats]
-        rows = []
-
-        for key in key_order:
-            field = key[0]
-            values = key[1:]
-
-            if len(values) == 1:
-                value = [*values, None, None]
-            else:
-                value = [None, *values]
-
-            key_stats = stats[key]
-            stats_row = [key_stats[s] for s in self.display_stats]
-
-            row = [field, *value, *stats_row]
-
-            rows.append(row)
-
-        return rows
-
-    def to_html_dl(self, stats):
-
-        key_order = self.key_render_order(stats)
-
-        last_field = None
-
-        elements = []
-
-        for key in key_order:
-            field = key[0]
-            values = key[1:]
-
-            if field != last_field:
-                elements.append(h("dt")(field))
-
-            if len(values) == 1:
-                elements.append(h("dd")(self.field_handlers[field].to_html(values[0])))
-            elif len(values) == 2:
-                elements.append(
-                    h("dd")(
-                        self.field_handlers[field].to_html(values[0]),
-                        ":",
-                        self.field_handlers[field].to_html(values[1]),
-                    )
-                )
-
-            last_field = field
-
-        return h("dd")(elements)
-
-    def to_html_table(self, stats):
-        key_order = self.key_render_order(stats)
-
-        for feature in key_order:
-            pass
-
-    def to_str(self, stats):
-        pass
+    return key_order

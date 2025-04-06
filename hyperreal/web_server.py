@@ -21,7 +21,7 @@ import tornado
 
 from tinyhtml import h
 
-from .index_core import HyperrealIndex
+from .index_core import HyperrealIndex, sort_filter_table
 from . import web_rendering
 
 
@@ -81,9 +81,11 @@ class IndexedField(HyperrealRequestHandler):
 
         sub_nav_links = {
             "Indexed Fields": [
-                (f, f"/indexed-field/{f}") for f in self.idx.field_handlers
+                (f, self.reverse_url("field-features", f))
+                for f in self.idx.field_handlers
             ]
         }
+
         self.write(
             web_rendering.full_page(
                 f"Feature summary for field: {field}",
@@ -116,18 +118,60 @@ class BrowseClusters(HyperrealRequestHandler):
     def get(self):
 
         top_k = int(self.get_argument("top_k", "20"))
+        f = self.get_argument("f", None, strip=False)
+        v = self.get_argument("v", None, strip=False)
+        c = self.get_argument("c", None)
 
-        cluster_stats = self.feature_clusters.cluster_ids
-        clustering = self.feature_clusters.clustering(top_k=int(top_k))
+        matching_docs = None
+
+        if f is None and c is None:
+            cluster_stats = self.feature_clusters.cluster_ids
+            cluster_order = sort_filter_table(
+                cluster_stats, order_by="relative_doc_count"
+            )
+            clustering = self.feature_clusters.clustering(top_k=int(top_k))
+
+        elif f is not None and v is not None:
+            feature = self.idx.feature_from_url((f, v))
+            matching_docs, count, _ = self.idx[feature]
+
+        elif c is not None:
+            cluster_id = int(c)
+            matching_docs = self.feature_clusters.cluster_docs[cluster_id]
+            count = len(matching_docs)
+
+        else:
+            raise Exception()
+
+        docs = []
+        if matching_docs is not None:
+            docs = self.idx.html_docs(matching_docs[:20])
+            cluster_stats = self.feature_clusters.cluster_ids
+            cluster_order = sort_filter_table(
+                cluster_stats, order_by="relative_doc_count"
+            )
+            clustering = self.feature_clusters.clustering(top_k=int(top_k))
+
+        # Update the clustering to include a url link
+        for cluster_id in cluster_order:
+
+            for f, stats in clustering[cluster_id].items():
+                base_url = self.reverse_url("browse")
+                query_string = self.idx.feature_to_url_query(f)
+                stats["url"] = base_url + query_string
 
         rendered = web_rendering.render_feature_clustering(
-            clustering, cluster_stats, self.idx.total_doc_count
+            clustering,
+            cluster_stats,
+            self.idx.total_doc_count,
+            cluster_order=cluster_order,
+            url_key="url",
         )
 
         self.write(
             web_rendering.full_page(
                 f"Browse Feature Clusters",
-                [rendered],
+                [rendered, docs or None],
             ).render()
         )
 

@@ -2,7 +2,7 @@
 HTML generating functions for the web viewer.
 
 This is primarily about the broader structure of generating complete HTML pages - what
-is passed in to this is primarily self-rendering objects from other parts of Hyperreal. 
+is passed in to this is primarily self-rendering objects from other parts of Hyperreal.
 
 """
 
@@ -26,13 +26,13 @@ default_css = """
 }
 
 :root {
-  --ratio: 1.618;
-  --s0: 1rem;
-  --s1: calc(var(--s0) * var(--ratio));
-  --s2: calc(var(--s1) * var(--ratio));
-  --s-1: calc(var(--s0) / var(--ratio));
-  --s-2: calc(var(--s-1) / var(--ratio));
-  --s-3: calc(var(--s-2) / var(--ratio))
+    --ratio: 1.618;
+    --s0: 1rem;
+    --s1: calc(var(--s0) * var(--ratio));
+    --s2: calc(var(--s1) * var(--ratio));
+    --s-1: calc(var(--s0) / var(--ratio));
+    --s-2: calc(var(--s-1) / var(--ratio));
+    --s-3: calc(var(--s-2) / var(--ratio));
 }
 
 .cluster {
@@ -46,7 +46,7 @@ nav ul {
 }
 
 header {
-    padding: 0.5em;
+    padding: var(--s0);
     background-color: #efefef;
     height: fit-content;
 }
@@ -71,9 +71,8 @@ main {
 
 .column {
     overflow: scroll;
+    margin: var(--s0);
     flex: 1;
-    flex-basis: 40ch;
-    margin: var(--s-1);
 }
 
 pre {
@@ -88,7 +87,7 @@ pre {
 
 .stack > * {
   margin-block: 0;
-} 
+}
 
 .stack > * + * {
   margin-block-start: var(--space, 1rem);
@@ -97,10 +96,6 @@ pre {
 dl a {
     text-decoration: none;
     display: inline-block;
-}
-
-dd {
-    margin-inline-start: var(--s-1);
 }
 
 dd > * {
@@ -120,27 +115,31 @@ dt::after {
     margin-inline-end: var(--s-1);
 }
 
-
 .feature-clustering {
+    line-height: 130%;
 }
 
 .feature-clustering > * {
     margin-inline-end: var(--s1);
     margin-block-end: var(--s1);
     --space: var(--s-3);
-    overflow: scroll;
     width: 10em;
+    overflow: scroll;
 }
 
 """
 
 
-def calculate_root_scaling(total_doc_count, min_mapping_size=0.1):
+def calculate_area_mark(normalised_area, total_doc_count, min_mapping_size=0.1):
     """
-    Calculate a simple root factor for visualising marks.
+    Transform a normalised value in range [0, 1] to a renderable unit in HTML.
+
+    This transform maps 0, 1 -> 0, 1, and maps 1/total_doc_count -> 0.1. This is
+    intended to enable rendering a wide range of values as areas.
 
     """
-    return math.log10(min_mapping_size) / (-math.log10(total_doc_count))
+    power = math.log10(min_mapping_size) / (-math.log10(total_doc_count))
+    return normalised_area**power
 
 
 def render_feature_stats_as_dl(
@@ -158,10 +157,6 @@ def render_feature_stats_as_dl(
     items = []
     last_field = None
 
-    root_scale = 0.5
-    if total_doc_count:
-        root_scale = calculate_root_scaling(total_doc_count)
-
     for feature in feature_order:
         field, html_value = feature
         details = feature_stats[feature]
@@ -172,7 +167,7 @@ def render_feature_stats_as_dl(
         style = False
 
         if area_stat is not None:
-            area_side = details[area_stat] ** root_scale
+            area_side = calculate_area_mark(details[area_stat], total_doc_count)
             style = f"--w: {area_side:.3f}lh;"
 
         display = None
@@ -203,20 +198,27 @@ def render_feature_stats_as_dl(
     return h("dl", klass=klass)(items)
 
 
-def render_feature_clustering(clustering, cluster_stats, total_doc_count):
+def render_feature_clustering(
+    clustering, cluster_stats, total_doc_count, cluster_order=None, url_key=None
+):
+
+    cluster_order = cluster_order or clustering.keys()
 
     clusters = []
 
-    for cluster_id, features in clustering.items():
+    for cluster_id in cluster_order:
+
+        features = clustering[cluster_id]
 
         clusters.append(
             h("li")(
+                h("div", klass="area-mark", style="--w: ")(),
                 h("h2")(cluster_id),
                 render_feature_stats_as_dl(
                     features,
                     area_stat="relative_doc_count",
                     total_doc_count=total_doc_count,
-                    klass="stack",
+                    url_key=url_key,
                 ),
             )
         )
