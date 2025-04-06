@@ -63,6 +63,7 @@ nav ul {
 
 
 ul li {
+    list-style: none;
     margin-right: var(--s-1);
 }
 
@@ -140,7 +141,8 @@ dt::after {
     margin-block-end: var(--s1);
     --space: var(--s-3);
     width: 10em;
-    overflow: scroll;
+    overflow-x: scroll;
+    overflow-y: hidden;
 }
 
 .cluster-header {
