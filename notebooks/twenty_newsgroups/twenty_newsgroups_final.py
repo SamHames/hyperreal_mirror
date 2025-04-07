@@ -334,13 +334,13 @@ clustering = newsgroups_idx.plugins["feature_clusters"]
 if not clustering.cluster_ids:
 
     random_clustering = clustering.initialise_random_clustering(
-        256, min_docs=20, include_fields=["body"]
+        256, min_docs=10, include_fields=["body"]
     )
 
     clustering.replace_clusters(random_clustering)
 
     new_clustering = clustering._refine_clustering(
-        random_clustering, group_test_n_clusters=16, iterations=25
+        random_clustering, group_test_n_clusters=32, iterations=100
     )
 
     clustering.replace_clusters(new_clustering)

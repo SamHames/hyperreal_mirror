@@ -118,7 +118,7 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         )
 
 
-def render_facets(idx, query):
+def render_facets(idx, query, base_url):
 
     rendered_facets = []
 
@@ -127,12 +127,17 @@ def render_facets(idx, query):
     for title, features in idx.facets:
         faceted = idx.facet_features(query, features)
 
+        for f, stats in faceted.items():
+            query_string = idx.feature_to_url_query(f)
+            stats["url"] = base_url + query_string
+
         rendered_facets.append(
             web_rendering.render_feature_stats_as_dl(
                 sorting(faceted),
                 area_stat="relative_hits",
                 total_doc_count=idx.total_doc_count,
                 display_stat="hits",
+                url_key="url",
             )
         )
 
@@ -152,7 +157,6 @@ class BrowseClusters(HyperrealRequestHandler):
 
         if f is None and c is None:
             cluster_filter = TableFilter(order_by="relative_doc_count")
-
             cluster_stats = cluster_filter(self.feature_clusters.cluster_ids)
             clustering = self.feature_clusters.clustering(top_k=int(top_k))
 
@@ -169,6 +173,8 @@ class BrowseClusters(HyperrealRequestHandler):
 
         docs = []
         facets = None
+        base_url = self.reverse_url("browse")
+
         if matching_docs is not None:
             sample_docs = random_sample_bitmap(matching_docs, 20)
             docs = self.idx.html_docs(sample_docs)
@@ -190,11 +196,12 @@ class BrowseClusters(HyperrealRequestHandler):
 
             area_stat = "jaccard_similarity"
 
-            facets = render_facets(self.idx, matching_docs)
+            facets = render_facets(self.idx, matching_docs, base_url)
+
+        else:
+            facets = render_facets(self.idx, self.idx.all_doc_ids(), base_url)
 
         # Update the clusters and features to include a url link
-        base_url = self.reverse_url("browse")
-
         for cluster_id in cluster_stats.keys():
             cluster_query = f"c={cluster_id}"
             cluster_stats[cluster_id]["url"] = base_url + cluster_query
