@@ -218,7 +218,9 @@ def render_feature_stats_as_dl(
             )
         else:
             items.append(
-                h("dd", style=style)(h("div", klass="area-mark")(), html_value, display)
+                h("dd", style=style)(
+                    h("div", klass="area-mark")(), h("span")(html_value), display
+                )
             )
 
         last_field = field
@@ -235,7 +237,7 @@ def render_feature_clustering(
     url_key=None,
 ):
 
-    cluster_order = cluster_order or clustering.keys()
+    cluster_order = cluster_order or cluster_stats.keys()
 
     clusters = []
 

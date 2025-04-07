@@ -733,9 +733,11 @@ class HyperrealIndex:
             docs, doc_count, position_count = self[feature]
 
             stats["doc_count"] = doc_count
+            stats["relative_doc_count"] = doc_count / total_docs
 
             inter = query.intersection_cardinality(docs)
             stats["hits"] = inter
+            stats["relative_hits"] = inter / total_docs
 
             # Compute some other derived statistics
             stats["jaccard_similarity"] = inter / (doc_count + q_len - inter)
@@ -1126,36 +1128,42 @@ class HyperrealIndex:
 # 3. Show me the 20 most similar time periods to this query
 
 
-def sort_filter_table(
-    table, order_by=None, reverse=True, first_k=None, keep_above=None
-):
-    if order_by is not None:
+class TableFilter:
+    def __init__(self, order_by=None, reverse=True, first_k=None, keep_above=None):
+        self.order_by = order_by
+        self.reverse = reverse
+        self.first_k = first_k
+        self.keep_above = keep_above
 
-        if keep_above is not None:
-            keys = (k for k in table.keys() if table[k][order_by] > keep_above)
+    def filter_keys(self, table):
+        if self.order_by is not None:
+
+            if self.keep_above is not None:
+                keys = (
+                    k for k in table.keys() if table[k][self.order_by] > self.keep_above
+                )
+            else:
+                keys = table.keys()
+
+            key_order = sorted(
+                keys,
+                key=lambda k: table[k][self.order_by],
+                reverse=self.reverse,
+            )
+
+            if self.first_k is not None:
+                key_order = key_order[: self.first_k]
+
         else:
-            keys = table.keys()
+            key_order = list(table.keys())
 
-        key_order = sorted(
-            keys,
-            key=lambda k: table[k][order_by],
-            reverse=reverse,
-        )
+        return key_order
 
-        if first_k is not None:
-            key_order = key_order[:first_k]
+    def apply_filter(self, table):
+        key_order = self.filter_keys(table)
+        return {key: table[key] for key in key_order}
 
-    else:
-        key_order = list(table.keys())
-
-    return key_order
-
-
-def apply_filter_table(
-    table, order_by=None, reverse=True, first_k=None, keep_above=None
-):
-    key_order = sort_filter_table(table, order_by, reverse, first_k, keep_above)
-    return {key: table[key] for key in key_order}
+    __call__ = apply_filter
 
 
 def random_sample_bitmap(bitmap, k, random_instance=None):

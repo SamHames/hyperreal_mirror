@@ -119,6 +119,7 @@ boundary_regex = re.compile(r"(\b|\s+)")
 
 
 def tokenise(text):
+    """Break down text of posts into word."""
     return [
         stripped
         for token in boundary_regex.split(text.lower())
@@ -347,8 +348,40 @@ if not clustering.cluster_ids:
 # +
 import asyncio
 from hyperreal.web_server import serve_index
+from hyperreal.index_core import TableFilter
 
 print("launching web server")
+
+newsgroups_idx.facets = [
+    (
+        "20 Newsgroups",
+        [
+            ("newsgroup", f)
+            for f in [
+                "alt.atheism",
+                "comp.graphics",
+                "comp.os.ms-windows.misc",
+                "comp.sys.ibm.pc.hardware",
+                "comp.sys.mac.hardware",
+                "comp.windows.x",
+                "misc.forsale",
+                "rec.autos",
+                "rec.motorcycles",
+                "rec.sport.baseball",
+                "rec.sport.hockey",
+                "sci.crypt",
+                "sci.electronics",
+                "sci.med",
+                "sci.space",
+                "soc.religion.christian",
+                "talk.politics.guns",
+                "talk.politics.mideast",
+                "talk.politics.misc",
+                "talk.religion.misc",
+            ]
+        ],
+    )
+]
 
 try:
     loop = asyncio.get_running_loop()

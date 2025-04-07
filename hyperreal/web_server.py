@@ -23,8 +23,7 @@ from tinyhtml import h
 
 from .index_core import (
     HyperrealIndex,
-    sort_filter_table,
-    apply_filter_table,
+    TableFilter,
     random_sample_bitmap,
 )
 from . import web_rendering
@@ -81,8 +80,8 @@ class IndexedField(HyperrealRequestHandler):
             feature = (field, handler.from_url(value))
             matching_docs, count, positions = self.idx[feature]
 
-            # TODO: random sampling/ordering/pagination?
-            docs = self.idx.html_docs(matching_docs[:20])
+            sample_docs = random_sample_bitmap(matching_docs, 20)
+            docs = self.idx.html_docs(sample_docs)
 
         sub_nav_links = {
             "Indexed Fields": [
@@ -119,6 +118,27 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         )
 
 
+def render_facets(idx, query):
+
+    rendered_facets = []
+
+    sorting = TableFilter(order_by="hits")
+
+    for title, features in idx.facets:
+        faceted = idx.facet_features(query, features)
+
+        rendered_facets.append(
+            web_rendering.render_feature_stats_as_dl(
+                sorting(faceted),
+                area_stat="relative_hits",
+                total_doc_count=idx.total_doc_count,
+                display_stat="hits",
+            )
+        )
+
+    return rendered_facets
+
+
 class BrowseClusters(HyperrealRequestHandler):
     def get(self):
 
@@ -131,10 +151,9 @@ class BrowseClusters(HyperrealRequestHandler):
         area_stat = "relative_doc_count"
 
         if f is None and c is None:
-            cluster_stats = self.feature_clusters.cluster_ids
-            cluster_order = sort_filter_table(
-                cluster_stats, order_by="relative_doc_count"
-            )
+            cluster_filter = TableFilter(order_by="relative_doc_count")
+
+            cluster_stats = cluster_filter(self.feature_clusters.cluster_ids)
             clustering = self.feature_clusters.clustering(top_k=int(top_k))
 
         elif f is not None and v is not None:
@@ -149,33 +168,34 @@ class BrowseClusters(HyperrealRequestHandler):
             raise Exception()
 
         docs = []
+        facets = None
         if matching_docs is not None:
             sample_docs = random_sample_bitmap(matching_docs, 20)
             docs = self.idx.html_docs(sample_docs)
             cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
-            cluster_order = sort_filter_table(
-                cluster_stats, order_by="jaccard_similarity", keep_above=0
-            )
+
+            cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
+            cluster_stats = cluster_filter.apply_filter(cluster_stats)
             faceted = self.feature_clusters.facet_clustering_by_query(
-                matching_docs, cluster_order
+                matching_docs, cluster_stats.keys()
             )
 
+            feature_filter = TableFilter(
+                order_by="jaccard_similarity", keep_above=0, first_k=int(top_k)
+            )
             clustering = {
-                cluster_id: apply_filter_table(
-                    features,
-                    order_by="jaccard_similarity",
-                    first_k=int(top_k),
-                    keep_above=0,
-                )
+                cluster_id: feature_filter.apply_filter(features)
                 for cluster_id, features in faceted.items()
             }
 
             area_stat = "jaccard_similarity"
 
+            facets = render_facets(self.idx, matching_docs)
+
         # Update the clusters and features to include a url link
         base_url = self.reverse_url("browse")
 
-        for cluster_id in cluster_order:
+        for cluster_id in cluster_stats.keys():
             cluster_query = f"c={cluster_id}"
             cluster_stats[cluster_id]["url"] = base_url + cluster_query
 
@@ -187,7 +207,6 @@ class BrowseClusters(HyperrealRequestHandler):
             clustering,
             cluster_stats,
             self.idx.total_doc_count,
-            cluster_order=cluster_order,
             url_key="url",
             area_stat=area_stat,
         )
@@ -195,7 +214,7 @@ class BrowseClusters(HyperrealRequestHandler):
         self.write(
             web_rendering.full_page(
                 f"Browse Feature Clusters",
-                [rendered, docs or None],
+                [rendered, facets, docs or None],
             ).render()
         )
 

@@ -24,6 +24,7 @@ Links to the examples gallery.
 """
 
 import abc
+import dataclasses as dc
 import mmap
 import re
 from typing import Any, Hashable, Iterable, Optional, TypeVar
