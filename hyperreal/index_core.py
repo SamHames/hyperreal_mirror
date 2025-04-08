@@ -874,10 +874,10 @@ class HyperrealIndex:
                 """,
                 (field, index_value),
             )
-        )
+        )[0]
 
-        if exclude_row:
-            include_docs -= exclude_row[0][1]
+        if exclude_row[1]:
+            include_docs -= exclude_row[1]
 
         # Note that the position count is always zero for a range-encoded field.
         return include_docs, len(include_docs), 0
