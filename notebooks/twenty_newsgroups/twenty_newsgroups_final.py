@@ -165,7 +165,7 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
     def indexable_docs(self, doc_keys):
         for doc_key, doc in self.docs(doc_keys):
-            yield doc_key, {
+            indexed = {
                 "body": tokenise(doc["body"]),
                 "subject": tokenise(doc["Subject"]),
                 "newsgroup": set(
@@ -174,6 +174,13 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
                 "from": doc["From"],
                 "date": doc["Date"],
             }
+
+            if doc.get("Distribution", None):
+                indexed["distribution"] = doc["Distribution"]
+            if doc.get("Organization", None):
+                indexed["organization"] = doc["Organization"]
+
+            yield doc_key, indexed
 
     def html_docs(self, doc_keys):
         for doc_key, doc in self.docs(doc_keys):
@@ -380,7 +387,13 @@ newsgroups_idx.facets = [
                 "talk.religion.misc",
             ]
         ],
-    )
+        None,
+    ),
+    (
+        "Top Organisations",
+        newsgroups_idx.field_features("organization"),
+        TableFilter(order_by="hits", first_k=20, keep_above=0),
+    ),
 ]
 
 try:

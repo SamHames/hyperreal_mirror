@@ -122,9 +122,9 @@ def render_facets(idx, query, base_url):
 
     rendered_facets = []
 
-    sorting = TableFilter(order_by="hits")
+    for title, features, table_filter in idx.facets:
+        sorting = table_filter or TableFilter(order_by="hits")
 
-    for title, features in idx.facets:
         faceted = idx.facet_features(query, features)
 
         for f, stats in faceted.items():
@@ -132,16 +132,21 @@ def render_facets(idx, query, base_url):
             stats["url"] = base_url + query_string
 
         rendered_facets.append(
-            web_rendering.render_feature_stats_as_dl(
-                sorting(faceted),
-                area_stat="relative_hits",
-                total_doc_count=idx.total_doc_count,
-                display_stat="hits",
-                url_key="url",
+            h("li")(
+                h("div", klass="cluster-header")(
+                    h("h2")(title),
+                ),
+                web_rendering.render_feature_stats_as_dl(
+                    sorting(faceted),
+                    area_stat="relative_hits",
+                    total_doc_count=idx.total_doc_count,
+                    display_stat="hits",
+                    url_key="url",
+                ),
             )
         )
 
-    return rendered_facets
+    return h("ul", klass="cluster")(rendered_facets)
 
 
 class BrowseClusters(HyperrealRequestHandler):
