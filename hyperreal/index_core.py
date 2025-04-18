@@ -776,8 +776,12 @@ class HyperrealIndex:
         elif len(value_spec) == 2:  # Range feature
             value_start, value_end = value_spec
 
+            index_start = None
+            index_end = None
+
             if value_start is not None:
                 index_start = handler.to_index(value_start)
+
             if value_end is not None:
                 index_end = handler.to_index(value_end)
 
@@ -957,11 +961,10 @@ class HyperrealIndex:
                 "One of index_value_start and index_value_end needs to be not None."
             )
 
-        if index_value_start is None:
-            # Easy case - no lower bound documents to exclude at the end
-            exclude_row = BitMap()
+        # Default case - no lower bound documents to exclude at the end
+        exclude_docs = BitMap()
 
-        else:
+        if index_value_start is not None:
             # We actually have to check if there are lower bound docs so we can exclude
             # them. It might happen that that value_start < smallest value in the index,
             # in which case there's nothing to exclude.
