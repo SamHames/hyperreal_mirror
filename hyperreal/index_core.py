@@ -640,7 +640,9 @@ class HyperrealIndex:
 
         self.db.execute("release doc_ids_to_keys")
 
-    def field_features(self, field: str, min_docs: int = 1) -> FeatureStatistics:
+    def field_features(
+        self, field: str, min_docs: int = 1, top_k_features=None
+    ) -> FeatureStatistics:
         """
         Return the indexed features for field.
 
@@ -683,6 +685,10 @@ class HyperrealIndex:
 
                 previous_doc_count = cumulative_doc_count
 
+            if top_k_features is not None:
+                top_k_filter = TableFilter(order_by="doc_count", first_k=top_k_features)
+                features = top_k_filter.apply_filter(features)
+
         else:
             rows = self.db.execute(
                 """
@@ -691,8 +697,9 @@ class HyperrealIndex:
                 where field = ?
                     and doc_count >= ?
                 order by doc_count desc
+                limit ?
                 """,
-                [field, min_docs],
+                [field, min_docs, top_k_features or 2**62],
             )
             for value, doc_count, position_count in rows:
                 feature = (field, handler.from_index(value))

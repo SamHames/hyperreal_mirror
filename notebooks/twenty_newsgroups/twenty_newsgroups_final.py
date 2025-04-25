@@ -361,33 +361,9 @@ print("launching web server")
 
 newsgroups_idx.facets = [
     (
-        "20 Newsgroups",
-        [
-            ("newsgroup", f)
-            for f in [
-                "alt.atheism",
-                "comp.graphics",
-                "comp.os.ms-windows.misc",
-                "comp.sys.ibm.pc.hardware",
-                "comp.sys.mac.hardware",
-                "comp.windows.x",
-                "misc.forsale",
-                "rec.autos",
-                "rec.motorcycles",
-                "rec.sport.baseball",
-                "rec.sport.hockey",
-                "sci.crypt",
-                "sci.electronics",
-                "sci.med",
-                "sci.space",
-                "soc.religion.christian",
-                "talk.politics.guns",
-                "talk.politics.mideast",
-                "talk.politics.misc",
-                "talk.religion.misc",
-            ]
-        ],
-        None,
+        "Top Newsgroups",
+        newsgroups_idx.field_features("newsgroup", top_k_features=20),
+        TableFilter(order_by="hits", first_k=20),
     ),
     (
         "Top Organisations",
