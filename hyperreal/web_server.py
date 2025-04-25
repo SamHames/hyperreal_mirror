@@ -123,7 +123,7 @@ def render_facets(idx, query, base_url):
     rendered_facets = []
 
     for title, features, table_filter in idx.facets:
-        sorting = table_filter or TableFilter(order_by="hits")
+        sorting = table_filter or TableFilter()
 
         faceted = idx.facet_features(query, features)
 
@@ -155,6 +155,8 @@ class BrowseClusters(HyperrealRequestHandler):
         top_k = int(self.get_argument("top_k", "20"))
         f = self.get_argument("f", None, strip=False)
         v = self.get_argument("v", None, strip=False)
+        v1 = self.get_argument("v1", None, strip=False)
+        v2 = self.get_argument("v2", None, strip=False)
         c = self.get_argument("c", None)
 
         matching_docs = None
@@ -169,12 +171,16 @@ class BrowseClusters(HyperrealRequestHandler):
             feature = self.idx.feature_from_url((f, v))
             matching_docs, count, _ = self.idx[feature]
 
+        elif f is not None and (v1 or v2 is not None):
+            feature = self.idx.feature_from_url((f, v1, v2))
+            matching_docs, count, _ = self.idx[feature]
+
         elif c is not None:
             cluster_id = int(c)
             matching_docs, count = self.feature_clusters.cluster_docs(cluster_id)
 
         else:
-            raise Exception()
+            raise ValueError("Invalid combination of feature or clusters.")
 
         docs = []
         facets = None
