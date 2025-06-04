@@ -119,7 +119,13 @@ boundary_regex = re.compile(r"(\b|\s+)")
 
 
 def tokenise(text):
-    """Break down text of posts into word."""
+    """
+    Break down text of posts into words.
+
+    This is a simple tokeniser that breaks on whitespace and simple word 'boundaries'
+    based on character classes (for example, at punctuation).
+
+    """
     return [
         stripped
         for token in boundary_regex.split(text.lower())
@@ -129,6 +135,9 @@ def tokenise(text):
 
 class TwentyNewsgroups(corpus.HyperrealCorpus):
 
+    quote_line_starts = ("In article", ">", "|", "}", "{", "#")
+    quote_line_ends = ("writes:",)
+
     # Link to the documentation for this!
     def __init__(self):
         self.data_loc = data_loc
@@ -136,44 +145,124 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
     def open_zip(self):
         return zipfile.ZipFile(self.data_loc, "r")
 
-    def all_doc_keys(self):
+    def _all_post_paths(self):
+        """
+        Returns all files, including those with duplicate Message-ID headers.
+
+        See https://www.rfc-editor.org/rfc/rfc1036 and the more recent
+        https://www.rfc-editor.org/rfc/rfc5536#section-3.1.3 for details of Message-ID.
+
+        """
         with self.open_zip() as z:
-            for name in z.namelist():
+            for name in sorted(z.namelist()):
                 yield name
+
+    def _parse_post(self, raw_post):
+
+        full_post = raw_post.decode("latin1")
+
+        header, _, body = full_post.partition("\n\n")
+
+        doc = {}
+
+        for line in header.splitlines():
+            header_key, _, value = line.partition(": ")
+            doc[header_key] = value
+
+        # Note that for a couple of reasons the dates here can be weird - so
+        # we're ignoring any (potentially made up) timezones and just focusing
+        # on the naive date of the timestamp.
+        doc["Date"] = date.fromtimestamp(mktime(parsedate(doc["Date"])))
+        doc["body"] = body
+
+        return doc
+
+    def match_all_lines(self, regexp):
+        """
+        Find all lines in all files matching the given regular expression string.
+
+        This is provided for debugging and investigation purposes, particularly to
+        understand impact of the text pre-processing decisions taken.
+
+        """
+        matcher = re.compile(regexp)
+
+        all_docs = self.all_doc_keys()
+
+        matching_lines = []
+
+        for key, doc in self.docs(all_docs):
+
+            lines = doc["body"].splitlines()
+            matches = [line for line in lines if matcher.search(line)]
+
+            if matches:
+                matching_lines.append((key, matches))
+
+        return matching_lines
+
+    def all_doc_keys(self):
+        """
+        Returns all files after deduplicating based on the Message-ID header.
+
+        Note that the Message-ID could be used as the key directly, but isn't directly
+        mappable back to the original data file so the file path is used instead.
+
+        """
+
+        # Keep track of the messages we've seen already.
+        seen_messages = set()
+
+        with self.open_zip() as z:
+            for path in self._all_post_paths():
+                full_post_raw = z.read(path)
+                post = self._parse_post(full_post_raw)
+
+                # If we've already seen this Message-ID, skip onto the next.
+                if post["Message-ID"] not in seen_messages:
+                    yield path
+                    seen_messages.add(post["Message-ID"])
 
     def docs(self, doc_keys):
         with self.open_zip() as z:
             for doc_key in doc_keys:
                 full_post_raw = z.read(doc_key)
-                full_post = full_post_raw.decode("latin1")
-
-                header, _, body = full_post.partition("\n\n")
-
-                doc = {}
-
-                for line in header.splitlines():
-                    header_key, _, value = line.partition(": ")
-                    doc[header_key] = value
-
-                # Note that for a couple of reasons the dates here can be weird - so
-                # we're ignoring any (potentially made up) timezones and just focusing
-                # on the naive date of the timestamp.
-                doc["Date"] = date.fromtimestamp(mktime(parsedate(doc["Date"])))
-                doc["body"] = body
-
-                yield doc_key, doc
+                yield doc_key, self._parse_post(full_post_raw)
 
     def indexable_docs(self, doc_keys):
         for doc_key, doc in self.docs(doc_keys):
             indexed = {
-                "body": tokenise(doc["body"]),
                 "subject": tokenise(doc["Subject"]),
                 "newsgroup": set(
                     ng.strip() for ng in doc["Newsgroups"].split(",") if ng.strip()
                 ),
                 "from": doc["From"],
                 "date": doc["Date"],
+                # For validating that quoting behaviours are correctly handled.
+                "line_start_character": {
+                    line[0] for line in doc["body"].splitlines() if line
+                },
             }
+
+            # The body text, handling quoting indicators at the start of lines.
+            indexed["body"] = [
+                t
+                for line in doc["body"].splitlines()
+                for t in tokenise(line)
+                if not (
+                    line.startswith(self.quote_line_starts)
+                    or line.endswith(self.quote_line_ends)
+                )
+            ]
+
+            # Quoted text (inverse selection from the body)
+            indexed["quoted"] = [
+                t
+                for line in doc["body"].splitlines()
+                for t in tokenise(line)
+                if line.startswith(self.quote_line_starts)
+                or line.endswith(self.quote_line_ends)
+            ]
 
             if doc.get("Distribution", None):
                 indexed["distribution"] = doc["Distribution"]
@@ -184,6 +273,13 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
     def html_docs(self, doc_keys):
         for doc_key, doc in self.docs(doc_keys):
+
+            # render quoted text distinctly from other text.
+            doc["body"] = (
+                h("em")(line) if line.startswith(self.quote_line_starts) else line
+                for line in doc["body"].splitlines(keepends=True)
+            )
+
             html_doc = h("dl")(
                 (h("dt")(key), h("dd")(h("pre")(value))) for key, value in doc.items()
             )
@@ -191,6 +287,13 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
             yield doc_key, html_doc
 
 
+newsgroups_corpus = TwentyNewsgroups()
+
+for doc, lines in newsgroups_corpus.match_all_lines("wrote:$"):
+    print(doc)
+    for line in lines:
+        print(line)
+    print()
 # -
 
 # # Using a Corpus
@@ -210,8 +313,6 @@ keys = list(newsgroups_corpus.all_doc_keys())[:1]
 for key, doc in newsgroups_corpus.html_docs(keys):
     display_html(doc)
 
-for key, doc in newsgroups_corpus.html_indexable_docs(keys):
-    display_html(doc)
 # -
 
 # # Creating an Index
@@ -344,10 +445,12 @@ if not clustering.cluster_ids:
         256, min_docs=10, include_fields=["body"]
     )
 
-    clustering.replace_clusters(random_clustering)
+    new_clustering = clustering._refine_clustering(
+        random_clustering, group_test_n_clusters=32, iterations=20
+    )
 
     new_clustering = clustering._refine_clustering(
-        random_clustering, group_test_n_clusters=32, iterations=100
+        new_clustering, group_test_n_clusters=None, iterations=5
     )
 
     clustering.replace_clusters(new_clustering)
@@ -361,7 +464,7 @@ print("launching web server")
 
 newsgroups_idx.facets = [
     (
-        "Top Newsgroups",
+        "The Twenty Newsgroups",
         newsgroups_idx.field_features("newsgroup", top_k_features=20),
         TableFilter(order_by="hits", first_k=20),
     ),
@@ -374,7 +477,9 @@ newsgroups_idx.facets = [
 
 try:
     loop = asyncio.get_running_loop()
-    task = loop.create_task(serve_index(newsgroups_idx))
+    task = loop.create_task(
+        serve_index(newsgroups_idx, base_path="/proxy/absolute/9999")
+    )
 
 except RuntimeError:
     loop = asyncio.new_event_loop()

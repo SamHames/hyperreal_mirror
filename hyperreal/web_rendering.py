@@ -85,6 +85,7 @@ main {
     overflow: scroll;
     margin: var(--s0);
     flex: 1;
+    min-width: 30ch;
 }
 
 pre {

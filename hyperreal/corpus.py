@@ -153,69 +153,6 @@ class HyperrealCorpus:
         for key, str_doc in self.str_docs(doc_keys):
             yield key, h("p")(str_doc).render()
 
-    def html_indexable_docs(
-        self, doc_keys: Iterable[DocKey], highlight_spec: Optional = None
-    ) -> Iterable[tuple[DocKey, str]]:
-        """
-        A HTML formating of a doc as indexed.
-
-        Highlighting via specific features to match? Or via specific positions to pull
-        out of the match?
-
-        TODO: Highlight spec, and specification of granularity (concordances, passages,
-        matching)
-
-        """
-
-        for key, indexable_doc in self.indexable_docs(doc_keys):
-
-            # TODO: Process fields in a consistent order?
-            # Or in the order that they are indexed?
-            # Or overriden via a parameter on the method, or even the index?
-            # Or even optionally, omitting some fields somewhere?
-            fields = indexable_doc.keys()
-
-            to_render = []
-
-            for field in fields:
-                values = indexable_doc[field]
-
-                to_render.append(h("dt")(field))
-
-                if isinstance(values, list):
-
-                    handler = self.type_handlers[type(values[0])]
-                    rendered_field = h("dd")(
-                        [h("span")(handler.to_html(value)) for value in values]
-                    )
-
-                elif isinstance(values, set):
-
-                    arbitrary_value = values.pop()
-                    values.add(arbitrary_value)
-
-                    handler = self.type_handlers[type(arbitrary_value)]
-                    rendered_field = h("dd")(
-                        h("ul")([h("li")(handler.to_html(value)) for value in values])
-                    )
-
-                else:
-                    handler = self.type_handlers[type(values)]
-                    rendered_field = h("dd")(handler.to_html(values))
-
-                to_render.append(rendered_field)
-
-            yield key, h("dl")(to_render)
-
-    def str_indexable_docs(
-        self, doc_keys: Iterable[DocKey], highlight_spec: Optional = None
-    ):
-        """
-        A string version of documents as indexed.
-
-        """
-        pass
-
     def str_docs(self, doc_keys: Iterable[DocKey]) -> Iterable[tuple[DocKey, str]]:
         """
         Iterate through pairs of doc_keys and the associated doc's str representation.
