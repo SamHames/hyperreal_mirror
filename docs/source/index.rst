@@ -1,0 +1,7 @@
+Hyperreal Documentation
+=======================
+
+
+.. toctree::
+
+   docs
