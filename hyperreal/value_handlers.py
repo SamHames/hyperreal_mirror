@@ -29,7 +29,7 @@ from urllib.parse import quote_plus, unquote
 from tinyhtml import h, frag
 
 
-class ValueHandler(Protocol):
+class ValueHandler:
     """
     A ValueHandler describes how to transform values for use in different contexts.
 
@@ -46,6 +46,9 @@ class ValueHandler(Protocol):
     stored_sorted: bool
     value_name: str
     supported_types: set
+
+    def __init__(self, corpus):
+        self.corpus = corpus
 
     def from_index(self, value):
         """Create a Python object from the value stored as a single field in SQLite."""

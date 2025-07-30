@@ -22,12 +22,15 @@ from hyperreal.value_handlers import (
 
 
 handlers_strategies = (
-    (StringHandler(), strategies.text()),
-    (DateHandler(), strategies.dates()),
-    (DatetimeHandler(), strategies.datetimes()),
-    (IntegerHandler(), strategies.integers(min_value=-(2**63), max_value=2**63 - 1)),
+    (StringHandler(None), strategies.text()),
+    (DateHandler(None), strategies.dates()),
+    (DatetimeHandler(None), strategies.datetimes()),
+    (
+        IntegerHandler(None),
+        strategies.integers(min_value=-(2**63), max_value=2**63 - 1),
+    ),
     # Note that nan does round trip, but nan is by definition never equal to nan.
-    (FloatHandler(), strategies.floats(allow_nan=False)),
+    (FloatHandler(None), strategies.floats(allow_nan=False)),
 )
 
 

@@ -40,11 +40,11 @@ IndexableDoc = dict[str, list[Value] | set[Value] | Value]
 
 default_handlers = set(
     (
-        value_handlers.StringHandler(),
-        value_handlers.IntegerHandler(),
-        value_handlers.FloatHandler(),
-        value_handlers.DateHandler(),
-        value_handlers.DatetimeHandler(),
+        value_handlers.StringHandler,
+        value_handlers.IntegerHandler,
+        value_handlers.FloatHandler,
+        value_handlers.DateHandler,
+        value_handlers.DatetimeHandler,
     )
 )
 
@@ -63,8 +63,9 @@ class HyperrealCorpus:
         type_schema = {}
         named_handlers = {}
 
-        for handler in self.handler_registry:
+        for handler_class in self.handler_registry:
 
+            handler = handler_class(self)
             name = handler.value_name
 
             if name in named_handlers:
@@ -74,6 +75,7 @@ class HyperrealCorpus:
                     "handlers defined on a corpus."
                 )
             else:
+                # Initialise and inject the current corpus into the handler.
                 named_handlers[name] = handler
 
             for supported_type in handler.supported_types:
