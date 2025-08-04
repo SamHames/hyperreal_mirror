@@ -9,7 +9,6 @@ import array
 import collections
 import concurrent.futures as cf
 import contextlib
-import dataclasses as dc
 import itertools
 import math
 import mmap
@@ -20,13 +19,12 @@ import typing
 
 from pyroaring import BitMap
 
-from . import query
+from .query import Query
 from .db_utilities import atomic
-from .index_builder import _batch
 from .index_plugin import IndexPlugin, Migration
 
 if typing.TYPE_CHECKING:
-    from .index_core import Feature, FeatureStatistics, HyperrealIndex
+    from .index_core import Feature, FeatureStatistics
 
 
 cluster_migration = Migration(
@@ -95,16 +93,6 @@ cluster_migration = Migration(
     ],
     description="Create the main tables for holding a clustering of features.",
 )
-
-
-@dc.dataclass
-class DisplayCluster:
-
-    idx: HyperrealIndex
-    cluster_id: typing.Optional[int] = None
-    features: set[Feature] | FeatureStatistics = dc.field(default_factory=set)
-    statistics: dict = dc.field(default_factory=dict)
-
 
 if typing.TYPE_CHECKING:
     Clustering = dict[typing.Hashable, set[Feature] | FeatureStatistics]
@@ -224,7 +212,7 @@ class FeatureClustering(IndexPlugin):
         )
 
     @atomic
-    def create_cluster_from_features(self, features: Iterable[Feature]) -> int:
+    def create_cluster_from_features(self, features: typing.Iterable[Feature]) -> int:
         """
         Create a new cluster from the given features.
 
@@ -252,7 +240,7 @@ class FeatureClustering(IndexPlugin):
             self._replace_features_for_cluster(cluster_id, features)
 
     @atomic
-    def delete_clusters(self, cluster_ids: Iterable[int]) -> None:
+    def delete_clusters(self, cluster_ids: typing.Iterable[int]) -> None:
         """
         Delete the given clusters from the model (if present).
 
@@ -264,7 +252,7 @@ class FeatureClustering(IndexPlugin):
         )
 
     @atomic
-    def merge_clusters(self, cluster_ids: Iterable[int]) -> None:
+    def merge_clusters(self, cluster_ids: typing.Iterable[int]) -> None:
         """
         Merge the given clusters, combining all features together.
 
@@ -288,7 +276,7 @@ class FeatureClustering(IndexPlugin):
         )
 
     @atomic
-    def delete_features(self, features: Iterable[Feature]) -> None:
+    def delete_features(self, features: typing.Iterable[Feature]) -> None:
         """Delete specified features from the clustering (if present)."""
 
         self._delete_features(features)
@@ -311,7 +299,7 @@ class FeatureClustering(IndexPlugin):
 
         """
 
-        # TODO: check an optional attribute on the corpus?
+        # Suggestion: check an optional attribute on the corpus?
 
         return {
             field
@@ -319,9 +307,9 @@ class FeatureClustering(IndexPlugin):
             if cardinality > 1
         }
 
-    def cluster_features(self, cluster_id, top_k=None):
+    def cluster_features(self, cluster_id, top_k_features=None):
         """Return features and associated statistics for the given cluster."""
-        top_k = top_k or 2**32
+        top_k_features = top_k_features or 2**32
 
         features = self.db.execute(
             """
@@ -332,7 +320,7 @@ class FeatureClustering(IndexPlugin):
             order by doc_count desc
             limit ?
             """,
-            [cluster_id, top_k],
+            [cluster_id, top_k_features],
         )
 
         total_docs = self.idx.total_doc_count
@@ -346,19 +334,20 @@ class FeatureClustering(IndexPlugin):
         }
 
     @atomic
-    def clustering(self, top_k=None):
+    def clustering(self, top_k_features=None):
+        """Return the current clustering."""
         return {
-            cluster_id: self.cluster_features(cluster_id, top_k=top_k)
+            cluster_id: self.cluster_features(cluster_id, top_k_features=top_k_features)
             for cluster_id in self.cluster_ids
         }
 
     @atomic
-    def facet_clusters_by_query(self, query, cluster_ids=None):
-        """Facet the clusters by the given query."""
+    def facet_clusters_by_query(self, query_result, cluster_ids=None):
+        """Facet the clusters by the given query_result."""
 
         cluster_scores = self.cluster_ids
 
-        q_len = len(query)
+        q_len = len(query_result)
 
         if cluster_ids is not None:
             cluster_scores = {
@@ -369,7 +358,7 @@ class FeatureClustering(IndexPlugin):
 
             docs, doc_count = self.cluster_docs(cluster_id)
 
-            inter = query.intersection_cardinality(docs)
+            inter = query_result.intersection_cardinality(docs)
             stats["hits"] = inter
 
             # Compute some other derived statistics
@@ -380,8 +369,8 @@ class FeatureClustering(IndexPlugin):
         return cluster_scores
 
     @atomic
-    def facet_clustering_by_query(self, query, cluster_ids=None):
-        """Facet the features in each cluster by the given query."""
+    def facet_clustering_by_query(self, query_result, cluster_ids=None):
+        """Facet the features in each cluster by the given query_result."""
 
         cluster_ids = cluster_ids or self.cluster_ids
         clustering = {}
@@ -389,7 +378,7 @@ class FeatureClustering(IndexPlugin):
         for cluster_id in cluster_ids:
 
             features = self.cluster_features(cluster_id)
-            clustering[cluster_id] = self.idx.facet_features(query, features)
+            clustering[cluster_id] = self.idx.facet_features(query_result, features)
 
         return clustering
 
@@ -411,7 +400,7 @@ class FeatureClustering(IndexPlugin):
             indexed_fields = set(self.idx.field_handlers)
 
             if invalid_fields := set(include_fields) - indexed_fields:
-                raise ValueError(f"Fields {include_fields} do not exist on this index.")
+                raise ValueError(f"Fields {invalid_fields} do not exist on this index.")
 
             fields = set(include_fields)
 
@@ -439,9 +428,6 @@ class FeatureClustering(IndexPlugin):
         moving_feature_fraction_tolerance: float = 0.05,
     ) -> Clustering:
 
-        # TODO: work out better way to manage state. Might be better to pass in a
-        # random.Random object instead as an optional parameter? To allow keeping it
-        # consistent across a chain of results.
         rand = random.Random(random_seed)
 
         # Part 1, as preparation we'll convert all the features into integer surrogate
@@ -498,7 +484,7 @@ class FeatureClustering(IndexPlugin):
 
             all_features = set(surrogate_feature_cluster)
 
-            for iteration in range(iterations):
+            for _ in range(iterations):
 
                 if group_test_n_clusters is None:
 
@@ -528,7 +514,7 @@ class FeatureClustering(IndexPlugin):
                         i: all_features for i, _ in enumerate(group_keys)
                     }
 
-                    objective_estimate, best_moves = _score_proposed_moves(
+                    _, best_moves = _score_proposed_moves(
                         self.idx.pool,
                         working_file,
                         group_cluster_features,
@@ -548,7 +534,7 @@ class FeatureClustering(IndexPlugin):
                         for cluster_id in test_clusters:
                             check_features[cluster_id].add(feature_id)
 
-                objective_estimate, best_clusters = _score_proposed_moves(
+                _, best_clusters = _score_proposed_moves(
                     self.idx.pool,
                     working_file,
                     surrogate_clusters,
@@ -557,7 +543,7 @@ class FeatureClustering(IndexPlugin):
                 )
 
                 rand.shuffle(feature_check_order)
-                possible_moves, moves_made = _apply_moves(
+                possible_moves, _ = _apply_moves(
                     best_clusters,
                     feature_check_order,
                     surrogate_clusters,
@@ -577,7 +563,7 @@ class FeatureClustering(IndexPlugin):
     @atomic
     def refine_clustering(
         self,
-        cluster_ids: typing.Optional[Iterable[int]] = None,
+        cluster_ids: typing.Optional[typing.Iterable[int]] = None,
         iterations: int = 10,
         random_seed: typing.Optional[int] = None,
         group_test_n_clusters: typing.Optional[int] = None,
@@ -614,7 +600,7 @@ class FeatureClustering(IndexPlugin):
 
 
 def _construct_mmap(
-    idx, features_or_queries: Iterable[Feature | query.Query], mmap_path
+    idx, features_or_queries: typing.Iterable[Feature | Query], mmap_path
 ):
     """
     Materialise features or queries into a file suitable for memory mapping.
@@ -639,12 +625,11 @@ def _construct_mmap(
     starts = array.array("q", (0 for _ in features_or_queries))
     ends = array.array("q", (0 for _ in features_or_queries))
 
-    # TODO: make sure to close the index - think about the interface here.
     with idx, open(mmap_path, "wb") as mm:
         for i, feature_or_query in enumerate(features_or_queries):
 
-            if isinstance(feature_or_query, query.Query):
-                docs = query.evaluate(idx)
+            if isinstance(feature_or_query, Query):
+                docs = feature_or_query.evaluate(idx)
             else:
                 docs = idx[feature_or_query][0]
 
@@ -659,6 +644,8 @@ def _construct_mmap(
             starts[i] = current_start
             current_start += size
             ends[i] = current_start
+
+    idx.close()
 
     return starts, ends
 
