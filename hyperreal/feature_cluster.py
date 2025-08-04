@@ -131,7 +131,7 @@ class FeatureClustering(IndexPlugin):
         # TODO, probably want to do some of this in parallel.
         self._update_changed_clusters()
 
-        # Clear out the feature_cluster table statistics, so they can be regenerated.
+        # Update feature_cluster statistics
         self.db.execute(
             """
             UPDATE feature_cluster
@@ -147,39 +147,35 @@ class FeatureClustering(IndexPlugin):
 
     def post_transaction(self):
         """Update clusters and feature statistics after any transaction."""
-        self._update_feature_statistics()
         self._update_changed_clusters()
 
     def _update_changed_clusters(self):
 
-        changed_clusters = self.db.execute("select cluster_id from changed_cluster")
+        changed_clusters = list(
+            self.db.execute("select cluster_id from changed_cluster")
+        )
 
         for (cluster_id,) in changed_clusters:
             features = self.cluster_features(cluster_id)
-            cluster_docs = self.idx.match_any(features)
 
-            self.db.execute(
-                "UPDATE cluster set doc_count = ?, doc_ids = ? where cluster_id = ?",
-                [len(cluster_docs), cluster_docs, cluster_id],
-            )
+            if features:
+                cluster_docs = self.idx.match_any(features)
 
-    def _update_feature_statistics(self):
-        self.db.execute(
-            """
-            UPDATE feature_cluster
-                set doc_count = (
-                    select doc_count
-                    from inverted_index ii
-                    where (feature_cluster.field, feature_cluster.value) =
-                        (ii.field, ii.value)
+                self.db.execute(
+                    "UPDATE cluster set doc_count = ?, doc_ids = ? where cluster_id = ?",
+                    [len(cluster_docs), cluster_docs, cluster_id],
                 )
-            where doc_count is null
-            """
-        )
+            else:
+                # This is a cluster that needs to be cleaned up from the header as well
+                self.db.execute(
+                    "DELETE from cluster where cluster_id = ?", [cluster_id]
+                )
+
+        self.db.execute("DELETE from changed_cluster")
 
     @property
-    def cluster_ids(self) -> list[int]:
-        """Return the list of all defined clusters."""
+    def cluster_ids(self) -> dict[int, dict[str, float]]:
+        """Return all defined clusters."""
         rows = self.db.execute("select cluster_id, doc_count from cluster")
         total_docs = self.idx.total_doc_count
         return {
@@ -190,8 +186,7 @@ class FeatureClustering(IndexPlugin):
             for cluster_id, doc_count in rows
         }
 
-    @atomic
-    def create_new_empty_cluster(self) -> int:
+    def _create_new_empty_cluster(self) -> int:
         """
         Create a new empty cluster, returning the new cluster_id.
 
@@ -213,7 +208,17 @@ class FeatureClustering(IndexPlugin):
 
         self.db.executemany(
             """
-            INSERT into feature_cluster(field, value, cluster_id) values(?, ?, ?)
+            INSERT into feature_cluster(field, value, cluster_id, doc_count) 
+                values(
+                    ?1, 
+                    ?2, 
+                    ?3,
+                    (
+                        select doc_count 
+                        from inverted_index ii
+                        where (ii.field, ii.value) = (?1, ?2)
+                    )
+                )
             """,
             ((*self.idx.feature_to_index(f), cluster_id) for f in features),
         )
@@ -228,7 +233,7 @@ class FeatureClustering(IndexPlugin):
 
         """
 
-        new_cluster_id = self.create_new_empty_cluster()
+        new_cluster_id = self._create_new_empty_cluster()
 
         self._replace_features_for_cluster(new_cluster_id, features)
 
@@ -248,10 +253,32 @@ class FeatureClustering(IndexPlugin):
 
     @atomic
     def delete_clusters(self, cluster_ids: Iterable[int]) -> None:
+        """
+        Delete the given clusters from the model (if present).
+
+        """
 
         self.db.executemany(
             "delete from cluster where cluster_id = ?",
             [(cluster_id,) for cluster_id in cluster_ids],
+        )
+
+    @atomic
+    def merge_clusters(self, cluster_ids: Iterable[int]) -> None:
+        """
+        Merge the given clusters, combining all features together.
+
+        """
+        merge_clusters = list(cluster_ids)
+        merge_cluster_id = merge_clusters[0]
+
+        self.db.executemany(
+            "UPDATE feature_cluster set cluster_id = ? where cluster_id = ?",
+            [(merge_cluster_id, cluster_id) for cluster_id in merge_clusters[1:]],
+        )
+        self.db.executemany(
+            "INSERT or ignore into changed_cluster values(?)",
+            [(c,) for c in merge_clusters],
         )
 
     def _delete_features(self, features):
@@ -366,6 +393,7 @@ class FeatureClustering(IndexPlugin):
 
         return clustering
 
+    @atomic
     def initialise_random_clustering(
         self,
         n_clusters: int,
@@ -550,11 +578,10 @@ class FeatureClustering(IndexPlugin):
     def refine_clustering(
         self,
         cluster_ids: typing.Optional[Iterable[int]] = None,
-        target_clusters: typing.Optional[int] = None,
         iterations: int = 10,
-        layer_sizes: typing.Optional[list[int]] = None,
         random_seed: typing.Optional[int] = None,
-        layer_checks: int = 2,
+        group_test_n_clusters: typing.Optional[int] = None,
+        random_group_checks: int = 1,
         moving_feature_fraction_tolerance: float = 0.05,
     ):
         """
@@ -565,21 +592,25 @@ class FeatureClustering(IndexPlugin):
         to experiment more see the _refine_clustering which does not save the resulting
         state.
 
-        TODO: see also: _refine_clustering for a more low level clustering.
-
         """
 
-        refined_clustering, objective, cluster_objectives = self._refine_clustering(
+        cluster_ids = cluster_ids or self.cluster_ids
+        clustering = {
+            cluster_id: self.cluster_features(cluster_id) for cluster_id in cluster_ids
+        }
+
+        refined_clustering = self._refine_clustering(
             clustering,
-            target_clusters=target_clusters,
             iterations=iterations,
-            layer_sizes=layer_sizes,
             random_seed=random_seed,
-            layer_checks=layer_checks,
+            group_test_n_clusters=group_test_n_clusters,
+            random_group_checks=random_group_checks,
             moving_feature_fraction_tolerance=moving_feature_fraction_tolerance,
         )
 
-        self.replace_clustering(refined_clustering)
+        self.replace_clusters(refined_clustering)
+
+        return refined_clustering
 
 
 def _construct_mmap(

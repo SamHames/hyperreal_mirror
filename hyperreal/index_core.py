@@ -130,6 +130,7 @@ class HyperrealIndex:
         # TODO: document this -> can take either a class that is initialised with the
         # index, or a Callable that returns an IndexPlugin instance.
         plugins=(FeatureClustering,),
+        migrate=True,
     ):
         """Plugins are initialised once at startup."""
 
@@ -142,6 +143,7 @@ class HyperrealIndex:
 
         # Used for the atomic wrapper available for plugins to store state on the index.
         self._transaction_level = 0
+        self._transaction_error = False
 
         # TODO: validate all the details of the plugins are consistent - unique
         # plugin_names etc.
@@ -159,14 +161,15 @@ class HyperrealIndex:
         self.db.execute("pragma journal_mode=WAL")
         self.db.execute("pragma foreign_keys=ON")
 
-        try:
-            self.db.execute("begin")
-            self._ensure_migrated(CoreSchema(self))
-            self._init_plugins()
-            self.db.execute("commit")
-        except Exception:
-            self.db.execute("rollback")
-            raise
+        if migrate:
+            try:
+                self.db.execute("begin")
+                self._ensure_migrated(CoreSchema(self))
+                self._init_plugins()
+                self.db.execute("commit")
+            except Exception:
+                self.db.execute("rollback")
+                raise
 
         self._field_handlers = None
         self._passage_group_size = None
@@ -446,11 +449,10 @@ class HyperrealIndex:
         """
         Used to handle pickling the index object for use of an index in a process pool.
 
-        Note that the process pool and plugins are not available on the pickled object?
+        Note that the process pool and plugins are not available on the pickled object.
 
         """
-        # TODO: think about whether plugins should be available on a pickled index.
-        self.__init__(args[0], args[1], None)
+        self.__init__(args[0], args[1], None, None, migrate=False)
 
     def rebuild(
         self,
@@ -478,6 +480,7 @@ class HyperrealIndex:
 
     @cached_property
     def indexed_field_summary(self):
+        """Return summary statistics of all indexed fields in the collection."""
 
         stats_keys = (
             "Value Type",
@@ -755,6 +758,7 @@ class HyperrealIndex:
 
         return results
 
+    @db_utilities.atomic
     def __getitem__(self, feature):
         """
         Retrieve the set of documents containing the given feature.
@@ -799,6 +803,7 @@ class HyperrealIndex:
                 f"(field, range_start, range_end) - got {feature}"
             )
 
+    @db_utilities.atomic
     def match_any(self, features):
         """Return documents matching *any* of the features provided (boolean OR)."""
         result = BitMap()
@@ -808,6 +813,7 @@ class HyperrealIndex:
 
         return result
 
+    @db_utilities.atomic
     def match_all(self, features):
         """Return documents matching *all* of the features provided (boolean AND)."""
         if not features:
@@ -1051,6 +1057,7 @@ class HyperrealIndex:
                     field, handler.to_index(value)
                 )
 
+    @db_utilities.atomic
     def match_phrase(self, *features):
         """
         Identify documents with the given features occuring in sequence (as a phrase).

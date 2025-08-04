@@ -175,7 +175,7 @@ boundary_regex = re.compile(r"\b")
 
 
 def boundary_tokeniser(text: str) -> list[str]:
-    r"""
+    """
     A simplistic regular expression based tokeniser.
 
     This tokeniser:
@@ -193,7 +193,7 @@ def boundary_tokeniser(text: str) -> list[str]:
 
 
 # TODO: Add a corpus for the standard folder full of text files. Possibly using the
-# folder as some kind of metadata
+# folder as some kind of metadata?
 class TextfileParagraphsCorpus(HyperrealCorpus):
 
     def __init__(

@@ -118,7 +118,7 @@ class RoaringShiftUnion:
 
 def atomic(func):
     """
-    A decorator that nests SQLite savepoints around method calls.
+    A decorator that ensures an atomic sqlite transaction for a group of operations.
 
     This assumes that self has a .db and a .idx attribute, as initialised using a normal
     IndexPlugin class.
@@ -139,28 +139,42 @@ def atomic(func):
             idx = self
 
         try:
-            self.db.execute(f'savepoint "{func.__name__}"')
+
+            # Only start a transaction on the first level
+            # Note that we're using savepoints here to work within the context of an
+            # explicit index transaction defined by the with idx: construct.
+            if not idx._transaction_level:
+                self.db.execute(f"savepoint start")
 
             idx._transaction_level += 1
-
             results = func(*args, **kwargs)
 
             return results
 
-        except Exception:
-            # Rewind to the previous savepoint, then release it in the finally
-            # This is necessary to behave nicely whether we are operating
-            # inside a larger transaction or just in autocommit mode.
-            self.db.execute(f'rollback to "{func.__name__}"')
+        except Exception as e:
+            idx._transaction_error = True
             raise
 
         finally:
-            idx._transaction_level -= 1
 
-            if idx._transaction_level == 0:
-                for plugin in idx.plugins.values():
-                    plugin.post_transaction()
+            # Work out how to end the transaction once we've unrolled everything.
+            # Note that we don't decrement the transaction level until after we've
+            # done the finalisation, so any calls to post_transaction know we're in
+            # a transaction.
+            if idx._transaction_level == 1:
 
-            self.db.execute(f'release "{func.__name__}"')
+                if idx._transaction_error:
+                    self.db.execute("rollback to start")
+                else:
+                    for plugin in idx.plugins.values():
+                        plugin.post_transaction()
+
+                    self.db.execute(f"release start")
+
+                idx._transaction_level = 0
+                idx._transaction_error = False
+
+            else:
+                idx._transaction_level -= 1
 
     return wrapper
