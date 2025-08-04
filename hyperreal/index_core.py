@@ -23,20 +23,19 @@ from __future__ import annotations
 import collections
 import concurrent.futures as cf
 import dataclasses as dc
-from functools import cached_property
 import itertools
 import math
 import random
+from functools import cached_property
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable, Optional, Hashable
+from typing import Any, Callable, Hashable, Iterable, Optional
 from urllib.parse import quote_plus, urlencode
 
 from pyroaring import AbstractBitMap, BitMap, BitMap64
-from tinyhtml import h, raw, frag
+from tinyhtml import frag, h, raw
 
-from . import corpus, db_utilities, index_builder, value_handlers, index_plugin
+from . import corpus, db_utilities, index_builder, index_plugin, value_handlers
 from .feature_cluster import FeatureClustering
-
 
 core_migration = index_plugin.Migration(
     None,

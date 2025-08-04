@@ -8,13 +8,13 @@ serialising and displaying queries as HTML and in other formats.
 
 from __future__ import annotations
 
-from collections import deque, abc
-from typing import Protocol, runtime_checkable, TYPE_CHECKING, Sequence, Sized
+from collections import abc, deque
+from typing import TYPE_CHECKING, Protocol, Sequence, Sized, runtime_checkable
 
 from pyroaring import AbstractBitMap, BitMap
 
 if TYPE_CHECKING:
-    from .index_core import HyperrealIndex, Feature
+    from .index_core import Feature, HyperrealIndex
 
 
 @runtime_checkable

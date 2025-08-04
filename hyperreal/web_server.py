@@ -17,16 +17,12 @@ Out of scope for this component right now are:
 """
 
 import asyncio
-import tornado
 
+import tornado
 from tinyhtml import h
 
-from .index_core import (
-    HyperrealIndex,
-    TableFilter,
-    random_sample_bitmap,
-)
 from . import web_rendering
+from .index_core import HyperrealIndex, TableFilter, random_sample_bitmap
 
 
 class HyperrealRequestHandler(tornado.web.RequestHandler):

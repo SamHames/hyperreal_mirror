@@ -23,7 +23,7 @@ engine?).
 import collections
 import dataclasses as dc
 import keyword
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 
 @dc.dataclass

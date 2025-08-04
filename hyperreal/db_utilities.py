@@ -7,8 +7,8 @@ working with SQLite and roaring bitmaps easier.
 
 """
 
-from functools import wraps
 import sqlite3
+from functools import wraps
 
 import pyroaring
 

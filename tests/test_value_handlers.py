@@ -9,17 +9,16 @@ more.
 import math
 import sqlite3
 
-from hypothesis import given, strategies
 import pytest
+from hypothesis import given, strategies
 
 from hyperreal.value_handlers import (
-    StringHandler,
-    IntegerHandler,
-    FloatHandler,
     DateHandler,
     DatetimeHandler,
+    FloatHandler,
+    IntegerHandler,
+    StringHandler,
 )
-
 
 handlers_strategies = (
     (StringHandler(None), strategies.text()),

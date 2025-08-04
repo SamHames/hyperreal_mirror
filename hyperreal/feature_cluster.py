@@ -23,7 +23,7 @@ from pyroaring import BitMap
 from . import query
 from .db_utilities import atomic
 from .index_builder import _batch
-from .index_plugin import Migration, IndexPlugin
+from .index_plugin import IndexPlugin, Migration
 
 if typing.TYPE_CHECKING:
     from .index_core import Feature, FeatureStatistics, HyperrealIndex

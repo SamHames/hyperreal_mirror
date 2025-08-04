@@ -9,8 +9,7 @@ is passed in to this is primarily self-rendering objects from other parts of Hyp
 import math
 from urllib.parse import quote
 
-from tinyhtml import h, html, frag, raw
-
+from tinyhtml import frag, h, html, raw
 
 # This is the default CSS.
 # A corpus can have additional CSS, it will be appended after this to allow it to

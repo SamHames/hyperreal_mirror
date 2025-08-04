@@ -26,7 +26,7 @@ from datetime import date, datetime
 from typing import Optional, Protocol
 from urllib.parse import quote_plus, unquote
 
-from tinyhtml import h, frag
+from tinyhtml import frag, h
 
 
 class ValueHandler:
