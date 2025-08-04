@@ -148,7 +148,7 @@ def render_facets(idx, query, base_url):
 class BrowseClusters(HyperrealRequestHandler):
     def get(self):
 
-        top_k = int(self.get_argument("top_k", "20"))
+        top_k_features = int(self.get_argument("top_k_features", "20"))
         f = self.get_argument("f", None, strip=False)
         v = self.get_argument("v", None, strip=False)
         v1 = self.get_argument("v1", None, strip=False)
@@ -161,7 +161,9 @@ class BrowseClusters(HyperrealRequestHandler):
         if f is None and c is None:
             cluster_filter = TableFilter(order_by="relative_doc_count")
             cluster_stats = cluster_filter(self.feature_clusters.cluster_ids)
-            clustering = self.feature_clusters.clustering(top_k=int(top_k))
+            clustering = self.feature_clusters.clustering(
+                top_k_features=int(top_k_features)
+            )
 
         elif f is not None and v is not None:
             feature = self.idx.feature_from_url((f, v))
@@ -194,7 +196,7 @@ class BrowseClusters(HyperrealRequestHandler):
             )
 
             feature_filter = TableFilter(
-                order_by="jaccard_similarity", keep_above=0, first_k=int(top_k)
+                order_by="jaccard_similarity", keep_above=0, first_k=int(top_k_features)
             )
             clustering = {
                 cluster_id: feature_filter.apply_filter(features)

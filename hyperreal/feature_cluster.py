@@ -252,6 +252,29 @@ class FeatureClustering(IndexPlugin):
         )
 
     @atomic
+    def split_cluster_into(self, cluster_id, split_into):
+        """
+        Split the given cluster into split_into new clusters.
+
+        One of the split_into segments will retain the existing cluster_id, the rest
+        will be new.
+
+        """
+        # Improvement: needs to take a seed for randomness.
+
+        features = list(self.cluster_features(cluster_id))
+        random.shuffle(features)
+        splits = [features[i::split_into] for i in range(split_into)]
+
+        cluster_ids = [cluster_id]
+
+        for split in splits[1:]:
+            new_cluster_id = self.create_cluster_from_features(split)
+            cluster_ids.append(new_cluster_id)
+
+        return cluster_ids
+
+    @atomic
     def merge_clusters(self, cluster_ids: typing.Iterable[int]) -> None:
         """
         Merge the given clusters, combining all features together.
