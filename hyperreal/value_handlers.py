@@ -55,7 +55,7 @@ class ValueHandler:
         return value
 
     def to_index(self, value):
-        """Transform to an SQLite compatible datatype such as text, blog or numeric."""
+        """Transform to an SQLite compatible datatype such as text, blob or numeric."""
         return value
 
     def to_html(self, value) -> frag | int | float | str:
@@ -74,7 +74,7 @@ class ValueHandler:
         If you have a str you want to include as is without escaping, use
         `tinyhtml.raw`:
 
-        > raw('should <not> be escaped</not>')
+        > raw('should <not>be escaped</not>')
 
         """
         return self.to_str(value)
@@ -87,6 +87,10 @@ class ValueHandler:
         return quote_plus(self.to_str(value))
 
     def from_url(self, value):
+        """
+        Create a Python representation of the value from a URL string.
+
+        """
         return self.from_str(unquote(value))
 
     def from_str(self, value: str):
@@ -94,7 +98,7 @@ class ValueHandler:
         return value
 
     def to_str(self, value) -> str:
-        """Create a string version of the object for CSV and URLs."""
+        """Create a string version of the object for terminal and other uses."""
         return str(value)
 
 
