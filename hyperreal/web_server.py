@@ -149,7 +149,7 @@ def render_facets(idx, query, base_url):
             )
         )
 
-    return h("ul", klass="cluster")(rendered_facets)
+    return h("ul", klass="cluster feature-clustering")(rendered_facets)
 
 
 class BrowseClusters(HyperrealRequestHandler):
@@ -162,7 +162,6 @@ class BrowseClusters(HyperrealRequestHandler):
         v2 = self.get_argument("v2", None, strip=False)
         c = self.get_argument("c", None)
 
-        matching_docs = None
         area_stat = "relative_doc_count"
 
         if f is None and c is None:
@@ -171,6 +170,7 @@ class BrowseClusters(HyperrealRequestHandler):
             clustering = self.feature_clusters.clustering(
                 top_k_features=int(top_k_features)
             )
+            matching_docs = self.idx.all_doc_ids()
 
         elif f is not None and v is not None:
             feature = self.idx.feature_from_url((f, v))
