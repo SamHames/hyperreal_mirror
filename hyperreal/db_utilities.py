@@ -144,7 +144,7 @@ def atomic(func):
             # Note that we're using savepoints here to work within the context of an
             # explicit index transaction defined by the with idx: construct.
             if not idx._transaction_level:
-                self.db.execute(f"savepoint start")
+                idx.db.execute(f"savepoint start")
 
             idx._transaction_level += 1
             results = func(*args, **kwargs)
@@ -164,12 +164,12 @@ def atomic(func):
             if idx._transaction_level == 1:
 
                 if idx._transaction_error:
-                    self.db.execute("rollback to start")
+                    idx.db.execute("rollback to start")
                 else:
                     for plugin in idx.plugins.values():
                         plugin.post_transaction()
 
-                    self.db.execute(f"release start")
+                    idx.db.execute(f"release start")
 
                 idx._transaction_level = 0
                 idx._transaction_error = False

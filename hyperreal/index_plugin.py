@@ -10,7 +10,8 @@ core index schema itself.
 
 - how and why to write a plugin
 - 'stateless' plugins
-- 
+- indexes are picklable, but there attributes may not be - access everything through the
+  index object directly
 
 (general link to an extension overview)
 
@@ -56,9 +57,7 @@ class IndexPlugin:
     def __init__(self, idx: "HyperrealIndex"):
 
         self.setup_validate_migrations()
-
         self.idx = idx
-        self.db = idx.db
 
     def post_index_rebuild(self) -> None:
         """

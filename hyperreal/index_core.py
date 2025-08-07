@@ -130,6 +130,7 @@ class HyperrealIndex:
         # index, or a Callable that returns an IndexPlugin instance.
         plugins=(FeatureClustering,),
         migrate=True,
+        max_workers=None,
     ):
         """Plugins are initialised once at startup."""
 
@@ -143,6 +144,11 @@ class HyperrealIndex:
         # Used for the atomic wrapper available for plugins to store state on the index.
         self._transaction_level = 0
         self._transaction_error = False
+
+        try:
+            self.max_workers = max_workers or pool._max_workers
+        except AttributeError:
+            self.max_workers = 4
 
         # TODO: validate all the details of the plugins are consistent - unique
         # plugin_names etc.

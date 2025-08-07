@@ -110,7 +110,7 @@ class FeatureClustering(IndexPlugin):
 
     def post_index_rebuild(self):
         """Regenerate docs matching each cluster and individual feature statistics."""
-        self.db.execute(
+        self.idx.db.execute(
             """
             INSERT or ignore into changed_cluster
                 select cluster_id from cluster
@@ -120,7 +120,7 @@ class FeatureClustering(IndexPlugin):
         self._update_changed_clusters()
 
         # Update feature_cluster statistics
-        self.db.execute(
+        self.idx.db.execute(
             """
             UPDATE feature_cluster
                 set doc_count = (
@@ -140,7 +140,7 @@ class FeatureClustering(IndexPlugin):
     def _update_changed_clusters(self):
 
         changed_clusters = list(
-            self.db.execute("select cluster_id from changed_cluster")
+            self.idx.db.execute("select cluster_id from changed_cluster")
         )
 
         for (cluster_id,) in changed_clusters:
@@ -149,22 +149,22 @@ class FeatureClustering(IndexPlugin):
             if features:
                 cluster_docs = self.idx.match_any(features)
 
-                self.db.execute(
+                self.idx.db.execute(
                     "UPDATE cluster set doc_count = ?, doc_ids = ? where cluster_id = ?",
                     [len(cluster_docs), cluster_docs, cluster_id],
                 )
             else:
                 # This is a cluster that needs to be cleaned up from the header as well
-                self.db.execute(
+                self.idx.db.execute(
                     "DELETE from cluster where cluster_id = ?", [cluster_id]
                 )
 
-        self.db.execute("DELETE from changed_cluster")
+        self.idx.db.execute("DELETE from changed_cluster")
 
     @property
     def cluster_ids(self) -> dict[int, dict[str, float]]:
         """Return all defined clusters."""
-        rows = self.db.execute("select cluster_id, doc_count from cluster")
+        rows = self.idx.db.execute("select cluster_id, doc_count from cluster")
         total_docs = self.idx.total_doc_count
         return {
             cluster_id: {
@@ -179,22 +179,22 @@ class FeatureClustering(IndexPlugin):
         Create a new empty cluster, returning the new cluster_id.
 
         """
-        self.db.execute("insert into cluster(cluster_id) values(null)")
-        cluster_id = list(self.db.execute("select last_insert_rowid()"))[0][0]
+        self.idx.db.execute("insert into cluster(cluster_id) values(null)")
+        cluster_id = list(self.idx.db.execute("select last_insert_rowid()"))[0][0]
 
         return cluster_id
 
     def _replace_features_for_cluster(self, cluster_id, features):
 
         # Delete the existing features for the cluster
-        self.db.execute(
+        self.idx.db.execute(
             "DELETE from feature_cluster where cluster_id = ?", [cluster_id]
         )
 
         # Delete existing features that might be assigned to another cluster.
         self._delete_features(features)
 
-        self.db.executemany(
+        self.idx.db.executemany(
             """
             INSERT into feature_cluster(field, value, cluster_id, doc_count) 
                 values(
@@ -246,7 +246,7 @@ class FeatureClustering(IndexPlugin):
 
         """
 
-        self.db.executemany(
+        self.idx.db.executemany(
             "delete from cluster where cluster_id = ?",
             [(cluster_id,) for cluster_id in cluster_ids],
         )
@@ -283,17 +283,17 @@ class FeatureClustering(IndexPlugin):
         merge_clusters = list(cluster_ids)
         merge_cluster_id = merge_clusters[0]
 
-        self.db.executemany(
+        self.idx.db.executemany(
             "UPDATE feature_cluster set cluster_id = ? where cluster_id = ?",
             [(merge_cluster_id, cluster_id) for cluster_id in merge_clusters[1:]],
         )
-        self.db.executemany(
+        self.idx.db.executemany(
             "INSERT or ignore into changed_cluster values(?)",
             [(c,) for c in merge_clusters],
         )
 
     def _delete_features(self, features):
-        self.db.executemany(
+        self.idx.db.executemany(
             "DELETE from feature_cluster where (field, value) = (?, ?)",
             (self.idx.feature_to_index(f) for f in features),
         )
@@ -307,7 +307,7 @@ class FeatureClustering(IndexPlugin):
     def cluster_docs(self, cluster_id: int) -> BitMap:
         """Return the documents matching the given bitmap."""
         return list(
-            self.db.execute(
+            self.idx.db.execute(
                 "SELECT doc_ids, doc_count from cluster where cluster_id = ?",
                 [cluster_id],
             )
@@ -334,7 +334,7 @@ class FeatureClustering(IndexPlugin):
         """Return features and associated statistics for the given cluster."""
         top_k_features = top_k_features or 2**32
 
-        features = self.db.execute(
+        features = self.idx.db.execute(
             """
             SELECT
                 field, value, doc_count
@@ -377,31 +377,38 @@ class FeatureClustering(IndexPlugin):
                 cluster_id: cluster_scores[cluster_id] for cluster_id in cluster_ids
             }
 
-        for cluster_id, stats in cluster_scores.items():
+        max_workers = self.idx.max_workers
+        to_facet = list(cluster_scores.items())
+        batches = [
+            (self, query_result, to_facet[i::max_workers]) for i in range(max_workers)
+        ]
 
-            docs, doc_count = self.cluster_docs(cluster_id)
+        batch_results = self.idx.pool.map(_facet_cluster_worker, batches)
 
-            inter = query_result.intersection_cardinality(docs)
-            stats["hits"] = inter
+        facet_results = {}
+        for result in batch_results:
+            facet_results |= result
 
-            # Compute some other derived statistics
-            stats["jaccard_similarity"] = inter / (doc_count + q_len - inter)
-            stats["feature_proportion"] = inter / doc_count
-            stats["query_proportion"] = inter / q_len
-
-        return cluster_scores
+        return facet_results
 
     @atomic
     def facet_clustering_by_query(self, query_result, cluster_ids=None):
         """Facet the features in each cluster by the given query_result."""
 
-        cluster_ids = cluster_ids or self.cluster_ids
+        cluster_ids = list(cluster_ids or self.cluster_ids)
         clustering = {}
 
-        for cluster_id in cluster_ids:
+        max_workers = self.idx.max_workers
+        batches = [
+            (self, query_result, cluster_ids[i::max_workers])
+            for i in range(max_workers)
+        ]
 
-            features = self.cluster_features(cluster_id)
-            clustering[cluster_id] = self.idx.facet_features(query_result, features)
+        batch_results = self.idx.pool.map(_facet_clustering_worker, batches)
+
+        for result in batch_results:
+
+            clustering |= result
 
         return clustering
 
@@ -892,3 +899,41 @@ def _measure_feature_contribution_to_cluster(
             assert i == n_return_features
 
     return cluster_key, objective, return_features, return_scores
+
+
+def _facet_cluster_worker(args):
+    fc_plugin, query_result, cluster_stats = args
+
+    q_len = len(query_result)
+    results = {}
+
+    with fc_plugin.idx:
+
+        for cluster_id, stats in cluster_stats:
+            docs, doc_count = fc_plugin.cluster_docs(cluster_id)
+
+            inter = query_result.intersection_cardinality(docs)
+            stats["hits"] = inter
+
+            # Compute some other derived statistics
+            stats["jaccard_similarity"] = inter / (doc_count + q_len - inter)
+            stats["feature_proportion"] = inter / doc_count
+            stats["query_proportion"] = inter / q_len
+
+            results[cluster_id] = stats
+
+    return results
+
+
+def _facet_clustering_worker(args):
+
+    fc_plugin, query_result, cluster_ids = args
+
+    result = {}
+
+    with fc_plugin.idx:
+        for cluster_id in cluster_ids:
+            features = fc_plugin.cluster_features(cluster_id)
+            result[cluster_id] = fc_plugin.idx.facet_features(query_result, features)
+
+    return result
