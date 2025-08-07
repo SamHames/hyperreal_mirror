@@ -39,6 +39,13 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
     def initialize(self):
         self.idx = self.application.settings["hyperreal_idx"]
         self.feature_clusters = self.idx.plugins["feature_clusters"]
+        self.extra_css = self.idx.corpus.extra_css
+
+    def render_page(self, *args, **kwargs):
+
+        return web_rendering.full_page(
+            *args, **kwargs, extra_css=self.extra_css
+        ).render()
 
 
 class IndexedField(HyperrealRequestHandler):
@@ -87,12 +94,12 @@ class IndexedField(HyperrealRequestHandler):
         }
 
         self.write(
-            web_rendering.full_page(
+            self.render_page(
                 f"Feature summary for field: {field}",
                 [rendered_features, web_rendering.list_docs(docs)],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
-            ).render()
+            )
         )
 
 
@@ -105,12 +112,12 @@ class IndexedFieldOverview(HyperrealRequestHandler):
             ]
         }
         self.write(
-            web_rendering.full_page(
+            self.render_page(
                 f"Indexed Feature Overview",
                 [],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
-            ).render()
+            )
         )
 
 
@@ -228,10 +235,10 @@ class BrowseClusters(HyperrealRequestHandler):
         )
 
         self.write(
-            web_rendering.full_page(
+            self.render_page(
                 f"Browse Feature Clusters",
-                [rendered, facets, docs or None],
-            ).render()
+                [rendered, facets, web_rendering.list_docs(docs)],
+            )
         )
 
 
@@ -255,10 +262,10 @@ class MainHandler(HyperrealRequestHandler):
         table = web_rendering.render_field_table(rendered_fields)
 
         self.write(
-            web_rendering.full_page(
+            self.render_page(
                 f"Overview of Indexed Fields",
                 [table],
-            ).render()
+            )
         )
 
 
@@ -283,7 +290,7 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
     )
 
 
-async def serve_index(hyperreal_index, base_path=""):
+async def serve_index(hyperreal_index, port=9999, base_path=""):
     app = make_index_server(hyperreal_index, base_path)
-    app.listen(9999)
+    app.listen(port)
     await asyncio.Event().wait()

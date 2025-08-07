@@ -56,6 +56,7 @@ class SchemaValidationError(Exception):
 class HyperrealCorpus:
 
     handler_registry: set[value_handlers.ValueHandler] = default_handlers
+    extra_css = ""
 
     def _create_type_maps(self) -> None:
         """Create a more usable mapping between types/value names and their handlers."""
@@ -153,7 +154,7 @@ class HyperrealCorpus:
 
         """
         for key, str_doc in self.str_docs(doc_keys):
-            yield key, h("p")(str_doc).render()
+            yield key, h("p")(str_doc)
 
     def str_docs(self, doc_keys: Iterable[DocKey]) -> Iterable[tuple[DocKey, str]]:
         """
