@@ -480,6 +480,7 @@ class FeatureClustering(IndexPlugin):
 
         n_features = len(features)
         n_clusters = len(surrogate_clusters)
+        total_docs = self.idx.total_doc_count
         # will be used to randomise the order of feature checks for moving between
         # clusters.
         feature_check_order = array.array("q", surrogate_feature_cluster)
@@ -543,6 +544,7 @@ class FeatureClustering(IndexPlugin):
                         group_cluster_features,
                         group_check_features,
                         offsets,
+                        total_docs,
                     )
 
                     check_features = collections.defaultdict(set)
@@ -563,6 +565,7 @@ class FeatureClustering(IndexPlugin):
                     surrogate_clusters,
                     check_features,
                     offsets,
+                    total_docs,
                 )
 
                 rand.shuffle(feature_check_order)
@@ -673,7 +676,7 @@ def _construct_mmap(
     return starts, ends
 
 
-def _score_proposed_moves(pool, mmap_file, clustering, check_features, offsets):
+def _score_proposed_moves(pool, mmap_file, clustering, check_features, offsets, n_docs):
     """Score the proposed sets of moves between clusters."""
 
     futures = set()
@@ -694,6 +697,7 @@ def _score_proposed_moves(pool, mmap_file, clustering, check_features, offsets):
                 fs,
                 check_features[cluster_id] - fs,
                 offsets,
+                n_docs,
             )
         )
 
@@ -764,7 +768,7 @@ def _apply_moves(move_scores, check_feature_order, clustering, feature_clusters,
 
 
 def _measure_feature_contribution_to_cluster(
-    mmap_file, cluster_key, clustering, check_features, offsets
+    mmap_file, cluster_key, clustering, check_features, offsets, n_docs
 ):
     """
     Measure objective change if we moved a single feature from one cluster to another.
