@@ -254,8 +254,8 @@ def render_feature_clustering(
             h("li")(
                 h("div", klass="cluster-header")(
                     h("a", href=stats["url"])(
-                        h("h2")(cluster_id),
                         h("div", klass="area-mark", style=style)(),
+                        h("h2")(cluster_id),
                     )
                 ),
                 render_feature_stats_as_dl(
@@ -298,6 +298,7 @@ def full_page(
         ("Home", "/"),
         ("Feature Lists", "/indexed-field/"),
         ("Browse", "/browse"),
+        ("Drilldown", "/cluster/"),
     ]
     main_nav = generate_nav("Main", nav_links)
 

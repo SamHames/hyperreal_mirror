@@ -439,7 +439,7 @@ import time
 
 clustering = newsgroups_idx.plugins["feature_clusters"]
 
-clustering.delete_clusters(clustering.cluster_ids)
+# clustering.delete_clusters(clustering.cluster_ids)
 
 if not clustering.cluster_ids:
     start_time = time.monotonic()
@@ -451,7 +451,7 @@ if not clustering.cluster_ids:
     clustering.replace_clusters(random_clustering)
 
     clustering.refine_clustering(
-        group_test_n_clusters=32, iterations=10, random_group_checks=2
+        group_test_n_clusters=32, iterations=30, random_group_checks=0
     )
 
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")

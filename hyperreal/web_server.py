@@ -191,31 +191,27 @@ class BrowseClusters(HyperrealRequestHandler):
         facets = None
         base_url = self.reverse_url("browse")
 
-        if matching_docs is not None:
-            sample_docs = random_sample_bitmap(matching_docs, 20)
-            docs = self.idx.html_docs(sample_docs)
-            cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
+        sample_docs = random_sample_bitmap(matching_docs, 20)
+        docs = self.idx.html_docs(sample_docs)
+        cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
 
-            cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
-            cluster_stats = cluster_filter.apply_filter(cluster_stats)
-            faceted = self.feature_clusters.facet_clustering_by_query(
-                matching_docs, cluster_stats.keys()
-            )
+        cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
+        cluster_stats = cluster_filter.apply_filter(cluster_stats)
+        faceted = self.feature_clusters.facet_clustering_by_query(
+            matching_docs, cluster_stats.keys()
+        )
 
-            feature_filter = TableFilter(
-                order_by="jaccard_similarity", keep_above=0, first_k=int(top_k_features)
-            )
-            clustering = {
-                cluster_id: feature_filter.apply_filter(features)
-                for cluster_id, features in faceted.items()
-            }
+        feature_filter = TableFilter(
+            order_by="jaccard_similarity", keep_above=0, first_k=int(top_k_features)
+        )
+        clustering = {
+            cluster_id: feature_filter.apply_filter(features)
+            for cluster_id, features in faceted.items()
+        }
 
-            area_stat = "jaccard_similarity"
+        area_stat = "jaccard_similarity"
 
-            facets = render_facets(self.idx, matching_docs, base_url)
-
-        else:
-            facets = render_facets(self.idx, self.idx.all_doc_ids(), base_url)
+        facets = render_facets(self.idx, matching_docs, base_url)
 
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
@@ -238,6 +234,145 @@ class BrowseClusters(HyperrealRequestHandler):
             self.render_page(
                 f"Browse Feature Clusters",
                 [rendered, facets, web_rendering.list_docs(docs)],
+            )
+        )
+
+
+class ClusterDrillDownRedirector(HyperrealRequestHandler):
+    """
+    When no cluster is selected, redirect to the one with the lowest cluster_id.
+
+    """
+
+    def get(self):
+        redirect_to_cluster = min(self.feature_clusters.cluster_ids)
+        self.redirect(
+            self.reverse_url("cluster-drilldown", redirect_to_cluster),
+        )
+
+
+class ClusterDrillDown(HyperrealRequestHandler):
+    """
+    View for drilling down into a specific cluster, laid out against other clusters.
+
+    """
+
+    def get(self, cluster_id):
+
+        drill_cluster_id = int(cluster_id)
+
+        top_k_features = int(self.get_argument("top_k_features", "20"))
+        f = self.get_argument("f", None, strip=False)
+        v = self.get_argument("v", None, strip=False)
+        v1 = self.get_argument("v1", None, strip=False)
+        v2 = self.get_argument("v2", None, strip=False)
+        c = self.get_argument("c", None)
+
+        area_stat = "jaccard_similarity"
+        matching_docs, _ = self.feature_clusters.cluster_docs(drill_cluster_id)
+
+        other_docs = None
+
+        if f is None and c is None:
+            area_stat = "relative_doc_count"
+
+        elif f is not None and v is not None:
+            feature = self.idx.feature_from_url((f, v))
+            other_docs, count, _ = self.idx[feature]
+
+        elif f is not None and (v1 or v2 is not None):
+            feature = self.idx.feature_from_url((f, v1, v2))
+            other_docs, count, _ = self.idx[feature]
+
+        elif c is not None:
+            cluster_id = int(c)
+            other_docs, count = self.feature_clusters.cluster_docs(cluster_id)
+
+        else:
+            raise ValueError("Invalid combination of feature or clusters.")
+
+        if other_docs is not None:
+            matching_docs &= other_docs
+
+        docs = []
+        facets = None
+        base_url = self.reverse_url("cluster-drilldown", cluster_id)
+
+        cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
+        feature_filter = TableFilter(
+            order_by="jaccard_similarity", keep_above=0, first_k=int(top_k_features)
+        )
+
+        sample_docs = random_sample_bitmap(matching_docs, 20)
+        docs = self.idx.html_docs(sample_docs)
+
+        # Similarity of matching docs to all clusters
+        cluster_order = cluster_filter.apply_filter(
+            self.feature_clusters.facet_clusters_by_query(matching_docs)
+        )
+
+        # And then all features for all non-zero similarity clusters
+        cluster_feature_order = self.feature_clusters.facet_clustering_by_query(
+            matching_docs, cluster_order
+        )
+
+        # Pop the currently selected cluster/features out to display in detail
+        drill_cluster_features = {
+            drill_cluster_id: cluster_filter.apply_filter(
+                cluster_feature_order[drill_cluster_id]
+            )
+        }
+        drill_cluster_order = {drill_cluster_id: cluster_order[drill_cluster_id]}
+
+        # And remove them from everything else so they can be left in place.
+        del cluster_order[drill_cluster_id]
+        del cluster_feature_order[drill_cluster_id]
+
+        cluster_feature_order = {
+            cluster_id: feature_filter.apply_filter(cluster_feature_order[cluster_id])
+            for cluster_id in cluster_order
+        }
+
+        facets = render_facets(self.idx, matching_docs, base_url)
+
+        # Update the clusters and features to include a url link
+        for cluster_id in cluster_order.keys():
+            cluster_query = f"c={cluster_id}"
+            cluster_order[cluster_id]["url"] = base_url + cluster_query
+
+            for f, stats in cluster_feature_order[cluster_id].items():
+                query_string = self.idx.feature_to_url_query(f)
+                stats["url"] = base_url + query_string
+
+        drill_cluster_order[drill_cluster_id]["url"] = base_url
+        for f, stats in drill_cluster_features[drill_cluster_id].items():
+            query_string = self.idx.feature_to_url_query(f)
+            stats["url"] = base_url + query_string
+
+        drill_cluster_rendered = web_rendering.render_feature_clustering(
+            drill_cluster_features,
+            drill_cluster_order,
+            self.idx.total_doc_count,
+            url_key="url",
+            area_stat=area_stat,
+        )
+        other_clusters_rendered = web_rendering.render_feature_clustering(
+            cluster_feature_order,
+            cluster_order,
+            self.idx.total_doc_count,
+            url_key="url",
+            area_stat=area_stat,
+        )
+
+        self.write(
+            self.render_page(
+                f"Drill down to cluster {drill_cluster_id}",
+                [
+                    drill_cluster_rendered,
+                    other_clusters_rendered,
+                    facets,
+                    web_rendering.list_docs(docs),
+                ],
             )
         )
 
@@ -284,6 +419,16 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 name="field-features",
             ),
             tornado.web.url(rf"{base_path}/browse/?", BrowseClusters, name="browse"),
+            tornado.web.url(
+                rf"{base_path}/cluster/([0-9]+)/?",
+                ClusterDrillDown,
+                name="cluster-drilldown",
+            ),
+            tornado.web.url(
+                rf"{base_path}/cluster/?",
+                ClusterDrillDownRedirector,
+                name="first-cluster",
+            ),
         ],
         hyperreal_idx=hyperreal_idx,
         autoreload=True,
