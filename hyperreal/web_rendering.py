@@ -105,6 +105,10 @@ pre {
   margin-block-start: var(--space, 1rem);
 }
 
+dl {
+
+}
+
 dl a {
     text-decoration: none;
     display: inline-block;
@@ -112,6 +116,7 @@ dl a {
 
 dd {
     margin-inline-start: var(--s-1);
+    display: block;
 }
 
 dd > * {
@@ -140,9 +145,9 @@ dt::after {
     margin-inline-end: var(--s1);
     margin-block-end: var(--s1);
     --space: var(--s-3);
-    width: 10em;
     overflow-x: scroll;
     overflow-y: hidden;
+    white-space: nowrap;
 }
 
 .cluster-header {
