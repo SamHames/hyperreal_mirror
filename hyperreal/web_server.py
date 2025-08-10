@@ -52,6 +52,8 @@ class IndexedField(HyperrealRequestHandler):
     def get(self, field):
         min_docs = int(self.get_argument("min_docs", "10"))
 
+        sample_doc_count = 20
+
         features = self.idx.field_features(field, min_docs=min_docs)
 
         for f, stats in features.items():
@@ -75,16 +77,21 @@ class IndexedField(HyperrealRequestHandler):
 
         linkable_fields = self.idx.field_handlers
 
-        docs = []
         value = self.get_argument("v", None, strip=False)
+
+        matching_doc_count = total_doc_count
 
         if value:
             handler = self.idx.field_handlers[field][0]
             feature = (field, handler.from_url(value))
-            matching_docs, count, positions = self.idx[feature]
+            matching_docs, matching_doc_count, positions = self.idx[feature]
 
-            sample_docs = random_sample_bitmap(matching_docs, 20)
-            docs = self.idx.html_docs(sample_docs)
+            sample_docs = random_sample_bitmap(matching_docs, sample_doc_count)
+
+        else:
+            sample_docs = random_sample_bitmap(self.idx.all_doc_ids(), sample_doc_count)
+
+        docs = self.idx.html_docs(sample_docs)
 
         sub_nav_links = {
             "Indexed Fields": [
@@ -96,7 +103,14 @@ class IndexedField(HyperrealRequestHandler):
         self.write(
             self.render_page(
                 f"Feature summary for field: {field}",
-                [rendered_features, web_rendering.list_docs(docs)],
+                [
+                    rendered_features,
+                    web_rendering.list_docs(
+                        docs,
+                        sample_doc_count=sample_doc_count,
+                        matching_doc_count=matching_doc_count,
+                    ),
+                ],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
             )
@@ -136,7 +150,7 @@ def render_facets(idx, query, base_url):
 
         rendered_facets.append(
             h("li")(
-                h("div", klass="cluster-header")(
+                h("div", klass="header")(
                     h("h2")(title),
                 ),
                 web_rendering.render_feature_stats_as_dl(
@@ -171,27 +185,31 @@ class BrowseClusters(HyperrealRequestHandler):
                 top_k_features=int(top_k_features)
             )
             matching_docs = self.idx.all_doc_ids()
+            matching_doc_count = len(matching_docs)
 
         elif f is not None and v is not None:
             feature = self.idx.feature_from_url((f, v))
-            matching_docs, count, _ = self.idx[feature]
+            matching_docs, matching_doc_count, _ = self.idx[feature]
 
         elif f is not None and (v1 or v2 is not None):
             feature = self.idx.feature_from_url((f, v1, v2))
-            matching_docs, count, _ = self.idx[feature]
+            matching_docs, matching_doc_count, _ = self.idx[feature]
 
         elif c is not None:
             cluster_id = int(c)
-            matching_docs, count = self.feature_clusters.cluster_docs(cluster_id)
+            matching_docs, matching_doc_count = self.feature_clusters.cluster_docs(
+                cluster_id
+            )
 
         else:
             raise ValueError("Invalid combination of feature or clusters.")
 
+        sample_doc_count = 20
         docs = []
         facets = None
         base_url = self.reverse_url("browse")
 
-        sample_docs = random_sample_bitmap(matching_docs, 20)
+        sample_docs = random_sample_bitmap(matching_docs, sample_doc_count)
         docs = self.idx.html_docs(sample_docs)
         cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
 
@@ -233,7 +251,15 @@ class BrowseClusters(HyperrealRequestHandler):
         self.write(
             self.render_page(
                 f"Browse Feature Clusters",
-                [rendered, facets, web_rendering.list_docs(docs)],
+                [
+                    rendered,
+                    facets,
+                    web_rendering.list_docs(
+                        docs,
+                        sample_doc_count=sample_doc_count,
+                        matching_doc_count=matching_doc_count,
+                    ),
+                ],
             )
         )
 
@@ -293,9 +319,12 @@ class ClusterDrillDown(HyperrealRequestHandler):
         if other_docs is not None:
             matching_docs &= other_docs
 
+        matching_doc_count = len(matching_docs)
+
         docs = []
         facets = None
         base_url = self.reverse_url("cluster-drilldown", cluster_id)
+        sample_doc_count = 20
 
         cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
         feature_filter = TableFilter(
@@ -387,7 +416,11 @@ class ClusterDrillDown(HyperrealRequestHandler):
                     drill_cluster_rendered,
                     other_clusters_rendered,
                     facets,
-                    web_rendering.list_docs(docs),
+                    web_rendering.list_docs(
+                        docs,
+                        sample_doc_count=sample_doc_count,
+                        matching_doc_count=matching_doc_count,
+                    ),
                 ],
                 sub_nav_label="Change Clusters",
                 sub_nav_links=nav_links,

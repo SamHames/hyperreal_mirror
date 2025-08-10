@@ -150,7 +150,7 @@ dt::after {
     white-space: nowrap;
 }
 
-.cluster-header {
+.header {
     background: var(--header);
     padding: var(--s-2);
     text-align: right;
@@ -158,7 +158,7 @@ dt::after {
     margin-block-end: var(--s-2);
 }
 
-.cluster-header h2 {
+.header h2 {
     display: inline-block;
     font-size: 100%;
     margin-inline-end: var(--s-1);
@@ -257,7 +257,7 @@ def render_feature_clustering(
 
         clusters.append(
             h("li")(
-                h("div", klass="cluster-header")(
+                h("div", klass="header")(
                     h("a", href=stats["url"])(
                         h("div", klass="area-mark", style=style)(),
                         h("h2")(cluster_id),
@@ -328,11 +328,22 @@ def full_page(
     )
 
 
-def list_docs(docs):
+def list_docs(docs, sample_doc_count=None, matching_doc_count=None):
 
-    # TODO: render selected documents via key and id through the web interface.
-    # especially when we get to annotation.
-    return h("ul", klass="stack")(h("li", klass="doc")(doc) for _, _, doc in docs)
+    header_label = "Sample of matching docs"
+    if sample_doc_count is not None and matching_doc_count is not None:
+        header_label = f"{sample_doc_count} of {matching_doc_count} matching documents"
+    elif sample_doc_count is not None:
+        header_label = f"{sample_doc_count} sample documents"
+    elif matching_doc_count is not None:
+        header_label = f"Sample of {matching_doc_count} matching_documents"
+
+    return (
+        h("div", klass="header")(
+            h("h2")(header_label),
+        ),
+        h("ul", klass="stack")(h("li", klass="doc")(doc) for _, _, doc in docs),
+    )
 
 
 def render_field_table(index_summary):
