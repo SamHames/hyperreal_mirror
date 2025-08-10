@@ -229,6 +229,11 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
                 full_post_raw = z.read(doc_key)
                 yield doc_key, self._parse_post(full_post_raw)
 
+    def is_quoted_line(self, line):
+        return line.startswith(self.quote_line_starts) or line.endswith(
+            self.quote_line_ends
+        )
+
     def indexable_docs(self, doc_keys):
         for doc_key, doc in self.docs(doc_keys):
             indexed = {
@@ -248,20 +253,16 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
             indexed["body"] = [
                 t
                 for line in doc["body"].splitlines()
+                if not self.is_quoted_line(line)
                 for t in tokenise(line)
-                if not (
-                    line.startswith(self.quote_line_starts)
-                    or line.endswith(self.quote_line_ends)
-                )
             ]
 
             # Quoted text (inverse selection from the body)
             indexed["quoted"] = [
                 t
                 for line in doc["body"].splitlines()
+                if self.is_quoted_line(line)
                 for t in tokenise(line)
-                if line.startswith(self.quote_line_starts)
-                or line.endswith(self.quote_line_ends)
             ]
 
             if doc.get("Distribution", None):
@@ -276,7 +277,7 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
             # render quoted text distinctly from other text.
             doc["body"] = (
-                h("em")(line) if line.startswith(self.quote_line_starts) else line
+                h("em")(line) if self.is_quoted_line(line) else line
                 for line in doc["body"].splitlines(keepends=True)
             )
 
