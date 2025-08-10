@@ -268,13 +268,12 @@ class ClusterDrillDown(HyperrealRequestHandler):
         v2 = self.get_argument("v2", None, strip=False)
         c = self.get_argument("c", None)
 
-        area_stat = "jaccard_similarity"
         matching_docs, _ = self.feature_clusters.cluster_docs(drill_cluster_id)
 
         other_docs = None
 
         if f is None and c is None:
-            area_stat = "relative_doc_count"
+            pass
 
         elif f is not None and v is not None:
             feature = self.idx.feature_from_url((f, v))
@@ -354,15 +353,32 @@ class ClusterDrillDown(HyperrealRequestHandler):
             drill_cluster_order,
             self.idx.total_doc_count,
             url_key="url",
-            area_stat=area_stat,
+            area_stat="jaccard_similarity",
         )
         other_clusters_rendered = web_rendering.render_feature_clustering(
             cluster_feature_order,
             cluster_order,
             self.idx.total_doc_count,
             url_key="url",
-            area_stat=area_stat,
+            area_stat="jaccard_similarity",
         )
+
+        # Link to next, previous clusters, wrapping around to the other end at the limits
+        all_clusters = sorted(self.feature_clusters.cluster_ids)
+        n_clusters = len(all_clusters)
+        drill_loc = all_clusters.index(drill_cluster_id)
+        next_cluster = all_clusters[(drill_loc + 1) % n_clusters]
+        prev_cluster = all_clusters[(drill_loc - 1) % n_clusters]
+
+        nav_links = {
+            "Change Clusters": [
+                (
+                    "Previous Cluster",
+                    self.reverse_url("cluster-drilldown", prev_cluster),
+                ),
+                ("Next Cluster", self.reverse_url("cluster-drilldown", next_cluster)),
+            ]
+        }
 
         self.write(
             self.render_page(
@@ -373,6 +389,8 @@ class ClusterDrillDown(HyperrealRequestHandler):
                     facets,
                     web_rendering.list_docs(docs),
                 ],
+                sub_nav_label="Change Clusters",
+                sub_nav_links=nav_links,
             )
         )
 
