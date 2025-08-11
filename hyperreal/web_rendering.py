@@ -124,6 +124,10 @@ pre {
     overflow: hidden;
 }
 
+.feature-list {
+    margin-block-end: var(--s0);
+}
+
 .feature-list a {
     text-decoration: none;
     display: inline-block;
@@ -205,7 +209,7 @@ def calculate_area_mark(normalised_area, total_doc_count, min_mapping_size=0.05)
 def render_feature_stats_as_dl(
     feature_stats,
     feature_order=None,
-    url_key=None,
+    feature_url_key=None,
     display_stat=None,
     area_stat=None,
     total_doc_count=None,
@@ -233,11 +237,11 @@ def render_feature_stats_as_dl(
         if display_stat is not None:
             display = h("span", klass="display-number")(details[display_stat])
 
-        if url_key is not None:
-            href = details[url_key]
+        if feature_url_key is not None:
+            href = details[feature_url_key]
             items.append(
                 h("dd", klass="stat-row")(
-                    h("a", href=href)(html_value),
+                    h("a", klass="display-number", href=href)(html_value),
                     display,
                     h("div", style=style, klass="area-mark")(),
                 )
@@ -263,7 +267,9 @@ def render_feature_clustering(
     cluster_order=None,
     area_stat="relative_doc_count",
     display_stat=None,
-    url_key=None,
+    feature_url_key=None,
+    header_url_key=None,
+    seemore_url_key=None,
 ):
 
     cluster_order = cluster_order or cluster_stats.keys()
@@ -285,10 +291,17 @@ def render_feature_clustering(
         if display_stat is not None:
             display = h("span", klass="display-number")(stats[display_stat])
 
+        see_more_link = None
+        if seemore_url_key is not None:
+            see_more_link = h(
+                "a",
+                href=stats[seemore_url_key],
+            )(f"See all in cluster {cluster_id}")
+
         clusters.append(
             h("li")(
                 h("div", klass="header stat-row")(
-                    h("a", href=stats["url"])(
+                    h("a", href=stats[header_url_key])(
                         h("h2")("Cluster: ", cluster_id),
                     ),
                     display,
@@ -299,8 +312,9 @@ def render_feature_clustering(
                     area_stat=area_stat,
                     display_stat=display_stat,
                     total_doc_count=total_doc_count,
-                    url_key=url_key,
+                    feature_url_key=feature_url_key,
                 ),
+                h("div")(see_more_link),
             )
         )
 

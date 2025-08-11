@@ -69,7 +69,7 @@ class IndexedField(HyperrealRequestHandler):
         total_doc_count = self.idx.total_doc_count
         rendered_features = web_rendering.render_feature_stats_as_dl(
             features,
-            url_key="url",
+            feature_url_key="url",
             area_stat="relative_doc_count",
             total_doc_count=total_doc_count,
             display_stat="doc_count",
@@ -111,7 +111,7 @@ class IndexedField(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
-                column_flex={1: 3},
+                column_flex={1: 2},
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
             )
@@ -159,7 +159,7 @@ def render_facets(idx, query, base_url):
                     area_stat="jaccard_similarity",
                     total_doc_count=idx.total_doc_count,
                     display_stat="hits",
-                    url_key="url",
+                    feature_url_key="url",
                 ),
             )
         )
@@ -235,7 +235,11 @@ class BrowseClusters(HyperrealRequestHandler):
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
             cluster_query = f"c={cluster_id}"
-            cluster_stats[cluster_id]["url"] = base_url + cluster_query
+            cluster_stats[cluster_id]["header_url"] = base_url + cluster_query
+
+            cluster_stats[cluster_id]["seemore_url"] = self.reverse_url(
+                "cluster-drilldown", cluster_id
+            )
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_url_query(f)
@@ -245,7 +249,9 @@ class BrowseClusters(HyperrealRequestHandler):
             clustering,
             cluster_stats,
             self.idx.total_doc_count,
-            url_key="url",
+            feature_url_key="url",
+            header_url_key="header_url",
+            seemore_url_key="seemore_url",
             area_stat=area_stat,
             display_stat="doc_count",
         )
@@ -369,13 +375,16 @@ class ClusterDrillDown(HyperrealRequestHandler):
         # Update the clusters and features to include a url link
         for cluster_id in cluster_order.keys():
             cluster_query = f"c={cluster_id}"
-            cluster_order[cluster_id]["url"] = base_url + cluster_query
+            cluster_order[cluster_id]["header_url"] = base_url + cluster_query
+            cluster_order[cluster_id]["seemore_url"] = self.reverse_url(
+                "cluster-drilldown", cluster_id
+            )
 
             for f, stats in cluster_feature_order[cluster_id].items():
                 query_string = self.idx.feature_to_url_query(f)
                 stats["url"] = base_url + query_string
 
-        drill_cluster_order[drill_cluster_id]["url"] = base_url
+        drill_cluster_order[drill_cluster_id]["header_url"] = base_url
         for f, stats in drill_cluster_features[drill_cluster_id].items():
             query_string = self.idx.feature_to_url_query(f)
             stats["url"] = base_url + query_string
@@ -384,7 +393,8 @@ class ClusterDrillDown(HyperrealRequestHandler):
             drill_cluster_features,
             drill_cluster_order,
             self.idx.total_doc_count,
-            url_key="url",
+            feature_url_key="url",
+            header_url_key="header_url",
             area_stat="jaccard_similarity",
             display_stat="hits",
         )
@@ -392,7 +402,9 @@ class ClusterDrillDown(HyperrealRequestHandler):
             cluster_feature_order,
             cluster_order,
             self.idx.total_doc_count,
-            url_key="url",
+            feature_url_key="url",
+            header_url_key="header_url",
+            seemore_url_key="seemore_url",
             area_stat="jaccard_similarity",
             display_stat="hits",
         )
