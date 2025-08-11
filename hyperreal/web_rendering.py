@@ -78,13 +78,13 @@ main {
     flex: 1;
     overflow: hidden;
     max-height: 100vh;
+    gap: var(--s2)
 }
 
 .column {
     overflow: scroll;
     margin: var(--s0);
-    flex: 1;
-    min-width: 30ch;
+    flex: var(--column-flex, 1);
 }
 
 pre {
@@ -105,49 +105,49 @@ pre {
   margin-block-start: var(--space, 1rem);
 }
 
-dl {
-
-}
-
-dl a {
+.feature-list a {
     text-decoration: none;
     display: inline-block;
 }
 
-dd {
+dl a {
+}
+
+.feature-list dd {
     margin-inline-start: var(--s-1);
     display: block;
 }
 
-dd > * {
+.feature-list dd > * {
     margin-inline-end: var(--s-1);
 }
 
-dt::after {
+.feature-list dt::after {
     content: ":";
 }
 
 .area-mark {
-    height: calc(var(--w));
-    width: calc(var(--w));
+    height: var(--w);
+    width: var(--w);
     display: inline-block;
+    position: relative;
     vertical-align: middle;
     background: black;
-    margin-inline-end: var(--s-1);
-    border-radius: 50%;
+    margin-inline-start: var(--s-1);
 }
 
 .feature-clustering {
     line-height: 130%;
+    gap: var(--s0);
 }
 
 .feature-clustering > * {
-    margin-inline-end: var(--s1);
-    margin-block-end: var(--s1);
     --space: var(--s-3);
-    overflow-x: scroll;
-    overflow-y: hidden;
+    overflow-y: clip;
+    overflow-x: clip;
     white-space: nowrap;
+    flex: 1 auto;
+    max-width: 100%;
 }
 
 .header {
@@ -156,12 +156,25 @@ dt::after {
     text-align: right;
     border-bottom: solid;
     margin-block-end: var(--s-2);
+    position: sticky;
+    top: 0;
 }
 
 .header h2 {
     display: inline-block;
     font-size: 100%;
     margin-inline-end: var(--s-1);
+}
+
+.display-number {
+    font-family: monospace;
+}
+
+.stat-mark {
+    display: inline-block;
+    width: 3em;
+    text-align: right;
+    margin: 0;
 }
 
 """
@@ -186,7 +199,7 @@ def render_feature_stats_as_dl(
     display_stat=None,
     area_stat=None,
     total_doc_count=None,
-    klass="stack",
+    klass="stack feature-list",
 ):
 
     feature_order = feature_order or feature_stats.keys()
@@ -205,20 +218,20 @@ def render_feature_stats_as_dl(
 
         if area_stat is not None:
             area_side = calculate_area_mark(details[area_stat], total_doc_count)
-            style = f"--w: {area_side:.3f}lh;"
+            style = f"--w: {area_side:.3f}rem;"
 
         display = None
         if display_stat is not None:
-            display = h("span")(details[display_stat])
+            display = h("span", klass="display-number")(details[display_stat])
 
         if url_key is not None:
             href = details[url_key]
             items.append(
                 h("dd")(
-                    h("a", style=style, href=href)(
-                        h("div", klass="area-mark")(), html_value
+                    h("div", klass="stat-mark")(
+                        display, h("div", style=style, klass="area-mark")()
                     ),
-                    display,
+                    h("a", href=href)(html_value),
                 )
             )
         else:
@@ -239,6 +252,7 @@ def render_feature_clustering(
     total_doc_count,
     cluster_order=None,
     area_stat="relative_doc_count",
+    display_stat=None,
     url_key=None,
 ):
 
@@ -260,12 +274,13 @@ def render_feature_clustering(
                 h("div", klass="header")(
                     h("a", href=stats["url"])(
                         h("div", klass="area-mark", style=style)(),
-                        h("h2")(cluster_id),
+                        h("h2")("Cluster: ", cluster_id),
                     )
                 ),
                 render_feature_stats_as_dl(
                     features,
                     area_stat=area_stat,
+                    display_stat=display_stat,
                     total_doc_count=total_doc_count,
                     url_key=url_key,
                 ),
@@ -295,7 +310,12 @@ def generate_nav(label, links, klass=None):
 
 
 def full_page(
-    page_title, body_columns, sub_nav_links=None, sub_nav_label=None, extra_css=None
+    page_title,
+    body_columns,
+    column_flex=None,
+    sub_nav_links=None,
+    sub_nav_label=None,
+    extra_css=None,
 ):
     """Render a complete page with navigation and a page title."""
 
@@ -315,6 +335,8 @@ def full_page(
 
     extra_css = extra_css or ""
 
+    column_flex = column_flex or {}
+
     return html(lang="en")(
         h("head")(
             h("meta", name="viewport", content="width=device-width, initial-scale=1"),
@@ -323,7 +345,16 @@ def full_page(
         ),
         h("body")(
             h("header")(main_nav, sub_nav),
-            h("main")((h("div", klass="column")(col) for col in body_columns)),
+            h("main")(
+                (
+                    h(
+                        "div",
+                        klass="column",
+                        style=f"--column-flex: {column_flex.get(col_index, 1)}",
+                    )(col)
+                    for col_index, col in enumerate(body_columns)
+                )
+            ),
         ),
     )
 

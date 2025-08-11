@@ -155,7 +155,7 @@ def render_facets(idx, query, base_url):
                 ),
                 web_rendering.render_feature_stats_as_dl(
                     sorting(faceted),
-                    area_stat="relative_hits",
+                    area_stat="jaccard_similarity",
                     total_doc_count=idx.total_doc_count,
                     display_stat="hits",
                     url_key="url",
@@ -246,6 +246,7 @@ class BrowseClusters(HyperrealRequestHandler):
             self.idx.total_doc_count,
             url_key="url",
             area_stat=area_stat,
+            display_stat="doc_count",
         )
 
         self.write(
@@ -260,6 +261,7 @@ class BrowseClusters(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
+                column_flex={0: 1.5, 2: 1.5},
             )
         )
 
@@ -383,6 +385,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
             self.idx.total_doc_count,
             url_key="url",
             area_stat="jaccard_similarity",
+            display_stat="doc_count",
         )
         other_clusters_rendered = web_rendering.render_feature_clustering(
             cluster_feature_order,
@@ -390,6 +393,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
             self.idx.total_doc_count,
             url_key="url",
             area_stat="jaccard_similarity",
+            display_stat="doc_count",
         )
 
         # Link to next, previous clusters, wrapping around to the other end at the limits
@@ -422,6 +426,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
+                column_flex={1: 1.5, 3: 1.5},
                 sub_nav_label="Change Clusters",
                 sub_nav_links=nav_links,
             )

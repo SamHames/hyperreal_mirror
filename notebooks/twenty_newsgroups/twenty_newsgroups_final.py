@@ -290,11 +290,11 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
 newsgroups_corpus = TwentyNewsgroups()
 
-for doc, lines in newsgroups_corpus.match_all_lines("wrote:$"):
-    print(doc)
-    for line in lines:
-        print(line)
-    print()
+# for doc, lines in newsgroups_corpus.match_all_lines("wrote:$"):
+#     print(doc)
+#     for line in lines:
+#         print(line)
+#     print()
 # -
 
 # # Using a Corpus
@@ -306,13 +306,13 @@ for doc, lines in newsgroups_corpus.match_all_lines("wrote:$"):
 #
 
 # +
-from IPython.display import display_html
+# from IPython.display import display_html
 
-newsgroups_corpus = TwentyNewsgroups()
-keys = list(newsgroups_corpus.all_doc_keys())[:1]
+# newsgroups_corpus = TwentyNewsgroups()
+# keys = list(newsgroups_corpus.all_doc_keys())[:1]
 
-for key, doc in newsgroups_corpus.html_docs(keys):
-    display_html(doc)
+# for key, doc in newsgroups_corpus.html_docs(keys):
+#     display_html(doc)
 
 # -
 
