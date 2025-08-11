@@ -111,6 +111,7 @@ class IndexedField(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
+                column_flex={1: 3},
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
             )
@@ -385,7 +386,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
             self.idx.total_doc_count,
             url_key="url",
             area_stat="jaccard_similarity",
-            display_stat="doc_count",
+            display_stat="hits",
         )
         other_clusters_rendered = web_rendering.render_feature_clustering(
             cluster_feature_order,
@@ -393,7 +394,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
             self.idx.total_doc_count,
             url_key="url",
             area_stat="jaccard_similarity",
-            display_stat="doc_count",
+            display_stat="hits",
         )
 
         # Link to next, previous clusters, wrapping around to the other end at the limits

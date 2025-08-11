@@ -105,21 +105,28 @@ pre {
   margin-block-start: var(--space, 1rem);
 }
 
+.stat-row {
+    display: flex;
+    justify-content: end;
+    gap: var(--s-1);
+    flex-wrap: nowrap;
+    align-items: center;
+    padding: 0 var(--s-3);
+}
+
+.stat-row :not(:first-child) {
+    flex-shrink: 0;
+}
+
+.stat-row :first-child {
+    text-align: left;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
 .feature-list a {
     text-decoration: none;
     display: inline-block;
-}
-
-dl a {
-}
-
-.feature-list dd {
-    margin-inline-start: var(--s-1);
-    display: block;
-}
-
-.feature-list dd > * {
-    margin-inline-end: var(--s-1);
 }
 
 .feature-list dt::after {
@@ -127,18 +134,29 @@ dl a {
 }
 
 .area-mark {
+    height: 1rem;
+    width: 1rem;
+    text-align: center;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+}
+
+.area-mark::before {
+    content: "";
     height: var(--w);
     width: var(--w);
-    display: inline-block;
-    position: relative;
-    vertical-align: middle;
+    margin: 0 auto;
     background: black;
-    margin-inline-start: var(--s-1);
+    display: inline-block;   
+    vertical-align: middle;
 }
 
 .feature-clustering {
     line-height: 130%;
     gap: var(--s0);
+    align-items: stretch;
+    justify-content: space-between;
 }
 
 .feature-clustering > * {
@@ -152,35 +170,27 @@ dl a {
 
 .header {
     background: var(--header);
-    padding: var(--s-2);
     text-align: right;
     border-bottom: solid;
     margin-block-end: var(--s-2);
     position: sticky;
     top: 0;
+    padding: var(--s-3);
 }
 
 .header h2 {
     display: inline-block;
     font-size: 100%;
-    margin-inline-end: var(--s-1);
 }
 
 .display-number {
     font-family: monospace;
 }
 
-.stat-mark {
-    display: inline-block;
-    width: 3em;
-    text-align: right;
-    margin: 0;
-}
-
 """
 
 
-def calculate_area_mark(normalised_area, total_doc_count, min_mapping_size=0.1):
+def calculate_area_mark(normalised_area, total_doc_count, min_mapping_size=0.05):
     """
     Transform a normalised value in range [0, 1] to a renderable unit in HTML.
 
@@ -214,8 +224,7 @@ def render_feature_stats_as_dl(
         if field != last_field:
             items.append(h("dt")(h("em")(field)))
 
-        style = False
-
+        style = None
         if area_stat is not None:
             area_side = calculate_area_mark(details[area_stat], total_doc_count)
             style = f"--w: {area_side:.3f}rem;"
@@ -227,17 +236,18 @@ def render_feature_stats_as_dl(
         if url_key is not None:
             href = details[url_key]
             items.append(
-                h("dd")(
-                    h("div", klass="stat-mark")(
-                        display, h("div", style=style, klass="area-mark")()
-                    ),
+                h("dd", klass="stat-row")(
                     h("a", href=href)(html_value),
+                    display,
+                    h("div", style=style, klass="area-mark")(),
                 )
             )
         else:
             items.append(
                 h("dd", style=style)(
-                    h("div", klass="area-mark")(), h("span")(html_value), display
+                    h("span")(html_value),
+                    display,
+                    h("div", klass="area-mark")(),
                 )
             )
 
@@ -266,16 +276,23 @@ def render_feature_clustering(
 
         features = clustering[cluster_id]
 
-        cluster_width = calculate_area_mark(stats[area_stat], total_doc_count)
-        style = f"--w: {cluster_width:.3f}lh"
+        style = None
+        if area_stat is not None:
+            cluster_width = calculate_area_mark(stats[area_stat], total_doc_count)
+            style = f"--w: {cluster_width:.3f}rem"
+
+        display = None
+        if display_stat is not None:
+            display = h("span", klass="display-number")(stats[display_stat])
 
         clusters.append(
             h("li")(
-                h("div", klass="header")(
+                h("div", klass="header stat-row")(
                     h("a", href=stats["url"])(
-                        h("div", klass="area-mark", style=style)(),
                         h("h2")("Cluster: ", cluster_id),
-                    )
+                    ),
+                    display,
+                    h("div", klass="area-mark", style=style)(),
                 ),
                 render_feature_stats_as_dl(
                     features,
