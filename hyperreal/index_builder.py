@@ -47,10 +47,10 @@ def build_index(
     try:
         # Try to infer the number of workers from the provided pool, but since it's not
         # public, handle where it might be missing.
-        max_workers = pool._max_workers or max_workers
+        max_workers = max_workers or pool._max_workers
     except AttributeError:
         # TODO: log the fallthrough
-        max_workers = max_workers or 4
+        max_workers = 4
 
     with tempfile.TemporaryDirectory() as tempdir:
 
