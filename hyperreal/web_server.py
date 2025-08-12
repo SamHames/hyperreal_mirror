@@ -88,10 +88,13 @@ class IndexedField(HyperrealRequestHandler):
 
             sample_docs = random_sample_bitmap(matching_docs, sample_doc_count)
 
+            highlight_features = [feature]
+
         else:
+            highlight_features = None
             sample_docs = random_sample_bitmap(self.idx.all_doc_ids(), sample_doc_count)
 
-        docs = self.idx.html_docs(sample_docs)
+        docs = self.idx.html_docs(sample_docs, highlight_features=highlight_features)
 
         sub_nav_links = {
             "Indexed Fields": [
@@ -188,18 +191,28 @@ class BrowseClusters(HyperrealRequestHandler):
             matching_docs = self.idx.all_doc_ids()
             matching_doc_count = len(matching_docs)
 
+            highlight_features = None
+
         elif f is not None and v is not None:
             feature = self.idx.feature_from_url((f, v))
             matching_docs, matching_doc_count, _ = self.idx[feature]
+
+            highlight_features = [feature]
 
         elif f is not None and (v1 or v2 is not None):
             feature = self.idx.feature_from_url((f, v1, v2))
             matching_docs, matching_doc_count, _ = self.idx[feature]
 
+            highlight_features = [feature]
+
         elif c is not None:
             cluster_id = int(c)
             matching_docs, matching_doc_count = self.feature_clusters.cluster_docs(
                 cluster_id
+            )
+
+            highlight_features = list(
+                self.feature_clusters.cluster_features(cluster_id)
             )
 
         else:
@@ -210,8 +223,6 @@ class BrowseClusters(HyperrealRequestHandler):
         facets = None
         base_url = self.reverse_url("browse")
 
-        sample_docs = random_sample_bitmap(matching_docs, sample_doc_count)
-        docs = self.idx.html_docs(sample_docs)
         cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
 
         cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
@@ -255,6 +266,9 @@ class BrowseClusters(HyperrealRequestHandler):
             area_stat=area_stat,
             display_stat="doc_count",
         )
+
+        sample_docs = random_sample_bitmap(matching_docs, sample_doc_count)
+        docs = self.idx.html_docs(sample_docs, highlight_features=highlight_features)
 
         self.write(
             self.render_page(
@@ -307,6 +321,9 @@ class ClusterDrillDown(HyperrealRequestHandler):
 
         other_docs = None
 
+        highlight_features = []
+        highlight_clusters = []
+
         if f is None and c is None:
             pass
 
@@ -314,13 +331,17 @@ class ClusterDrillDown(HyperrealRequestHandler):
             feature = self.idx.feature_from_url((f, v))
             other_docs, count, _ = self.idx[feature]
 
+            highlight_features.append(feature)
+
         elif f is not None and (v1 or v2 is not None):
             feature = self.idx.feature_from_url((f, v1, v2))
             other_docs, count, _ = self.idx[feature]
+            highlight_features.append(feature)
 
         elif c is not None:
             cluster_id = int(c)
             other_docs, count = self.feature_clusters.cluster_docs(cluster_id)
+            highlight_clusters.append(cluster_id)
 
         else:
             raise ValueError("Invalid combination of feature or clusters.")
@@ -339,9 +360,6 @@ class ClusterDrillDown(HyperrealRequestHandler):
         feature_filter = TableFilter(
             order_by="jaccard_similarity", keep_above=0, first_k=int(top_k_features)
         )
-
-        sample_docs = random_sample_bitmap(matching_docs, 20)
-        docs = self.idx.html_docs(sample_docs)
 
         # Similarity of matching docs to all clusters
         cluster_order = cluster_filter.apply_filter(
@@ -408,6 +426,14 @@ class ClusterDrillDown(HyperrealRequestHandler):
             area_stat="jaccard_similarity",
             display_stat="hits",
         )
+
+        highlight_features.extend(drill_cluster_features[drill_cluster_id])
+
+        for cluster_id in highlight_clusters:
+            highlight_features.extend(cluster_feature_order[cluster_id])
+
+        sample_docs = random_sample_bitmap(matching_docs, 20)
+        docs = self.idx.html_docs(sample_docs, highlight_features=highlight_features)
 
         # Link to next, previous clusters, wrapping around to the other end at the limits
         all_clusters = sorted(self.feature_clusters.cluster_ids)

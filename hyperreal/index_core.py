@@ -555,7 +555,9 @@ class HyperrealIndex:
         """Returns all doc_ids in the collection."""
         return BitMap(range(0, self.total_doc_count))
 
-    def _iter_corpus_docs(self, doc_ids: Iterable[int], corpus_method: Callable):
+    def _iter_corpus_docs(
+        self, doc_ids: Iterable[int], corpus_method: Callable, highlight_features=None
+    ):
         """
         Helper function for iterating through transformed documents from a corpus.
 
@@ -571,7 +573,14 @@ class HyperrealIndex:
 
         # Split the generator into two, so we can iterate and keep everything aligned.
         for_corpus, for_doc_id = itertools.tee(doc_keys, 2)
-        corpus_docs = corpus_method((doc_key for _, doc_key in for_corpus))
+
+        if highlight_features:
+            corpus_docs = corpus_method(
+                (doc_key for _, doc_key in for_corpus),
+                highlight_features=highlight_features,
+            )
+        else:
+            corpus_docs = corpus_method((doc_key for _, doc_key in for_corpus))
 
         # Walk through the corpus docs, potentially allowing the corpus to swallow
         # keys for any reason (such as for a missing doc).
@@ -604,13 +613,15 @@ class HyperrealIndex:
 
         return self._iter_corpus_docs(doc_ids, self.corpus.indexable_docs)
 
-    def html_docs(self, doc_ids):
+    def html_docs(self, doc_ids, highlight_features=None):
         """
         Iterate through HTML form of documents on the corpus matching doc_ids.
 
         """
 
-        return self._iter_corpus_docs(doc_ids, self.corpus.html_docs)
+        return self._iter_corpus_docs(
+            doc_ids, self.corpus.html_docs, highlight_features=highlight_features
+        )
 
     def _lookup_doc_key(self, doc_id: int):
         """

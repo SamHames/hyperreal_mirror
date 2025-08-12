@@ -148,7 +148,9 @@ class HyperrealCorpus:
     ) -> Iterable[tuple[DocKey, IndexableDoc]]:
         pass
 
-    def html_docs(self, doc_keys: Iterable[DocKey]) -> Iterable[tuple[DocKey, str]]:
+    def html_docs(
+        self, doc_keys: Iterable[DocKey], highlight_features=None
+    ) -> Iterable[tuple[DocKey, str]]:
         """
         Iterate through pairs of doc_keys and the associated doc's HTML representation.
 
@@ -156,7 +158,9 @@ class HyperrealCorpus:
         for key, str_doc in self.str_docs(doc_keys):
             yield key, h("p")(str_doc)
 
-    def str_docs(self, doc_keys: Iterable[DocKey]) -> Iterable[tuple[DocKey, str]]:
+    def str_docs(
+        self, doc_keys: Iterable[DocKey], highlight_features=None
+    ) -> Iterable[tuple[DocKey, str]]:
         """
         Iterate through pairs of doc_keys and the associated doc's str representation.
 

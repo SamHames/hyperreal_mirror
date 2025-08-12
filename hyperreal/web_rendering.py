@@ -61,7 +61,7 @@ nav ul {
 }
 
 
-ul li {
+ul > li {
     list-style: none;
     margin-right: var(--s-1);
 }

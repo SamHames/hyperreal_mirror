@@ -110,7 +110,7 @@ from datetime import date
 from email.utils import parsedate
 from time import mktime
 
-from tinyhtml import h
+from tinyhtml import h, raw
 
 from hyperreal import corpus
 
@@ -137,6 +137,17 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
     quote_line_starts = ("In article", ">", "|", "}", "{", "#")
     quote_line_ends = ("writes:",)
+
+    extra_css = """
+        .snippets {
+            --space: var(--s-2);
+            margin: var(--s-2);
+        }
+        .snippets li {
+            list-style-type: roman;
+            margin-inline-start: var(--s2);
+        }
+    """
 
     # Link to the documentation for this!
     def __init__(self):
@@ -272,20 +283,75 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
             yield doc_key, indexed
 
-    def html_docs(self, doc_keys):
-        for doc_key, doc in self.docs(doc_keys):
+    def _render_html_doc(self, doc, snippets=None, snippet_summary=None):
+        # render quoted text distinctly from other text.
+        doc["body"] = (
+            h("em")(line) if self.is_quoted_line(line) else line
+            for line in doc["body"].splitlines(keepends=True)
+        )
 
-            # render quoted text distinctly from other text.
-            doc["body"] = (
-                h("em")(line) if self.is_quoted_line(line) else line
-                for line in doc["body"].splitlines(keepends=True)
+        subject = doc.pop("Subject")
+
+        concordances = None
+        if snippets:
+            concordances = h("details")(
+                h("summary")(h("em")(snippet_summary)),
+                h("ol", klass="stack snippets")([h("li")(line) for line in snippets]),
             )
 
-            html_doc = h("dl")(
-                (h("dt")(key), h("dd")(h("pre")(value))) for key, value in doc.items()
-            )
+        return (
+            h("details")(
+                h("summary")(subject),
+                h("dl")(
+                    (h("dt")(key), h("dd")(h("pre")(value)))
+                    for key, value in doc.items()
+                ),
+            ),
+            concordances,
+        )
 
-            yield doc_key, html_doc
+    def html_docs(self, doc_keys, highlight_features=None):
+
+        body_values = []
+        if highlight_features is not None:
+            body_values = {v for f, v in highlight_features if f == "body"}
+
+        if body_values:
+            for doc_key, doc in self.docs(doc_keys):
+                tokenised = [
+                    t
+                    for line in doc["body"].splitlines()
+                    if not self.is_quoted_line(line)
+                    for t in tokenise(line)
+                ]
+                matches = [
+                    i for i, value in enumerate(tokenised) if value in body_values
+                ]
+
+                matched_tokens = sorted(set(tokenised[m] for m in matches))
+                summary_matches = f"{len(matches)} matches on: " + " ".join(
+                    matched_tokens
+                )
+
+                # Add spaces back to tokens
+                tokenised = [t + " " for t in tokenised]
+
+                # highlight matches
+                for m in matches:
+                    tokenised[m] = h("mark")(tokenised[m])
+
+                snippets = [
+                    raw(h("span")([tokenised[max(0, i - 10) : i + 11]]).render())
+                    for i in matches
+                ]
+
+                yield doc_key, self._render_html_doc(
+                    doc, snippets=snippets, snippet_summary=summary_matches
+                )
+
+        else:
+            for doc_key, doc in self.docs(doc_keys):
+                yield doc_key, self._render_html_doc(doc)
 
 
 newsgroups_corpus = TwentyNewsgroups()
