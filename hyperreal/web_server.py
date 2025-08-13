@@ -388,7 +388,12 @@ class ClusterDrillDown(HyperrealRequestHandler):
             matching_docs
         )
 
+        # Pull out the selected cluster first before computing the order.
+        drill_cluster_order = {drill_cluster_id: cluster_similarity[drill_cluster_id]}
+
         cluster_order = cluster_filter.apply_filter(cluster_similarity)
+        # Ensure that the selected cluster is still there after truncating
+        cluster_order[drill_cluster_id] = drill_cluster_order[drill_cluster_id]
 
         # And then all features for all non-zero similarity clusters
         cluster_feature_order = self.feature_clusters.facet_clustering_by_query(
@@ -401,7 +406,6 @@ class ClusterDrillDown(HyperrealRequestHandler):
                 cluster_feature_order[drill_cluster_id]
             )
         }
-        drill_cluster_order = {drill_cluster_id: cluster_order[drill_cluster_id]}
 
         # And remove them from everything else so they can be left in place.
         del cluster_order[drill_cluster_id]
