@@ -221,9 +221,16 @@ class FeatureClustering(IndexPlugin):
 
         """
 
+        if not features:
+            raise ValueError(
+                f"At least one feature needs to be present, got {features}"
+            )
+
         new_cluster_id = self._create_new_empty_cluster()
 
         self._replace_features_for_cluster(new_cluster_id, features)
+
+        return new_cluster_id
 
     @atomic
     def replace_clusters(self, clustering: Clustering):
@@ -824,7 +831,7 @@ def _measure_feature_contribution_to_cluster(
             only_once = cluster_union - covered_twice
 
             c = len(cluster_union)
-            objective = hits / (c + n_features) - (hits / (hits + n_features))
+            objective = hits / (c + n_features)
 
             # PHASE 2: compute the incremental change in objective from removing
             # each feature (alone) from the current cluster.
@@ -852,9 +859,7 @@ def _measure_feature_contribution_to_cluster(
 
                 # It's okay for the cluster to become empty - we'll just prune it.
                 if old_c and intersects_with_other_feature:
-                    old_objective = old_hits / (old_c + (n_features - 1)) - (
-                        old_hits / (old_hits + n_features - 1)
-                    )
+                    old_objective = old_hits / (old_c + (n_features - 1))
 
                     delta = objective - old_objective
 
@@ -881,9 +886,7 @@ def _measure_feature_contribution_to_cluster(
                 if docs.intersect(cluster_union):
                     new_hits = hits + feature_hits
                     new_c = docs.union_cardinality(cluster_union)
-                    new_objective = new_hits / (new_c + (n_features + 1)) - (
-                        new_hits / (new_hits + n_features + 1)
-                    )
+                    new_objective = new_hits / (new_c + (n_features + 1))
 
                     delta = new_objective - objective
 

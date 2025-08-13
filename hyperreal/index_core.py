@@ -29,7 +29,7 @@ import random
 from functools import cached_property
 from types import SimpleNamespace
 from typing import Any, Callable, Hashable, Iterable, Optional
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, parse_qsl
 
 from pyroaring import AbstractBitMap, BitMap, BitMap64
 from tinyhtml import frag, h, raw
@@ -337,7 +337,7 @@ class HyperrealIndex:
 
     def feature_from_url(self, feature):
         """
-        Convert a tuple of values loaded from the index to a feature.
+        Convert a tuple of values extracted from a url to a feature.
 
         """
         field = feature[0]
@@ -363,6 +363,58 @@ class HyperrealIndex:
 
         else:
             raise ValueError("A feature can only have 2 or 3 elements.")
+
+    def feature_from_querystring(self, querystring):
+        """
+        Create a feature from a (fragment of) a querystring.
+
+        """
+
+        components = parse_qsl(querystring)
+
+        if components[0][0] != "f":
+            raise ValueError(
+                "Invalid feature, expected the first "
+                f"component to be 'f', got {components}."
+            )
+
+        field = components[0][1]
+        handler = self.field_handlers[field][0]
+
+        possible_values = components[1:]
+
+        if len(possible_values) == 2:
+            (value_type_a, value_a), (value_type_b, value_b) = possible_values
+            if (value_type_a, value_type_b) == ("v1", "v2"):
+                return (field, handler.from_url(value_a), handler.from_url(value_b))
+            else:
+                raise ValueError("Invalid feature")
+
+        elif len(possible_values) == 1:
+
+            value_type, value = possible_values[0]
+
+            return_value = handler.from_url(value)
+
+            if value_type == "v":
+                return (field, return_value)
+
+            elif value_type == "v1":
+                return (field, return_value, None)
+
+            elif value_type == "v2":
+                return (field, None, return_value)
+
+            else:
+                raise ValueError(
+                    f"Invalid value_type {value_type}, expecting one of 'v', 'v1', 'v2'"
+                )
+
+        else:
+            raise ValueError(
+                "Invalid feature, there must be 1-2"
+                f"components representing the values, got: {possible_values}"
+            )
 
     def feature_to_html(self, feature):
         """Render the values for feature as a tuple of html renderable values."""
@@ -395,7 +447,7 @@ class HyperrealIndex:
         else:
             raise ValueError("A feature can only have 2 or 3 elements.")
 
-    def feature_to_url_query(self, feature):
+    def feature_to_querystring(self, feature):
         """Render the given feature as a query string."""
 
         field = feature[0]

@@ -17,6 +17,7 @@ Out of scope for this component right now are:
 """
 
 import asyncio
+from urllib.parse import parse_qsl
 
 import tornado
 from tinyhtml import h
@@ -58,7 +59,7 @@ class IndexedField(HyperrealRequestHandler):
 
         for f, stats in features.items():
             base_url = self.reverse_url("field-features", field)
-            query_string = self.idx.feature_to_url_query(f)
+            query_string = self.idx.feature_to_querystring(f)
             stats["url"] = base_url + "?" + query_string
 
         html_features = {
@@ -149,7 +150,7 @@ def render_facets(idx, query, base_url):
         faceted = idx.facet_features(query, features)
 
         for f, stats in faceted.items():
-            query_string = idx.feature_to_url_query(f)
+            query_string = idx.feature_to_querystring(f)
             stats["url"] = base_url + query_string
 
         rendered_facets.append(
@@ -253,7 +254,7 @@ class BrowseClusters(HyperrealRequestHandler):
             )
 
             for f, stats in clustering[cluster_id].items():
-                query_string = self.idx.feature_to_url_query(f)
+                query_string = self.idx.feature_to_querystring(f)
                 stats["url"] = base_url + query_string
 
         rendered = web_rendering.render_feature_clustering(
@@ -399,13 +400,15 @@ class ClusterDrillDown(HyperrealRequestHandler):
             )
 
             for f, stats in cluster_feature_order[cluster_id].items():
-                query_string = self.idx.feature_to_url_query(f)
+                query_string = self.idx.feature_to_querystring(f)
                 stats["url"] = base_url + query_string
+                stats["feature_form_value"] = query_string
 
         drill_cluster_order[drill_cluster_id]["header_url"] = base_url
         for f, stats in drill_cluster_features[drill_cluster_id].items():
-            query_string = self.idx.feature_to_url_query(f)
+            query_string = self.idx.feature_to_querystring(f)
             stats["url"] = base_url + query_string
+            stats["feature_form_value"] = query_string
 
         drill_cluster_rendered = web_rendering.render_feature_clustering(
             drill_cluster_features,
@@ -415,6 +418,8 @@ class ClusterDrillDown(HyperrealRequestHandler):
             header_url_key="header_url",
             area_stat="jaccard_similarity",
             display_stat="hits",
+            feature_form_id="feature-form",
+            feature_form_key="feature_form_value",
         )
         other_clusters_rendered = web_rendering.render_feature_clustering(
             cluster_feature_order,
@@ -425,6 +430,8 @@ class ClusterDrillDown(HyperrealRequestHandler):
             seemore_url_key="seemore_url",
             area_stat="jaccard_similarity",
             display_stat="hits",
+            feature_form_id="feature-form",
+            feature_form_key="feature_form_value",
         )
 
         highlight_features.extend(drill_cluster_features[drill_cluster_id])
@@ -452,6 +459,11 @@ class ClusterDrillDown(HyperrealRequestHandler):
             ]
         }
 
+        form_link = self.reverse_url("create-cluster")
+        feature_form = h("form", id="feature-form", method="post", action=form_link)(
+            h("button", type="submit")("Create cluster from selected features")
+        )
+
         self.write(
             self.render_page(
                 f"Drill down to cluster {drill_cluster_id}",
@@ -465,11 +477,63 @@ class ClusterDrillDown(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
+                body_header=feature_form,
                 column_flex={1: 1.5, 3: 1.5},
                 sub_nav_label="Change Clusters",
                 sub_nav_links=nav_links,
             )
         )
+
+
+class CreateCluster(HyperrealRequestHandler):
+
+    def post(self):
+        """
+        Create a new cluster from the given features.
+
+        """
+
+        # Each feature is a bundled url string (double layered, to let us address
+        # arbitrary queries as features
+        features = [
+            self.idx.feature_from_querystring(f) for f in self.get_arguments("feature")
+        ]
+
+        if features:
+
+            new_cluster_id = self.feature_clusters.create_cluster_from_features(
+                features
+            )
+
+            self.redirect(
+                self.reverse_url("cluster-drilldown", new_cluster_id),
+            )
+
+        else:
+            raise ValueError("no features provided")
+
+    get = post
+
+
+class DeleteCluster(HyperrealRequestHandler):
+
+    def post(self):
+        """
+        Delete the given cluster/s from the clustering.
+
+        Clusters that don't exist will be ignored.
+
+        """
+        cluster_ids = [int(value) for value in self.get_arguments("c")]
+
+        self.feature_clusters.delete_clusters(cluster_ids)
+
+        redirect_to_cluster = min(self.feature_clusters.cluster_ids)
+        self.redirect(
+            self.reverse_url("cluster-drilldown", redirect_to_cluster),
+        )
+
+    get = post
 
 
 class MainHandler(HyperrealRequestHandler):
@@ -523,6 +587,16 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 rf"{base_path}/cluster/?",
                 ClusterDrillDownRedirector,
                 name="first-cluster",
+            ),
+            tornado.web.url(
+                rf"{base_path}/cluster/create",
+                CreateCluster,
+                name="create-cluster",
+            ),
+            tornado.web.url(
+                rf"{base_path}/cluster/delete",
+                DeleteCluster,
+                name="delete-clusters",
             ),
         ],
         hyperreal_idx=hyperreal_idx,

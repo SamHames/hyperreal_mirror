@@ -69,21 +69,29 @@ ul > li {
 body {
     display: flex;
     flex-direction: column;
-    max-height: 100vh;
+    height: 100vh;
 }
 
 main {
     display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+main > * {
+    margin: var(--s0);
+}
+
+.columns {
+    overflow: hidden;
+    gap: var(--s2);
+    display: flex;
     flex-direction: row;
     flex: 1;
-    overflow: hidden;
-    max-height: 100vh;
-    gap: var(--s2)
 }
 
 .column {
     overflow: scroll;
-    margin: var(--s0);
     flex: var(--column-flex, 1);
 }
 
@@ -122,6 +130,10 @@ pre {
     text-align: left;
     text-overflow: ellipsis;
     overflow: hidden;
+}
+
+:is(.header, .stat-row):has(>input:checked){
+    border: solid yellow;
 }
 
 .feature-list {
@@ -214,6 +226,8 @@ def render_feature_stats_as_dl(
     area_stat=None,
     total_doc_count=None,
     klass="stack feature-list",
+    feature_form_id=None,
+    feature_form_key=None,
 ):
 
     feature_order = feature_order or feature_stats.keys()
@@ -228,10 +242,21 @@ def render_feature_stats_as_dl(
         if field != last_field:
             items.append(h("dt")(h("em")(field)))
 
-        style = None
+        selector = None
+        if feature_form_id is not None and feature_form_key is not None:
+            selector = h(
+                "input",
+                type="checkbox",
+                name="feature",
+                value=details[feature_form_key],
+                form=feature_form_id,
+            )
+
+        area_mark = None
         if area_stat is not None:
             area_side = calculate_area_mark(details[area_stat], total_doc_count)
             style = f"--w: {area_side:.3f}rem;"
+            area_mark = h("div", style=style, klass="area-mark")()
 
         display = None
         if display_stat is not None:
@@ -239,21 +264,11 @@ def render_feature_stats_as_dl(
 
         if feature_url_key is not None:
             href = details[feature_url_key]
-            items.append(
-                h("dd", klass="stat-row")(
-                    h("a", klass="display-number", href=href)(html_value),
-                    display,
-                    h("div", style=style, klass="area-mark")(),
-                )
-            )
+            value = h("a", klass="display-number", href=href)(html_value)
         else:
-            items.append(
-                h("dd", style=style)(
-                    h("span")(html_value),
-                    display,
-                    h("div", klass="area-mark")(),
-                )
-            )
+            value = h("span", klass="display-number")(html_value)
+
+        items.append(h("dd", klass="stat-row")(value, display, area_mark, selector))
 
         last_field = field
 
@@ -270,6 +285,8 @@ def render_feature_clustering(
     feature_url_key=None,
     header_url_key=None,
     seemore_url_key=None,
+    feature_form_id=None,
+    feature_form_key=None,
 ):
 
     cluster_order = cluster_order or cluster_stats.keys()
@@ -313,6 +330,8 @@ def render_feature_clustering(
                     display_stat=display_stat,
                     total_doc_count=total_doc_count,
                     feature_url_key=feature_url_key,
+                    feature_form_id=feature_form_id,
+                    feature_form_key=feature_form_key,
                 ),
                 h("div")(see_more_link),
             )
@@ -343,6 +362,7 @@ def generate_nav(label, links, klass=None):
 def full_page(
     page_title,
     body_columns,
+    body_header=None,
     column_flex=None,
     sub_nav_links=None,
     sub_nav_label=None,
@@ -377,14 +397,17 @@ def full_page(
         h("body")(
             h("header")(main_nav, sub_nav),
             h("main")(
-                (
-                    h(
-                        "div",
-                        klass="column",
-                        style=f"--column-flex: {column_flex.get(col_index, 1)}",
-                    )(col)
-                    for col_index, col in enumerate(body_columns)
-                )
+                h("div", klass="main-header")(body_header),
+                h("div", klass="columns")(
+                    (
+                        h(
+                            "div",
+                            klass="column",
+                            style=f"--column-flex: {column_flex.get(col_index, 1)}",
+                        )(col)
+                        for col_index, col in enumerate(body_columns)
+                    ),
+                ),
             ),
         ),
     )
