@@ -213,7 +213,7 @@ class FeatureClustering(IndexPlugin):
                     )
                 )
             """,
-            ((*self.idx.feature_to_index(f), cluster_id) for f in features),
+            ((*self.idx.feature_to_index(f), cluster_id) for f in sorted(features)),
         )
 
     @atomic
@@ -233,7 +233,7 @@ class FeatureClustering(IndexPlugin):
 
         new_cluster_id = self._create_new_empty_cluster()
 
-        self._replace_features_for_cluster(new_cluster_id, features)
+        self._replace_features_for_cluster(new_cluster_id, sorted(features))
 
         return new_cluster_id
 
@@ -248,8 +248,8 @@ class FeatureClustering(IndexPlugin):
 
         """
 
-        for cluster_id, features in clustering.items():
-            self._replace_features_for_cluster(cluster_id, features)
+        for cluster_id, features in sorted(clustering.items()):
+            self._replace_features_for_cluster(cluster_id, sorted(features))
 
     @atomic
     def delete_clusters(self, cluster_ids: typing.Iterable[int]) -> None:
