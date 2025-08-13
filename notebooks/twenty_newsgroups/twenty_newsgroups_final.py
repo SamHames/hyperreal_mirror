@@ -482,7 +482,7 @@ index_path = data_path / "twenty_newsgroups.db"
 newsgroups_idx = HyperrealIndex(index_path, newsgroups_corpus, pool)
 
 if not newsgroups_idx.indexed_field_summary:
-    newsgroups_idx.rebuild(max_workers=10, doc_batch_size=2000)
+    newsgroups_idx.rebuild(max_workers=10, doc_batch_size=2000, passage_group_size=32)
 
 # print(
 #     sum(
@@ -599,7 +599,10 @@ if not clustering.cluster_ids:
     clustering.replace_clusters(random_clustering)
 
     clustering.refine_clustering(
-        group_test_n_clusters=16, iterations=50, random_group_checks=1
+        group_test_n_clusters=16,
+        iterations=50,
+        random_group_checks=1,
+        use_passages=True,
     )
 
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")

@@ -1097,33 +1097,57 @@ class HyperrealIndex:
         matching_docs = include_docs - exclude_docs
         return matching_docs, len(matching_docs), 0
 
-    def _iter_pos_for_features(self, field, features):
+    def _iter_pos_for_features(self, features):
 
-        # Assumes that features has already been validated for a single field
+        # Validate features have a single field
+        fields = {f[0] for f in features}
+
+        if len(fields) != 1:
+            raise ValueError(
+                "Positions can only be iterated for features on a single field."
+            )
+
+        field = fields[0]
+
         if field not in self.field_handlers:
             raise ValueError(f"Field '{field}' does not exist on this index.")
 
         handler, _, _ = self.field_handlers[field]
 
-        for field, value in features:
-            if isinstance(value, slice):
-                if value.step is not None:
-                    raise (ValueError("Step is not supported for a slice query."))
+        for feature in features:
+
+            if len(feature) == 3:
+                field, value_start, value_end = feature
 
                 start = None
-                if value.start is not None:
-                    start = handler.to_index(value.start)
+                if value_start is not None:
+                    start = handler.to_index(value_start)
 
-                stop = None
-                if value.stop is not None:
-                    stop = handler.to_index(value.stop)
+                end = None
+                if value_end is not None:
+                    end = handler.to_index(value_end)
 
-                yield value, self._match_slice_feature_pos(field, start, stop)
+                yield value, self._match_slice_feature_pos(field, start, end)
 
-            else:
+            elif len(feature) == 2:
                 yield value, self._match_literal_feature_pos(
                     field, handler.to_index(value)
                 )
+
+    def feature_passages(self, feature):
+        """Return the passages matching the given feature."""
+
+        matching_positions = self._match_literal_feature_pos(
+            *self.feature_to_index(feature)
+        )
+
+        passages = BitMap()
+
+        for matching in matching_positions.values():
+
+            passages |= matching | matching.shift(1)
+
+        return passages
 
     @db_utilities.atomic
     def match_phrase(self, *features):

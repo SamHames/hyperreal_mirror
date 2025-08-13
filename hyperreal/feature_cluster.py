@@ -468,6 +468,7 @@ class FeatureClustering(IndexPlugin):
         group_test_n_clusters: typing.Optional[int] = None,
         random_group_checks: int = 1,
         moving_feature_fraction_tolerance: float = 0.05,
+        use_passages=False,
     ) -> Clustering:
 
         # Part 1, as preparation we'll convert all the features into integer surrogate
@@ -519,7 +520,11 @@ class FeatureClustering(IndexPlugin):
 
             # Construct the mmap in the background - this might take a little bit.
             future = self.idx.pool.submit(
-                _construct_mmap, self.idx, features, working_file
+                _construct_mmap,
+                self.idx,
+                features,
+                working_file,
+                use_passages=use_passages,
             )
             offsets = future.result()
 
@@ -611,6 +616,7 @@ class FeatureClustering(IndexPlugin):
         group_test_n_clusters: typing.Optional[int] = None,
         random_group_checks: int = 1,
         moving_feature_fraction_tolerance: float = 0.05,
+        use_passages=False,
     ):
         """
         Refine the current clustering defined on the index.
@@ -633,6 +639,7 @@ class FeatureClustering(IndexPlugin):
             group_test_n_clusters=group_test_n_clusters,
             random_group_checks=random_group_checks,
             moving_feature_fraction_tolerance=moving_feature_fraction_tolerance,
+            use_passages=use_passages,
         )
 
         self.replace_clusters(refined_clustering)
@@ -641,7 +648,10 @@ class FeatureClustering(IndexPlugin):
 
 
 def _construct_mmap(
-    idx, features_or_queries: typing.Iterable[Feature | Query], mmap_path
+    idx,
+    features_or_queries: typing.Iterable[Feature | Query],
+    mmap_path,
+    use_passages=False,
 ):
     """
     Materialise features or queries into a file suitable for memory mapping.
@@ -666,11 +676,27 @@ def _construct_mmap(
     starts = array.array("q", (0 for _ in features_or_queries))
     ends = array.array("q", (0 for _ in features_or_queries))
 
+    if use_passages:
+        if any(
+            isinstance(feature_or_query, Query)
+            for feature_or_query in features_or_queries
+        ):
+            raise ValueError(
+                "use_passages=True is only supported for features, not queries"
+            )
+
+        if len({f[0] for f in features_or_queries}) > 1:
+            raise ValueError(
+                "use_passages=True is only supported for features on a single field."
+            )
+
     with idx, open(mmap_path, "wb") as mm:
         for i, feature_or_query in enumerate(features_or_queries):
 
             if isinstance(feature_or_query, Query):
                 docs = feature_or_query.evaluate(idx)
+            elif use_passages:
+                docs = idx.feature_passages(feature_or_query)
             else:
                 docs = idx[feature_or_query][0]
 

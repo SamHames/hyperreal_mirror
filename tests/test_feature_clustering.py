@@ -63,3 +63,8 @@ def test_plaintext_feature_cluster(tmp_path):
         split_cluster_ids = clustering.split_cluster_into(10, 3)
         assert len(split_cluster_ids) == 3
         assert len(clustering.cluster_ids) == 16
+
+        # Refine the clustering using passages rather than docs
+        clustering.refine_clustering(iterations=3, use_passages=True)
+
+        assert len(clustering.cluster_ids) == 16
