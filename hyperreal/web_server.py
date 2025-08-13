@@ -175,24 +175,28 @@ class BrowseClusters(HyperrealRequestHandler):
     def get(self):
 
         top_k_features = int(self.get_argument("top_k_features", "20"))
+        top_k_clusters = int(self.get_argument("top_k_clusters", "20"))
         f = self.get_argument("f", None, strip=False)
         v = self.get_argument("v", None, strip=False)
         v1 = self.get_argument("v1", None, strip=False)
         v2 = self.get_argument("v2", None, strip=False)
         c = self.get_argument("c", None)
 
-        area_stat = "relative_doc_count"
+        area_stat = "jaccard_similarity"
+        skip_feature_pivoting = False
 
+        # Special case when nothing is selected to pivot by
         if f is None and c is None:
-            cluster_filter = TableFilter(order_by="relative_doc_count")
-            cluster_stats = cluster_filter(self.feature_clusters.cluster_ids)
-            clustering = self.feature_clusters.clustering(
-                top_k_features=int(top_k_features)
-            )
+
             matching_docs = self.idx.all_doc_ids()
             matching_doc_count = len(matching_docs)
 
             highlight_features = None
+
+            # Skip the expensive step for this case where we show all the clusters.
+            skip_feature_pivoting = True
+
+            area_stat = "relative_doc_count"
 
         elif f is not None and v is not None:
             feature = self.idx.feature_from_url((f, v))
@@ -224,23 +228,36 @@ class BrowseClusters(HyperrealRequestHandler):
         facets = None
         base_url = self.reverse_url("browse")
 
-        cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
+        if skip_feature_pivoting:
+            cluster_stats = self.feature_clusters.cluster_ids
+            clustering = self.feature_clusters.clustering(
+                top_k_features=int(top_k_features)
+            )
+            # Override to show all clusters in this case
+            top_k_clusters = len(cluster_stats)
+        else:
+            cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
 
-        cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
-        cluster_stats = cluster_filter.apply_filter(cluster_stats)
-        faceted = self.feature_clusters.facet_clustering_by_query(
-            matching_docs, cluster_stats.keys()
+        cluster_filter = TableFilter(
+            order_by=area_stat, keep_above=0, first_k=top_k_clusters
         )
+        cluster_stats = cluster_filter.apply_filter(cluster_stats)
+
+        if skip_feature_pivoting:
+            faceted = clustering
+        else:
+            faceted = self.feature_clusters.facet_clustering_by_query(
+                matching_docs, cluster_stats.keys()
+            )
 
         feature_filter = TableFilter(
-            order_by="jaccard_similarity", keep_above=0, first_k=int(top_k_features)
+            order_by=area_stat, keep_above=0, first_k=top_k_features
         )
+
         clustering = {
             cluster_id: feature_filter.apply_filter(features)
             for cluster_id, features in faceted.items()
         }
-
-        area_stat = "jaccard_similarity"
 
         facets = render_facets(self.idx, matching_docs, base_url)
 
@@ -311,6 +328,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
 
         drill_cluster_id = int(cluster_id)
 
+        top_k_clusters = int(self.get_argument("top_k_clusters", "20"))
         top_k_features = int(self.get_argument("top_k_features", "20"))
         f = self.get_argument("f", None, strip=False)
         v = self.get_argument("v", None, strip=False)
@@ -357,15 +375,20 @@ class ClusterDrillDown(HyperrealRequestHandler):
         base_url = self.reverse_url("cluster-drilldown", drill_cluster_id)
         sample_doc_count = 20
 
-        cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
+        drill_cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
+        cluster_filter = TableFilter(
+            order_by="jaccard_similarity", keep_above=0, first_k=top_k_clusters
+        )
         feature_filter = TableFilter(
-            order_by="jaccard_similarity", keep_above=0, first_k=int(top_k_features)
+            order_by="jaccard_similarity", keep_above=0, first_k=top_k_features
         )
 
         # Similarity of matching docs to all clusters
-        cluster_order = cluster_filter.apply_filter(
-            self.feature_clusters.facet_clusters_by_query(matching_docs)
+        cluster_similarity = self.feature_clusters.facet_clusters_by_query(
+            matching_docs
         )
+
+        cluster_order = cluster_filter.apply_filter(cluster_similarity)
 
         # And then all features for all non-zero similarity clusters
         cluster_feature_order = self.feature_clusters.facet_clustering_by_query(
@@ -374,7 +397,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
 
         # Pop the currently selected cluster/features out to display in detail
         drill_cluster_features = {
-            drill_cluster_id: cluster_filter.apply_filter(
+            drill_cluster_id: drill_cluster_filter.apply_filter(
                 cluster_feature_order[drill_cluster_id]
             )
         }

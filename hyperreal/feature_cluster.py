@@ -362,10 +362,10 @@ class FeatureClustering(IndexPlugin):
 
         return {
             self.idx.feature_from_index((field, value)): {
-                "docs_count": docs_count,
-                "relative_doc_count": docs_count / total_docs,
+                "doc_count": doc_count,
+                "relative_doc_count": doc_count / total_docs,
             }
-            for field, value, docs_count in features
+            for field, value, doc_count in features
         }
 
     @atomic

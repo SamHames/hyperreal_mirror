@@ -29,6 +29,7 @@ default_css = """
     --s0: 1rem;
     --s1: calc(var(--s0) * var(--ratio));
     --s2: calc(var(--s1) * var(--ratio));
+    --s3: calc(var(--s2) * var(--ratio));
     --s-1: calc(var(--s0) / var(--ratio));
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
@@ -84,7 +85,7 @@ main > * {
 
 .columns {
     overflow: hidden;
-    gap: var(--s2);
+    gap: var(--s3);
     display: flex;
     flex-direction: row;
     flex: 1;
