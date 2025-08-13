@@ -13,9 +13,10 @@ import itertools
 import math
 import mmap
 import os
-import random
+from random import Random
 import tempfile
 import typing
+from functools import cached_property
 
 from pyroaring import BitMap
 
@@ -107,6 +108,10 @@ class FeatureClustering(IndexPlugin):
     plugin_name = "feature_clusters"
     current_version = "1"
     migrations = [cluster_migration]
+
+    @cached_property
+    def random_state(self):
+        return Random()
 
     def post_index_rebuild(self):
         """Regenerate docs matching each cluster and individual feature statistics."""
@@ -267,10 +272,10 @@ class FeatureClustering(IndexPlugin):
         will be new.
 
         """
-        # Improvement: needs to take a seed for randomness.
 
         features = list(self.cluster_features(cluster_id))
-        random.shuffle(features)
+        self.random_state.shuffle(features)
+
         splits = [features[i::split_into] for i in range(split_into)]
 
         cluster_ids = [cluster_id]
@@ -433,6 +438,7 @@ class FeatureClustering(IndexPlugin):
         suggested_clustering_fields.
 
         """
+
         if include_fields is not None:
             indexed_fields = set(self.idx.field_handlers)
 
@@ -449,7 +455,7 @@ class FeatureClustering(IndexPlugin):
         for field in fields:
             valid_features.extend(self.idx.field_features(field, min_docs=min_docs))
 
-        random.shuffle(valid_features)
+        self.random_state.shuffle(valid_features)
 
         clusters = {i: set(valid_features[i::n_clusters]) for i in range(n_clusters)}
 
@@ -459,13 +465,10 @@ class FeatureClustering(IndexPlugin):
         self,
         clustering: Clustering,
         iterations: int = 10,
-        random_seed: typing.Optional[int] = None,
         group_test_n_clusters: typing.Optional[int] = None,
         random_group_checks: int = 1,
         moving_feature_fraction_tolerance: float = 0.05,
     ) -> Clustering:
-
-        rand = random.Random(random_seed)
 
         # Part 1, as preparation we'll convert all the features into integer surrogate
         # keys for memory mapping.
@@ -536,7 +539,7 @@ class FeatureClustering(IndexPlugin):
                     # Fast and approximate path: conduct group tests, checking features
                     # against unions of clusters to avoid checking all features against
                     # all clusters.
-                    rand.shuffle(leaf_ids)
+                    self.random_state.shuffle(leaf_ids)
 
                     group_keys = [
                         leaf_ids[i::group_test_n_clusters]
@@ -565,7 +568,9 @@ class FeatureClustering(IndexPlugin):
                     for feature_id, best_cluster_group in enumerate(best_moves):
                         # Test against the best group, plus a random sample of other
                         # groups.
-                        random_groups = rand.sample(group_keys, random_group_checks)
+                        random_groups = self.random_state.sample(
+                            group_keys, random_group_checks
+                        )
                         best_group = group_keys[best_cluster_group]
                         test_clusters = itertools.chain(best_group, *random_groups)
 
@@ -580,13 +585,13 @@ class FeatureClustering(IndexPlugin):
                     offsets,
                 )
 
-                rand.shuffle(feature_check_order)
+                self.random_state.shuffle(feature_check_order)
                 possible_moves, _ = _apply_moves(
                     best_clusters,
                     feature_check_order,
                     surrogate_clusters,
                     surrogate_feature_cluster,
-                    rand,
+                    self.random_state,
                 )
 
                 if possible_moves / n_features < moving_feature_fraction_tolerance:
@@ -603,7 +608,6 @@ class FeatureClustering(IndexPlugin):
         self,
         cluster_ids: typing.Optional[typing.Iterable[int]] = None,
         iterations: int = 10,
-        random_seed: typing.Optional[int] = None,
         group_test_n_clusters: typing.Optional[int] = None,
         random_group_checks: int = 1,
         moving_feature_fraction_tolerance: float = 0.05,
@@ -626,7 +630,6 @@ class FeatureClustering(IndexPlugin):
         refined_clustering = self._refine_clustering(
             clustering,
             iterations=iterations,
-            random_seed=random_seed,
             group_test_n_clusters=group_test_n_clusters,
             random_group_checks=random_group_checks,
             moving_feature_fraction_tolerance=moving_feature_fraction_tolerance,
