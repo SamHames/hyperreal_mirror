@@ -106,6 +106,7 @@ else:
 
 # +
 import re
+import collections
 from datetime import date
 from email.utils import parsedate
 from time import mktime
@@ -135,9 +136,6 @@ def tokenise(text):
 
 class TwentyNewsgroups(corpus.HyperrealCorpus):
 
-    quote_line_starts = ("In article", ">", "|", "}", "{", "#")
-    quote_line_ends = ("writes:",)
-
     extra_css = """
         .snippets {
             --space: var(--s-2);
@@ -147,11 +145,36 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
             list-style-type: roman;
             margin-inline-start: var(--s2);
         }
+
+        .doc dt::after {
+            content: ":";
+        }
+
+        .doc dl {
+            margin: var(--s0);
+            --space: var(--s-2);
+        }
     """
 
     # Link to the documentation for this!
     def __init__(self):
         self.data_loc = data_loc
+
+        self.repeated_blocks = self.identify_repeated_blocks()
+
+    para_splitter = re.compile(r"\n\n|^-+\s*$", re.MULTILINE)
+
+    def identify_repeated_blocks(self):
+
+        para_counter = collections.Counter()
+
+        for key, doc in self.docs(self.all_doc_keys()):
+
+            for para in self.para_splitter.split(doc["body"]):
+                if stripped := para.strip():
+                    para_counter[stripped] += 1
+
+        return {para for para, count in para_counter.items() if count > 1}
 
     def open_zip(self):
         return zipfile.ZipFile(self.data_loc, "r")
@@ -167,6 +190,37 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         with self.open_zip() as z:
             for name in sorted(z.namelist()):
                 yield name
+
+    def _split_signature(self, body):
+        """
+        Based on the scikit-learn heuristic:
+
+        https://github.com/scikit-learn/scikit-learn/blob/f0ab589f/sklearn/datasets/twenty_newsgroups.py#L124
+
+        """
+
+        lines = body.strip().split("\n")
+        n_lines = len(lines)
+
+        # Note that we depart from scikit-learn, and don't check the final content line
+        # We already know this can't be non-whitespace because of strip, and if it is
+        # all '-' characters, we want to continue further into the message.
+        line_num = 0
+
+        for line_num in range(n_lines - 2, -1, -1):
+            line = lines[line_num]
+            if line.strip().strip("-") == "":
+                break
+
+        if line_num > 0:
+            return (
+                "\n".join(lines[:line_num]),
+                "\n".join(lines[line_num:]),
+                line_num,
+                n_lines,
+            )
+        else:
+            return body.strip(), "", n_lines, n_lines
 
     def _parse_post(self, raw_post):
 
@@ -187,30 +241,6 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         doc["body"] = body
 
         return doc
-
-    def match_all_lines(self, regexp):
-        """
-        Find all lines in all files matching the given regular expression string.
-
-        This is provided for debugging and investigation purposes, particularly to
-        understand impact of the text pre-processing decisions taken.
-
-        """
-        matcher = re.compile(regexp)
-
-        all_docs = self.all_doc_keys()
-
-        matching_lines = []
-
-        for key, doc in self.docs(all_docs):
-
-            lines = doc["body"].splitlines()
-            matches = [line for line in lines if matcher.search(line)]
-
-            if matches:
-                matching_lines.append((key, matches))
-
-        return matching_lines
 
     def all_doc_keys(self):
         """
@@ -240,10 +270,49 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
                 full_post_raw = z.read(doc_key)
                 yield doc_key, self._parse_post(full_post_raw)
 
-    def is_quoted_line(self, line):
-        return line.startswith(self.quote_line_starts) or line.endswith(
-            self.quote_line_ends
+    _QUOTE_RE = re.compile(
+        "|".join(
+            (
+                r"writes in",
+                r"writes:$",
+                r"wrote:$",
+                r"says:$",
+                r"said:$",
+                r"^In article",
+                r"^Quoted from",
+                r"^\|",
+                r"^>",
+                r"^}",
+                r"^{",
+                r"^#",
+                r"^]",
+                r"^:",
+                r"^\+",
+            )
         )
+    )
+
+    def is_quoted_line(self, line):
+        return self._QUOTE_RE.search(line)
+
+    def mark_lines_ignore(self, body):
+
+        lines = []
+
+        for block in self.para_splitter.split(body):
+            block_lines = block.splitlines(keepends=True)
+            if block_lines:
+                block_lines[-1] += "\n\n"
+
+            if block.strip() in self.repeated_blocks:
+                for line in block_lines:
+                    lines.append((True, line))
+
+            else:
+                for line in block_lines:
+                    lines.append((self.is_quoted_line(line), line))
+
+        return lines
 
     def indexable_docs(self, doc_keys):
         for doc_key, doc in self.docs(doc_keys):
@@ -260,20 +329,16 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
                 },
             }
 
+            mark_lines = self.mark_lines_ignore(doc["body"])
+
             # The body text, handling quoting indicators at the start of lines.
             indexed["body"] = [
-                t
-                for line in doc["body"].splitlines()
-                if not self.is_quoted_line(line)
-                for t in tokenise(line)
+                t for ignore, line in mark_lines if not ignore for t in tokenise(line)
             ]
 
             # Quoted text (inverse selection from the body)
-            indexed["quoted"] = [
-                t
-                for line in doc["body"].splitlines()
-                if self.is_quoted_line(line)
-                for t in tokenise(line)
+            indexed["ignore"] = [
+                t for ignore, line in mark_lines if ignore for t in tokenise(line)
             ]
 
             if doc.get("Distribution", None):
@@ -284,11 +349,10 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
             yield doc_key, indexed
 
     def _render_html_doc(self, doc, snippets=None, snippet_summary=None):
+
+        mark_lines = self.mark_lines_ignore(doc["body"])
         # render quoted text distinctly from other text.
-        doc["body"] = (
-            h("em")(line) if self.is_quoted_line(line) else line
-            for line in doc["body"].splitlines(keepends=True)
-        )
+        doc["body"] = (h("em")(line) if ignore else line for ignore, line in mark_lines)
 
         subject = doc.pop("Subject")
 
@@ -302,7 +366,7 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         return (
             h("details")(
                 h("summary")(subject),
-                h("dl")(
+                h("dl", klass="stack")(
                     (h("dt")(key), h("dd")(h("pre")(value)))
                     for key, value in doc.items()
                 ),
@@ -320,8 +384,8 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
             for doc_key, doc in self.docs(doc_keys):
                 tokenised = [
                     t
-                    for line in doc["body"].splitlines()
-                    if not self.is_quoted_line(line)
+                    for ignore, line in self.mark_lines_ignore(doc["body"])
+                    if not ignore
                     for t in tokenise(line)
                 ]
                 matches = [
@@ -355,6 +419,18 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
 
 newsgroups_corpus = TwentyNewsgroups()
+
+
+# for line, count in line_counter.items():
+#     if count > 2:
+#         print(line, count)
+
+# print(sum(line_counter.values()))
+# print(sum(c for c in line_counter.values() if c > 2))
+# assert False
+
+
+# repeated lines:
 
 # for doc, lines in newsgroups_corpus.match_all_lines("wrote:$"):
 #     print(doc)
@@ -406,7 +482,7 @@ index_path = data_path / "twenty_newsgroups.db"
 newsgroups_idx = HyperrealIndex(index_path, newsgroups_corpus, pool)
 
 if not newsgroups_idx.indexed_field_summary:
-    newsgroups_idx.rebuild()
+    newsgroups_idx.rebuild(max_workers=10, doc_batch_size=2000)
 
 # print(
 #     sum(
@@ -502,6 +578,7 @@ if not newsgroups_idx.indexed_field_summary:
 
 # # # What can we do with a Clustering?
 # #
+import random
 import time
 
 clustering = newsgroups_idx.plugins["feature_clusters"]
@@ -509,6 +586,10 @@ clustering = newsgroups_idx.plugins["feature_clusters"]
 # clustering.delete_clusters(clustering.cluster_ids)
 
 if not clustering.cluster_ids:
+
+    # Set the state of the RNG to a consistent point.
+    clustering.random_state = random.Random(42)
+
     start_time = time.monotonic()
 
     random_clustering = clustering.initialise_random_clustering(
@@ -518,7 +599,7 @@ if not clustering.cluster_ids:
     clustering.replace_clusters(random_clustering)
 
     clustering.refine_clustering(
-        group_test_n_clusters=32, iterations=30, random_group_checks=0
+        group_test_n_clusters=16, iterations=50, random_group_checks=1
     )
 
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")
