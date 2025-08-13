@@ -354,7 +354,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
 
         docs = []
         facets = None
-        base_url = self.reverse_url("cluster-drilldown", cluster_id)
+        base_url = self.reverse_url("cluster-drilldown", drill_cluster_id)
         sample_doc_count = 20
 
         cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
@@ -434,10 +434,15 @@ class ClusterDrillDown(HyperrealRequestHandler):
             feature_form_key="feature_form_value",
         )
 
-        highlight_features.extend(drill_cluster_features[drill_cluster_id])
+        # If just one feature is selected, use that for highlighting, not the original
+        # clustering? This might need some further UI work to make sense of the
+        # possible combinations.
+        if len(highlight_features) != 1:
 
-        for cluster_id in highlight_clusters:
-            highlight_features.extend(cluster_feature_order[cluster_id])
+            highlight_features.extend(drill_cluster_features[drill_cluster_id])
+
+            for cluster_id in highlight_clusters:
+                highlight_features.extend(cluster_feature_order[cluster_id])
 
         sample_docs = random_sample_bitmap(matching_docs, 20)
         docs = self.idx.html_docs(sample_docs, highlight_features=highlight_features)
