@@ -632,7 +632,7 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
             ),
         ],
         hyperreal_idx=hyperreal_idx,
-        autoreload=True,
+        autoreload=False,
     )
 
 
