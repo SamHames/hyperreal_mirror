@@ -252,6 +252,10 @@ class HyperrealIndex:
             "replace into plugin_version values (?, ?)", [plugin_name, version]
         )
 
+    @cached_property
+    def random_state(self):
+        return random.Random()
+
     @property
     def passage_group_size(self) -> int:
         """The defined passage group size from the indexing run."""

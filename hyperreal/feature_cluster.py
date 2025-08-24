@@ -109,10 +109,6 @@ class FeatureClustering(IndexPlugin):
     current_version = "1"
     migrations = [cluster_migration]
 
-    @cached_property
-    def random_state(self):
-        return Random()
-
     def post_index_rebuild(self):
         """Regenerate docs matching each cluster and individual feature statistics."""
         self.idx.db.execute(
@@ -274,7 +270,7 @@ class FeatureClustering(IndexPlugin):
         """
 
         features = list(self.cluster_features(cluster_id))
-        self.random_state.shuffle(features)
+        self.idx.random_state.shuffle(features)
 
         splits = [features[i::split_into] for i in range(split_into)]
 
@@ -455,7 +451,7 @@ class FeatureClustering(IndexPlugin):
         for field in fields:
             valid_features.extend(self.idx.field_features(field, min_docs=min_docs))
 
-        self.random_state.shuffle(valid_features)
+        self.idx.random_state.shuffle(valid_features)
 
         clusters = {i: set(valid_features[i::n_clusters]) for i in range(n_clusters)}
 
@@ -544,7 +540,7 @@ class FeatureClustering(IndexPlugin):
                     # Fast and approximate path: conduct group tests, checking features
                     # against unions of clusters to avoid checking all features against
                     # all clusters.
-                    self.random_state.shuffle(leaf_ids)
+                    self.idx.random_state.shuffle(leaf_ids)
 
                     group_keys = [
                         leaf_ids[i::group_test_n_clusters]
@@ -573,7 +569,7 @@ class FeatureClustering(IndexPlugin):
                     for feature_id, best_cluster_group in enumerate(best_moves):
                         # Test against the best group, plus a random sample of other
                         # groups.
-                        random_groups = self.random_state.sample(
+                        random_groups = self.idx.random_state.sample(
                             group_keys, random_group_checks
                         )
                         best_group = group_keys[best_cluster_group]
@@ -590,13 +586,13 @@ class FeatureClustering(IndexPlugin):
                     offsets,
                 )
 
-                self.random_state.shuffle(feature_check_order)
+                self.idx.random_state.shuffle(feature_check_order)
                 possible_moves, _ = _apply_moves(
                     best_clusters,
                     feature_check_order,
                     surrogate_clusters,
                     surrogate_feature_cluster,
-                    self.random_state,
+                    self.idx.random_state,
                 )
 
                 if possible_moves / n_features < moving_feature_fraction_tolerance:
