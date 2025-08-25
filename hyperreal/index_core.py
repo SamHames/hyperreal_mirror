@@ -532,6 +532,9 @@ class HyperrealIndex:
             passage_group_size=passage_group_size,
         )
 
+        for plugin in self.plugins.values():
+            plugin.post_index_rebuild()
+
         # TODO: call post_index_rebuild on plugins.
         # The schema might have changed, so invalidate if present.
         self._field_handlers = None

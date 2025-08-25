@@ -106,3 +106,19 @@ def test_repeatable_runs(example_idx):
     second_run = clustering.cluster_ids
 
     assert first_run == second_run
+
+
+def test_cluster_rebuild(example_idx):
+
+    clustering = example_idx.plugins["feature_clusters"]
+
+    clustering.delete_clusters(cluster_ids=clustering.cluster_ids)
+    random_clustering = clustering.initialise_random_clustering(
+        16, min_docs=5, include_fields=["text"]
+    )
+    clustering.replace_clusters(random_clustering)
+
+    cluster_ids = clustering.cluster_ids
+
+    example_idx.rebuild()
+    assert clustering.cluster_ids == cluster_ids
