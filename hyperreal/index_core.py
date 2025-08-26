@@ -1065,10 +1065,10 @@ class HyperrealIndex:
                     """,
                     [field, index_value_start],
                 )
-            )
+            )[0]
 
-            if exclude_row:
-                exclude_docs = exclude_row[0][1]
+            if exclude_row[0] is not None:
+                exclude_docs = exclude_row[1]
 
         if index_value_end is None:
             # Use the last row as the indicator of all docs matching this field.
