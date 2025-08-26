@@ -237,7 +237,12 @@ def render_feature_stats_as_dl(
     last_field = None
 
     for feature in feature_order:
-        field, html_value = feature
+        field = feature[0]
+        html_value = feature[1:]
+
+        if len(html_value) == 2:
+            html_value = (html_value[0], "/", html_value[1])
+
         details = feature_stats[feature]
 
         if field != last_field:
