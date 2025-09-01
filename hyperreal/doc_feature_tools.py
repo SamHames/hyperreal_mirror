@@ -114,14 +114,21 @@ def to_passages(
 
 def _match_range_value(value, match_ranges):
 
+    # Note we're looking for any positive match! Only one range needs to match to be
+    # True, everything needs to be False to be false.
     for start, end in match_ranges:
 
         if start is None:
-            return value < end
+            if value < end:
+                return True
         elif end is None:
-            return value >= start
+            if value >= start:
+                return True
         else:
-            return start <= value < end
+            if start <= value < end:
+                return True
+
+    return False
 
 
 def _match_range_feature(feature, match_ranges):
