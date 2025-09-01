@@ -13,16 +13,16 @@ import itertools
 import math
 import mmap
 import os
-from random import Random
 import tempfile
 import typing
 from functools import cached_property
+from random import Random
 
 from pyroaring import BitMap
 
-from .query import Query
 from .db_utilities import atomic
 from .index_plugin import IndexPlugin, Migration
+from .query import Query
 
 if typing.TYPE_CHECKING:
     from .index_core import Feature, FeatureStatistics

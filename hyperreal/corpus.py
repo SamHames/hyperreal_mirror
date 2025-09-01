@@ -24,12 +24,13 @@ Links to the examples gallery.
 """
 
 import abc
+import collections
 import dataclasses as dc
 import mmap
 import re
 from typing import Any, Hashable, Iterable, Optional, TypeVar
 
-from tinyhtml import h
+from tinyhtml import frag, h
 
 from . import value_handlers
 
@@ -143,30 +144,68 @@ class HyperrealCorpus:
         pass
 
     @abc.abstractmethod
-    def indexable_docs(
-        self, doc_keys: Iterable[DocKey]
-    ) -> Iterable[tuple[DocKey, IndexableDoc]]:
+    def doc_to_features(self, doc) -> IndexableDoc:
+        """
+        Transform a document into a set of features for indexing.
+
+        This interface is likely to change in the future.
+
+        """
         pass
 
-    def html_docs(
-        self, doc_keys: Iterable[DocKey], highlight_features=None
-    ) -> Iterable[tuple[DocKey, str]]:
+    def doc_to_display_features(self, doc) -> IndexableDoc:
         """
-        Iterate through pairs of doc_keys and the associated doc's HTML representation.
+        Transform a document to a version of features that are suitable for display.
+
+        Only fields that need alternative handling for appropriate display need to be
+        included in the output - but there does need to be a display form for every
+        value on that field returned by a call to the doc_to_features method.
+
+        This allows customised control of rendering of values - for example constructing
+        concordance lines that include white space and punctuation, indexing types with
+        parts-of-speech tag but not displaying them in concordances and so on.
+
+        This default implementation only adjusts fields of string values in positional
+        order - the adjustment is to add a trailing space. For non-whitespace delimited
+        languages or more sophisticated tokenisation schemes you should override this.
+
+        The display form of values must still work with the ValueHandler for that type.
 
         """
-        for key, str_doc in self.str_docs(doc_keys):
-            yield key, h("p")(str_doc)
 
-    def str_docs(
-        self, doc_keys: Iterable[DocKey], highlight_features=None
-    ) -> Iterable[tuple[DocKey, str]]:
+        features = self.doc_to_features(doc)
+
+        display_features = {}
+
+        for field, values in features:
+
+            if isinstance(values, list):
+
+                new_values = []
+
+                for v in values:
+                    if isinstance(v, str):
+                        # index form = original, display form has a whitespace appended.
+                        new_values.append(v + " ")
+                    else:
+                        new_values.append(v)
+
+            display_features[field] = new_values
+
+        return display_features
+
+    def doc_to_html(self, doc, highlight_features=None) -> frag:
         """
-        Iterate through pairs of doc_keys and the associated doc's str representation.
+        Transform a document into a HTML representation.
+
+        If this is not overridden, the str representation of a document will be used
+        (and escaped) as HTML.
+
+        Takes an optional highlight_features argument - this can optionally be used if
+        you want to highlight search results within the context of the document.
 
         """
-        for key, doc in self.docs(doc_keys):
-            yield key, str(doc)
+        return str(doc)
 
     def close(self) -> None:
         """
@@ -195,6 +234,10 @@ def boundary_tokeniser(text: str) -> list[str]:
         for token in boundary_regex.split(text.lower())
         if (stripped := token.strip())
     ]
+
+
+def display_tokens(text: str) -> list[str]:
+    """The same tokens as boundary tokeniser, but preserving case and whitespace."""
 
 
 # TODO: Add a corpus for the standard folder full of text files. Possibly using the
@@ -248,11 +291,16 @@ class TextfileParagraphsCorpus(HyperrealCorpus):
             start = self.paragraph_positions[key]
             end = self.paragraph_positions[key + 1]
 
-            yield key, self.mm[start:end].decode(self.encoding)
+            yield key, {
+                "para_no": key,
+                "text": self.mm[start:end].decode(self.encoding),
+            }
 
-    def indexable_docs(self, doc_keys):
-        for key, text in self.docs(doc_keys):
-            yield key, {"para_no": key, "text": self.tokeniser(text)}
+    def doc_to_features(self, doc):
+        return {"para_no": doc["para_no"], "text": self.tokeniser(doc["text"])}
+
+    def doc_to_html(self, doc, highlight_features=None):
+        return h("div")(h("span")(doc["para_no"]), h("p")(doc["text"]))
 
     def close(self):
         self.mm.close()

@@ -5,7 +5,6 @@ Basic test cases for tools that transform the indexable doc format in various wa
 
 from hyperreal import doc_feature_tools as dft
 
-
 test_doc_with_positional = {
     # positional field
     "text": "the cat sat on the mat with theodore".split(),

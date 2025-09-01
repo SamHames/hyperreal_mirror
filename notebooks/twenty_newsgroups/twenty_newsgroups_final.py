@@ -314,108 +314,53 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
         return lines
 
-    def indexable_docs(self, doc_keys):
-        for doc_key, doc in self.docs(doc_keys):
-            indexed = {
-                "subject": tokenise(doc["Subject"]),
-                "newsgroup": set(
-                    ng.strip() for ng in doc["Newsgroups"].split(",") if ng.strip()
-                ),
-                "from": doc["From"],
-                "date": doc["Date"],
-                # For validating that quoting behaviours are correctly handled.
-                "line_start_character": {
-                    line[0] for line in doc["body"].splitlines() if line
-                },
-            }
+    def doc_to_features(self, doc):
+        indexed = {
+            "subject": tokenise(doc["Subject"]),
+            "newsgroup": set(
+                ng.strip() for ng in doc["Newsgroups"].split(",") if ng.strip()
+            ),
+            "from": doc["From"],
+            "date": doc["Date"],
+            # For validating that quoting behaviours are correctly handled.
+            "line_start_character": {
+                line[0] for line in doc["body"].splitlines() if line
+            },
+        }
 
-            mark_lines = self.mark_lines_ignore(doc["body"])
+        mark_lines = self.mark_lines_ignore(doc["body"])
 
-            # The body text, handling quoting indicators at the start of lines.
-            indexed["body"] = [
-                t for ignore, line in mark_lines if not ignore for t in tokenise(line)
-            ]
+        # The body text, handling quoting indicators at the start of lines.
+        indexed["body"] = [
+            t for ignore, line in mark_lines if not ignore for t in tokenise(line)
+        ]
 
-            # Quoted text (inverse selection from the body)
-            indexed["ignore"] = [
-                t for ignore, line in mark_lines if ignore for t in tokenise(line)
-            ]
+        # Quoted text (inverse selection from the body)
+        indexed["ignore"] = [
+            t for ignore, line in mark_lines if ignore for t in tokenise(line)
+        ]
 
-            if doc.get("Distribution", None):
-                indexed["distribution"] = doc["Distribution"]
-            if doc.get("Organization", None):
-                indexed["organization"] = doc["Organization"]
+        if doc.get("Distribution", None):
+            indexed["distribution"] = doc["Distribution"]
+        if doc.get("Organization", None):
+            indexed["organization"] = doc["Organization"]
 
-            yield doc_key, indexed
+        return indexed
 
-    def _render_html_doc(self, doc, snippets=None, snippet_summary=None):
+    def doc_to_html(self, doc, highlight_features=None):
 
         mark_lines = self.mark_lines_ignore(doc["body"])
         # render quoted text distinctly from other text.
-        doc["body"] = (h("em")(line) if ignore else line for ignore, line in mark_lines)
+        doc["body"] = [h("em")(line) if ignore else line for ignore, line in mark_lines]
 
         subject = doc.pop("Subject")
 
-        concordances = None
-        if snippets:
-            concordances = h("details")(
-                h("summary")(h("em")(snippet_summary)),
-                h("ol", klass="stack snippets")([h("li")(line) for line in snippets]),
-            )
-
-        return (
-            h("details")(
-                h("summary")(subject),
-                h("dl", klass="stack")(
-                    (h("dt")(key), h("dd")(h("pre")(value)))
-                    for key, value in doc.items()
-                ),
+        return h("details")(
+            h("summary")(subject),
+            h("dl", klass="stack")(
+                [(h("dt")(key), h("dd")(h("pre")(value))) for key, value in doc.items()]
             ),
-            concordances,
         )
-
-    def html_docs(self, doc_keys, highlight_features=None):
-
-        body_values = []
-        if highlight_features is not None:
-            body_values = {v for f, v in highlight_features if f == "body"}
-
-        if body_values:
-            for doc_key, doc in self.docs(doc_keys):
-                tokenised = [
-                    t
-                    for ignore, line in self.mark_lines_ignore(doc["body"])
-                    if not ignore
-                    for t in tokenise(line)
-                ]
-                matches = [
-                    i for i, value in enumerate(tokenised) if value in body_values
-                ]
-
-                matched_tokens = sorted(set(tokenised[m] for m in matches))
-                summary_matches = f"{len(matches)} matches on: " + " ".join(
-                    matched_tokens
-                )
-
-                # Add spaces back to tokens
-                tokenised = [t + " " for t in tokenised]
-
-                # highlight matches
-                for m in matches:
-                    tokenised[m] = h("mark")(tokenised[m])
-
-                snippets = [
-                    raw(h("span")([tokenised[max(0, i - 10) : i + 11]]).render())
-                    for i in matches
-                ]
-
-                yield doc_key, self._render_html_doc(
-                    doc, snippets=snippets, snippet_summary=summary_matches
-                )
-
-        else:
-            for doc_key, doc in self.docs(doc_keys):
-                yield doc_key, self._render_html_doc(doc)
 
 
 newsgroups_corpus = TwentyNewsgroups()

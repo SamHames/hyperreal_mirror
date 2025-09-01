@@ -288,13 +288,13 @@ def _prepare_doc_batch(
 
     batch_keys = []
 
-    for doc_key, indexable_doc in corpus.indexable_docs(doc_keys):
+    for doc_key, doc in corpus.docs(doc_keys):
 
-        # We could just pass through doc_keys, but there might be cases where it
-        # makes sense for say indexable_docs to ignore invalid keys and continue.
+        doc_features = corpus.doc_to_features(doc)
+
         batch_keys.append(doc_key)
 
-        for field, values in indexable_doc.items():
+        for field, values in doc_features.items():
 
             batch_field = batch_segment[field]
 

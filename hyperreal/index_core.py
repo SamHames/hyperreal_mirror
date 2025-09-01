@@ -29,7 +29,7 @@ import random
 from functools import cached_property
 from types import SimpleNamespace
 from typing import Any, Callable, Hashable, Iterable, Optional
-from urllib.parse import quote_plus, urlencode, parse_qsl
+from urllib.parse import parse_qsl, quote_plus, urlencode
 
 from pyroaring import AbstractBitMap, BitMap, BitMap64
 from tinyhtml import frag, h, raw
@@ -614,17 +614,11 @@ class HyperrealIndex:
         """Returns all doc_ids in the collection."""
         return BitMap(range(0, self.total_doc_count))
 
-    def _iter_corpus_docs(
-        self, doc_ids: Iterable[int], corpus_method: Callable, highlight_features=None
-    ):
+    def docs(self, doc_ids):
         """
-        Helper function for iterating through transformed documents from a corpus.
-
-        This handles generating an iterator of doc_keys, and keeping that in sync
-        with the doc_ids.
+        Iterate through documents on the corpus matching doc_ids.
 
         """
-
         # This is implemented in a fiddly way, as the corpus should only take an
         # iterator of keys, but we want to keep the doc_id -> doc_key links intact
         # without loading everything into memory.
@@ -633,13 +627,7 @@ class HyperrealIndex:
         # Split the generator into two, so we can iterate and keep everything aligned.
         for_corpus, for_doc_id = itertools.tee(doc_keys, 2)
 
-        if highlight_features:
-            corpus_docs = corpus_method(
-                (doc_key for _, doc_key in for_corpus),
-                highlight_features=highlight_features,
-            )
-        else:
-            corpus_docs = corpus_method((doc_key for _, doc_key in for_corpus))
+        corpus_docs = self.corpus.docs((doc_key for _, doc_key in for_corpus))
 
         # Walk through the corpus docs, potentially allowing the corpus to swallow
         # keys for any reason (such as for a missing doc).
@@ -656,32 +644,6 @@ class HyperrealIndex:
             # handle a missing key by continuing on to the next doc.
             yield doc_id, doc_key1, doc
 
-    def docs(self, doc_ids):
-        """
-        Iterate through documents on the corpus matching doc_ids.
-
-        """
-
-        return self._iter_corpus_docs(doc_ids, self.corpus.docs)
-
-    def indexable_docs(self, doc_ids):
-        """
-        Iterate through indexable form of documents on the corpus matching doc_ids.
-
-        """
-
-        return self._iter_corpus_docs(doc_ids, self.corpus.indexable_docs)
-
-    def html_docs(self, doc_ids, highlight_features=None):
-        """
-        Iterate through HTML form of documents on the corpus matching doc_ids.
-
-        """
-
-        return self._iter_corpus_docs(
-            doc_ids, self.corpus.html_docs, highlight_features=highlight_features
-        )
-
     def _lookup_doc_key(self, doc_id: int):
         """
         Return the doc_key for the given doc_id.
@@ -696,10 +658,9 @@ class HyperrealIndex:
             self.db.execute("SELECT doc_key from doc_key where doc_id = ?", [doc_id])
         )[0][0]
 
+    @db_utilities.atomic
     def doc_ids_to_keys(self, doc_ids: Iterable[int]) -> Iterable[tuple[int, Any]]:
         """Generate document keys on the corpus from the given doc_ids."""
-
-        self.db.execute("savepoint doc_ids_to_keys")
 
         # Validate doc_ids are valid. Since doc_ids are all contiguous this is
         # straightforward.
@@ -715,8 +676,6 @@ class HyperrealIndex:
                 )
 
             yield doc_id, self._lookup_doc_key(doc_id)
-
-        self.db.execute("release doc_ids_to_keys")
 
     def field_features(
         self, field: str, min_docs: int = 1, top_k_features=None

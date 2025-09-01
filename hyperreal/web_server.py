@@ -20,7 +20,7 @@ import asyncio
 from urllib.parse import parse_qsl
 
 import tornado
-from tinyhtml import h
+from tinyhtml import h, raw
 
 from . import web_rendering
 from .index_core import HyperrealIndex, TableFilter, random_sample_bitmap
@@ -48,9 +48,22 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
             *args, **kwargs, extra_css=self.extra_css
         ).render()
 
+    async def render_html_docs(self, matching_docs, highlight_features=None):
+        """Load and render HTML documents in the background pool."""
+
+        future = asyncio.wrap_future(
+            self.idx.pool.submit(
+                _render_html_worker,
+                (self.idx, matching_docs, highlight_features),
+            )
+        )
+
+        result = await future
+        return result
+
 
 class IndexedField(HyperrealRequestHandler):
-    def get(self, field):
+    async def get(self, field):
         min_docs = int(self.get_argument("min_docs", "10"))
 
         sample_doc_count = 20
@@ -95,7 +108,9 @@ class IndexedField(HyperrealRequestHandler):
             highlight_features = None
             sample_docs = random_sample_bitmap(self.idx.all_doc_ids(), sample_doc_count)
 
-        docs = self.idx.html_docs(sample_docs, highlight_features=highlight_features)
+        docs = await self.render_html_docs(
+            sample_docs, highlight_features=highlight_features
+        )
 
         sub_nav_links = {
             "Indexed Fields": [
@@ -172,7 +187,7 @@ def render_facets(idx, query, base_url):
 
 
 class BrowseClusters(HyperrealRequestHandler):
-    def get(self):
+    async def get(self):
 
         top_k_features = int(self.get_argument("top_k_features", "20"))
         top_k_clusters = int(self.get_argument("top_k_clusters", "20"))
@@ -286,7 +301,9 @@ class BrowseClusters(HyperrealRequestHandler):
         )
 
         sample_docs = random_sample_bitmap(matching_docs, sample_doc_count)
-        docs = self.idx.html_docs(sample_docs, highlight_features=highlight_features)
+        docs = await self.render_html_docs(
+            sample_docs, highlight_features=highlight_features
+        )
 
         self.write(
             self.render_page(
@@ -324,7 +341,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
 
     """
 
-    def get(self, cluster_id):
+    async def get(self, cluster_id):
 
         drill_cluster_id = int(cluster_id)
 
@@ -472,7 +489,9 @@ class ClusterDrillDown(HyperrealRequestHandler):
                 highlight_features.extend(cluster_feature_order[cluster_id])
 
         sample_docs = random_sample_bitmap(matching_docs, 20)
-        docs = self.idx.html_docs(sample_docs, highlight_features=highlight_features)
+        docs = await self.render_html_docs(
+            sample_docs, highlight_features=highlight_features
+        )
 
         # Link to next, previous clusters, wrapping around to the other end at the limits
         all_clusters = sorted(self.feature_clusters.cluster_ids)
@@ -640,3 +659,25 @@ async def serve_index(hyperreal_index, port=9999, base_path=""):
     app = make_index_server(hyperreal_index, base_path)
     app.listen(port)
     await asyncio.Event().wait()
+
+
+def _render_html_worker(args):
+
+    idx, matching_docs, highlight_features = args
+
+    with idx:
+        rendered_docs = []
+        for doc_id, doc_key, doc in idx.docs(matching_docs):
+            rendered_docs.append(
+                (
+                    doc_id,
+                    doc_key,
+                    raw(
+                        idx.corpus.doc_to_html(
+                            doc, highlight_features=highlight_features
+                        ).render()
+                    ),
+                )
+            )
+
+    return rendered_docs
