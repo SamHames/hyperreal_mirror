@@ -2,18 +2,17 @@
 Toolkit for transforming and converting the indexable format of documents as mappings
 of lists and features.
 
+These tools are part of the core handling of concordances, snippets/passages and feature
+matching display to contextualise search results.
+
 """
 
 import collections
-
-from .corpus import IndexableDoc
 
 
 def match_features(doc_features, match_against):
     """Identify features from match_against that occur in doc_features."""
     literal_matches, range_matches = _split_all_literal_range_features(match_against)
-
-    matching = set()
 
     all_features = to_feature_set(doc_features)
 
@@ -43,9 +42,10 @@ def to_feature_set(doc_features):
 
 
 def to_matching_neighbourhood(
-    doc_features: IndexableDoc,
+    doc_features,
     match_against,
     window_size: int = 5,
+    display_features=None,
 ):
     """
     Convert doc_features into a concordance of feature values at matching features.
@@ -58,39 +58,49 @@ def to_matching_neighbourhood(
     """
     neighbourhoods = collections.defaultdict(list)
 
+    display_features = display_features or {}
+
     for field, values in doc_features.items():
 
         if isinstance(values, list):
+            # Use display values only if it's present for this field
+            display_values = display_features.get(field, values)
 
             literal_matches, range_matches = _split_field_literal_range_values(
                 match_against, field=field
             )
 
+            # Match against the doc_features as that's the index form.
             if range_matches:
-                matches = [
+                match_locations = [
                     pos
                     for pos, val in enumerate(values)
                     if val in literal_matches or _match_range_value(val, range_matches)
                 ]
             else:
-                matches = [
+                match_locations = [
                     pos for pos, val in enumerate(values) if val in literal_matches
                 ]
 
-            for match in matches:
+            for match_loc in match_locations:
 
-                pre = values[max(0, match - window_size) : match]
-                post = values[match + 1 : match + window_size + 1]
-                match_value = values[match]
-                neighbourhoods[field].append((match, pre, match_value, post))
+                pre = display_values[max(0, match_loc - window_size) : match_loc]
+                post = display_values[match_loc + 1 : match_loc + window_size + 1]
+                match_value = values[match_loc]
+                display_match = display_values[match_loc]
+
+                neighbourhoods[(field, match_value)].append(
+                    (match_loc, pre, display_match, post)
+                )
 
     return neighbourhoods
 
 
 def to_passages(
-    doc_features: IndexableDoc,
+    doc_features,
     passage_starts: dict[str, list[int]],
     passage_size: int,
+    display_features=None,
 ):
     """
     Extract passages of values at given locations from the positional fields.
@@ -99,13 +109,17 @@ def to_passages(
 
     """
     passages = collections.defaultdict(list)
+    display_features = display_features or {}
 
     for field, values in doc_features.items():
 
         if isinstance(values, list):
+            # Use display values only if it's present for this field
+            display_values = display_features.get(field, values)
 
             max_position = len(values)
-            for start in passage_starts[field]:
+
+            for start in passage_starts.get(field, []):
                 end = min(max_position, start + passage_size)
                 passages[field].append((start, start + passage_size, values[start:end]))
 
