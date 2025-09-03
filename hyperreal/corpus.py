@@ -30,9 +30,9 @@ import mmap
 import re
 from typing import Any, Hashable, Iterable, Optional, TypeVar
 
-from tinyhtml import frag, h
+from tinyhtml import frag, h, raw
 
-from . import value_handlers
+from . import value_handlers, doc_feature_tools as dft
 
 DocKey = TypeVar("DocKey")
 Doc = TypeVar("Doc")
@@ -98,7 +98,7 @@ class HyperrealCorpus:
     @property
     def type_handlers(self) -> dict[Any, value_handlers.ValueHandler]:
         """
-        Map of types of values emitted by `indexable_docs` to a handler.
+        Map of types of values emitted by `doc_to_features` to a handler.
 
         """
         if not hasattr(self, "_type_map"):
@@ -158,7 +158,7 @@ class HyperrealCorpus:
         Transform a document to a version of features that are suitable for display.
 
         Only fields that need alternative handling for appropriate display need to be
-        included in the output - but there does need to be a display form for every
+        included in the output - but there does need to be a display value for every
         value on that field returned by a call to the doc_to_features method.
 
         This allows customised control of rendering of values - for example constructing
@@ -173,11 +173,11 @@ class HyperrealCorpus:
 
         """
 
-        features = self.doc_to_features(doc)
+        doc_features = self.doc_to_features(doc)
 
         display_features = {}
 
-        for field, values in features:
+        for field, values in doc_features.items():
 
             if isinstance(values, list):
 
@@ -196,16 +196,120 @@ class HyperrealCorpus:
 
     def doc_to_html(self, doc, highlight_features=None) -> frag:
         """
-        Transform a document into a HTML representation.
+        Transform a document into its HTML representation.
 
         If this is not overridden, the str representation of a document will be used
         (and escaped) as HTML.
 
-        Takes an optional highlight_features argument - this can optionally be used if
-        you want to highlight search results within the context of the document.
+        Takes an optional highlight_features argument - this can be used if you want to
+        highlight search results within the context of the document.
 
         """
         return str(doc)
+
+    def features_to_html_concordance(
+        self, doc_features, display_features, highlight_features
+    ) -> frag:
+        """
+        Convert doc features to concordance lines.
+
+        """
+        concordances = dft.to_matching_neighbourhood(
+            doc_features, highlight_features, display_features=display_features
+        )
+
+        output = []
+
+        for field, values in concordances.items():
+
+            output.append(h("dt")(h("em")(field)))
+
+            for match_value, match_lines in values.items():
+                value_handler = self.type_handlers[type(match_value)]
+
+                display_lines = []
+
+                for match_position, pre, display_match, post in match_lines:
+
+                    # This will be wrong for rtl languages - we want this ltr expected
+                    # text to clip/ellipsis on what is usually the wrong side for
+                    pre_html = [
+                        value_handler.to_html(v.replace("\n", " ")) for v in pre
+                    ]
+                    match_html = h("mark")(
+                        value_handler.to_html(display_match.replace("\n", " "))
+                    )
+                    post_html = [
+                        value_handler.to_html(v.replace("\n", " ")) for v in post
+                    ]
+
+                    display_lines.append(
+                        h("tr")(
+                            h("td", klass="concordance-pre")(
+                                h("span", dir="ltr")(pre_html)
+                            ),
+                            h("td", klass="concordance-match")(match_html),
+                            h("td", klass="concordance-post")(post_html),
+                        )
+                    )
+
+                output.append(
+                    h("dd")(
+                        h("details")(
+                            h("summary")(
+                                match_value.replace("\n", " "),
+                                f" ({len(display_lines)})",
+                            ),
+                            h("table", klass="concordance")(display_lines),
+                        )
+                    )
+                )
+
+        return h("dl", klass="matches cluster")(output)
+
+    def html_search_results(self, doc_keys, highlight_features=None) -> frag:
+        """
+        Create HTML fragment for search results for a specified set of documents.
+
+        This method can be used to control everything about how documents retrieved by
+        a search can be displayed, including the document itself, the elements of the
+        document that matched, and concordances for matches in positional fields.
+
+        This default implementation uses the doc_to_html converter on single documents
+        and extracts concordances against matching features for each.
+
+        You can override this method to completely customise search results. The
+        interface is designed so that you can take into account as much or as little
+        information as you want about the set of keys to be rendered.
+
+        """
+
+        results = []
+
+        for doc_key, doc in self.docs(doc_keys):
+
+            # Render the doc
+            doc_html = self.doc_to_html(doc, highlight_features=highlight_features)
+
+            # Extract features for concordances
+            doc_features = self.doc_to_features(doc)
+            display_features = self.doc_to_display_features(doc)
+
+            highlight_features = highlight_features or []
+
+            doc_concordances = None
+            if highlight_features:
+                doc_concordances = self.features_to_html_concordance(
+                    doc_features, display_features, highlight_features
+                )
+
+            results.append(
+                h("li", klass="search-hit")(
+                    h("h3")("Document: ", doc_key), doc_html, doc_concordances
+                )
+            )
+
+        return h("ul", klass="stack search-results")(results)
 
     def close(self) -> None:
         """
@@ -300,7 +404,7 @@ class TextfileParagraphsCorpus(HyperrealCorpus):
         return {"para_no": doc["para_no"], "text": self.tokeniser(doc["text"])}
 
     def doc_to_html(self, doc, highlight_features=None):
-        return h("div")(h("span")(doc["para_no"]), h("p")(doc["text"]))
+        return h("span")(doc["para_no"], doc["text"][:20]), h("p")(doc["text"])
 
     def close(self):
         self.mm.close()

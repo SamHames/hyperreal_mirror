@@ -644,6 +644,19 @@ class HyperrealIndex:
             # handle a missing key by continuing on to the next doc.
             yield doc_id, doc_key1, doc
 
+    def html_search_results(self, doc_ids, highlight_features=None):
+        """
+        Return the HTML search results for these doc_ids.
+
+        This is a passthrough to the corpus method.
+
+        """
+        doc_keys = (doc_key for _, doc_key in self.doc_ids_to_keys(doc_ids))
+
+        return self.corpus.html_search_results(
+            doc_keys, highlight_features=highlight_features
+        )
+
     def _lookup_doc_key(self, doc_id: int):
         """
         Return the doc_key for the given doc_id.

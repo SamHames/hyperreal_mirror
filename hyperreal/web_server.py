@@ -67,7 +67,7 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
             )
         )
 
-        return future
+        return future, len(retrieve_docs)
 
 
 class IndexedField(HyperrealRequestHandler):
@@ -114,7 +114,7 @@ class IndexedField(HyperrealRequestHandler):
             highlight_features = None
             matching_docs = self.idx.all_doc_ids()
 
-        docs = self.render_html_sample_docs(
+        search_results, sample_doc_count = self.render_html_sample_docs(
             matching_docs, sample_doc_count, highlight_features=highlight_features
         )
 
@@ -130,9 +130,9 @@ class IndexedField(HyperrealRequestHandler):
                 f"Feature summary for field: {field}",
                 [
                     rendered_features,
-                    web_rendering.list_docs(
-                        await docs,
-                        sample_doc_count=len(await docs),
+                    web_rendering.list_search_results(
+                        await search_results,
+                        sample_doc_count=sample_doc_count,
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
@@ -249,7 +249,7 @@ class BrowseClusters(HyperrealRequestHandler):
         facets = None
         base_url = self.reverse_url("browse")
 
-        docs = self.render_html_sample_docs(
+        search_results, sample_doc_count = self.render_html_sample_docs(
             matching_docs, sample_doc_count, highlight_features=highlight_features
         )
 
@@ -316,9 +316,9 @@ class BrowseClusters(HyperrealRequestHandler):
                 [
                     rendered,
                     facets,
-                    web_rendering.list_docs(
-                        await docs,
-                        sample_doc_count=len(await docs),
+                    web_rendering.list_search_results(
+                        await search_results,
+                        sample_doc_count=sample_doc_count,
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
@@ -397,7 +397,7 @@ class ClusterDrillDown(HyperrealRequestHandler):
         base_url = self.reverse_url("cluster-drilldown", drill_cluster_id)
         sample_doc_count = 20
 
-        docs = self.render_html_sample_docs(
+        search_results, sample_doc_count = self.render_html_sample_docs(
             matching_docs, sample_doc_count, highlight_features=highlight_features
         )
 
@@ -526,9 +526,9 @@ class ClusterDrillDown(HyperrealRequestHandler):
                     drill_cluster_rendered,
                     other_clusters_rendered,
                     facets,
-                    web_rendering.list_docs(
-                        await docs,
-                        sample_doc_count=len(await docs),
+                    web_rendering.list_search_results(
+                        await search_results,
+                        sample_doc_count=sample_doc_count,
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
@@ -670,18 +670,7 @@ def _render_html_worker(args):
     idx, retrieve_docs, highlight_features = args
 
     with idx:
-        rendered_docs = []
-        for doc_id, doc_key, doc in idx.docs(retrieve_docs):
-            rendered_docs.append(
-                (
-                    doc_id,
-                    doc_key,
-                    raw(
-                        idx.corpus.doc_to_html(
-                            doc, highlight_features=highlight_features
-                        ).render()
-                    ),
-                )
-            )
 
-    return rendered_docs
+        search_results = idx.html_search_results(retrieve_docs, highlight_features)
+
+    return raw(search_results.render())

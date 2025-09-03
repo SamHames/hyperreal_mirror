@@ -134,6 +134,37 @@ def tokenise(text):
     ]
 
 
+def display_tokenise(text):
+    """Tokenise, but preserving punctuation and whitespace for display as original."""
+    text_length = len(text)
+
+    matches = boundary_regex.finditer(text)
+
+    split_start, last_end = 0, 0
+
+    token_starts = []
+
+    for match in matches:
+
+        start, end = match.span()
+
+        # If we've skipped over some content to get to the next split, it's time to
+        # release a token, but including the boundaries.
+        if start != last_end:
+            token_starts.append(last_end)
+            split_start = end
+
+        last_end = end
+
+    if token_starts and token_starts[-1] != text_length:
+        token_starts.append(text_length)
+
+    return [text[start:end] for start, end in zip(token_starts, token_starts[1:])]
+
+
+print(display_tokenise(" The cat, he sat on Matt's\nlap, really!\n"))
+
+
 class TwentyNewsgroups(corpus.HyperrealCorpus):
 
     extra_css = """
@@ -190,37 +221,6 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         with self.open_zip() as z:
             for name in sorted(z.namelist()):
                 yield name
-
-    def _split_signature(self, body):
-        """
-        Based on the scikit-learn heuristic:
-
-        https://github.com/scikit-learn/scikit-learn/blob/f0ab589f/sklearn/datasets/twenty_newsgroups.py#L124
-
-        """
-
-        lines = body.strip().split("\n")
-        n_lines = len(lines)
-
-        # Note that we depart from scikit-learn, and don't check the final content line
-        # We already know this can't be non-whitespace because of strip, and if it is
-        # all '-' characters, we want to continue further into the message.
-        line_num = 0
-
-        for line_num in range(n_lines - 2, -1, -1):
-            line = lines[line_num]
-            if line.strip().strip("-") == "":
-                break
-
-        if line_num > 0:
-            return (
-                "\n".join(lines[:line_num]),
-                "\n".join(lines[line_num:]),
-                line_num,
-                n_lines,
-            )
-        else:
-            return body.strip(), "", n_lines, n_lines
 
     def _parse_post(self, raw_post):
 
@@ -315,6 +315,7 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         return lines
 
     def doc_to_features(self, doc):
+
         indexed = {
             "subject": tokenise(doc["Subject"]),
             "newsgroup": set(
@@ -347,18 +348,40 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
         return indexed
 
+    def doc_to_display_features(self, doc):
+        indexed = {
+            "subject": display_tokenise(doc["Subject"]),
+        }
+
+        mark_lines = self.mark_lines_ignore(doc["body"])
+
+        # The body text, handling quoting indicators at the start of lines.
+        indexed["body"] = [
+            t
+            for ignore, line in mark_lines
+            if not ignore
+            for t in display_tokenise(line)
+        ]
+
+        return indexed
+
     def doc_to_html(self, doc, highlight_features=None):
 
         mark_lines = self.mark_lines_ignore(doc["body"])
         # render quoted text distinctly from other text.
-        doc["body"] = [h("em")(line) if ignore else line for ignore, line in mark_lines]
+        doc_body = [h("em")(line) if ignore else line for ignore, line in mark_lines]
 
-        subject = doc.pop("Subject")
+        subject = doc.get("Subject", "")
 
         return h("details")(
             h("summary")(subject),
             h("dl", klass="stack")(
-                [(h("dt")(key), h("dd")(h("pre")(value))) for key, value in doc.items()]
+                *[
+                    (h("dt")(key), h("dd")(h("pre")(value)))
+                    for key, value in doc.items()
+                    if key not in ("Subject", "body")
+                ],
+                (h("dt")("body"), h("dd")(h("pre")(doc_body))),
             ),
         )
 

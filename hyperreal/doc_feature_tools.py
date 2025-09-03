@@ -44,7 +44,7 @@ def to_feature_set(doc_features):
 def to_matching_neighbourhood(
     doc_features,
     match_against,
-    window_size: int = 5,
+    window_size: int = 10,
     display_features=None,
 ):
     """
@@ -56,7 +56,7 @@ def to_matching_neighbourhood(
     for the construction of concordances.
 
     """
-    neighbourhoods = collections.defaultdict(list)
+    neighbourhoods = collections.defaultdict(lambda: collections.defaultdict(list))
 
     display_features = display_features or {}
 
@@ -89,7 +89,7 @@ def to_matching_neighbourhood(
                 match_value = values[match_loc]
                 display_match = display_values[match_loc]
 
-                neighbourhoods[(field, match_value)].append(
+                neighbourhoods[field][match_value].append(
                     (match_loc, pre, display_match, post)
                 )
 

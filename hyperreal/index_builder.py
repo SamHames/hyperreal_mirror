@@ -225,7 +225,7 @@ def _make_segment(
             ]
 
             if invalid_fields:
-                raise SchemaValidationError(
+                raise corpus.SchemaValidationError(
                     "Only one ValueHandler can be used per field across all documents.\n"
                     "The following fields are invalid for indexing:\n"
                     "\n".join(

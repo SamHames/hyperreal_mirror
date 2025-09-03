@@ -204,6 +204,53 @@ pre {
     font-family: monospace;
 }
 
+/* Concordance handling CSS */
+.concordance {
+    --space: var(--s-2);
+    margin: var(--s-2);
+    width: 100%;
+    table-layout: fixed;
+}
+
+.concordance td {
+    text-overflow: ellipsis;
+    overflow: clip;
+    white-space: nowrap;
+}
+
+.concordance-match {
+    width: min-content;
+    padding: 0 var(--s-3);
+}
+
+.concordance-pre {
+    text-align: right;
+    direction: rtl;
+    width: auto;
+}
+
+.concordance-post {
+    text-align: left;
+    width: auto;
+}
+
+.matches summary,details {
+    display: inline;
+    cursor: pointer;
+}
+
+.matches > * {
+    margin-inline-end: var(--s-1);
+}
+
+.matches dt::after {
+    content: ":";
+}
+
+@view-transition {
+  navigation: replace;
+}
+
 """
 
 
@@ -419,7 +466,7 @@ def full_page(
     )
 
 
-def list_docs(docs, sample_doc_count=None, matching_doc_count=None):
+def list_search_results(search_results, sample_doc_count=None, matching_doc_count=None):
 
     header_label = "Sample of matching docs"
     if sample_doc_count is not None and matching_doc_count is not None:
@@ -433,7 +480,7 @@ def list_docs(docs, sample_doc_count=None, matching_doc_count=None):
         h("div", klass="header")(
             h("h2")(header_label),
         ),
-        h("ul", klass="stack")(h("li", klass="doc")(doc) for _, _, doc in docs),
+        search_results,
     )
 
 
