@@ -12,143 +12,149 @@ from urllib.parse import quote
 from tinyhtml import frag, h, html, raw
 
 
-def calculate_area_mark(normalised_area, total_doc_count, min_mapping_size=0.05):
-    """
-    Transform a normalised value in range [0, 1] to a renderable unit in HTML.
-
-    This transform maps 0, 1 -> 0, 1, and maps 1/total_doc_count -> 0.1. This is
-    intended to enable rendering a wide range of values as areas.
-
-    """
-    power = math.log10(min_mapping_size) / (-math.log10(total_doc_count))
-    return normalised_area**power
-
-
-def render_feature_stats_as_dl(
+def render_feature_stats_table(
     feature_stats,
-    feature_order=None,
+    caption=None,
     feature_url_key=None,
-    display_stat=None,
-    area_stat=None,
-    total_doc_count=None,
-    klass="stack feature-list",
-    feature_form_id=None,
-    feature_form_key=None,
+    count_stat=None,
+    heatmap_stat=None,
+    feature_form_details=(None, None),
 ):
 
-    feature_order = feature_order or feature_stats.keys()
+    if caption is not None:
+        caption_elem = h("caption")(caption)
 
-    items = []
+    header_fields = [
+        h("th", scope="col", klass="feature-field")("Field"),
+        h("th", scope="col", klass="feature-value")("Value"),
+    ]
+    if count_stat:
+        header_fields.append(h("th", scope="col", klass="display-count")(count_stat))
+    if heatmap_stat:
+        header_fields.append(h("th", scope="col", klass="heatmap-value")(heatmap_stat))
+    if feature_form_details[0] is not None:
+        header_fields.append(h("th", scope="col")("Select"))
+
+    header = h("thead")(h("tr")(header_fields))
+    body_rows = []
     last_field = None
 
-    for feature in feature_order:
+    for feature, stats in feature_stats.items():
+
+        cells = []
+
         field = feature[0]
-        html_value = feature[1:]
 
-        if len(html_value) == 2:
-            html_value = (html_value[0], "/", html_value[1])
+        klass = None
+        if field == last_field:
+            klass = "repeat-in-run"
 
-        details = feature_stats[feature]
+        cells.append(h("th", scope="row", klass=klass)(field))
 
-        if field != last_field:
-            items.append(h("dt")(h("em")(field)))
+        html_values = feature[1:]
 
-        selector = None
-        if feature_form_id is not None and feature_form_key is not None:
+        if len(html_values) == 2:
+            html_value = (html_values[0], "-", html_values[1])
+        else:
+            html_value = html_values[0]
+
+        if feature_url_key is not None:
+            href = stats[feature_url_key]
+            feature_value = h("a", href=href)(html_value)
+        else:
+            feature_value = html_value
+
+        cells.append(h("th", scope="row", klass="feature-value")(feature_value))
+
+        # Show a count if present
+        if count_stat is not None:
+            cells.append(h("td", klass="display-count")(stats[count_stat]))
+
+        # Show a cell that will by default only show the heatmap colour, not the
+        # actual count.
+        style = None
+        if heatmap_stat is not None:
+            heatmap_value = stats[heatmap_stat]
+            style = f"--w: {heatmap_value:.3f};"
+            cells.append(h("td", klass="heatmap-value")(heatmap_value))
+
+        if feature_form_details[0] is not None and feature_form_details[1] is not None:
             selector = h(
                 "input",
                 type="checkbox",
                 name="feature",
-                value=details[feature_form_key],
-                form=feature_form_id,
+                form=feature_form_details[0],
+                value=stats[feature_form_details[1]],
             )
+            cells.append(selector)
 
-        area_mark = None
-        if area_stat is not None:
-            area_side = calculate_area_mark(details[area_stat], total_doc_count)
-            style = f"--w: {area_side:.3f}rem;"
-            area_mark = h("div", style=style, klass="area-mark")()
-
-        display = None
-        if display_stat is not None:
-            display = h("span", klass="display-number")(details[display_stat])
-
-        if feature_url_key is not None:
-            href = details[feature_url_key]
-            value = h("a", klass="display-number", href=href)(html_value)
-        else:
-            value = h("span", klass="display-number")(html_value)
-
-        items.append(h("dd", klass="stat-row")(value, display, area_mark, selector))
+        body_rows.append(h("tr", klass="heatmap", style=style)(cells))
 
         last_field = field
 
-    return h("dl", klass=klass)(items)
+    return h("table", klass="feature-table")(caption, header, h("tbody")(body_rows))
 
 
 def render_feature_clustering(
-    clustering,
+    feature_clustering,
     cluster_stats,
-    total_doc_count,
-    cluster_order=None,
-    area_stat="relative_doc_count",
-    display_stat=None,
+    count_stat=None,
+    heatmap_stat=None,
     feature_url_key=None,
     header_url_key=None,
     seemore_url_key=None,
-    feature_form_id=None,
-    feature_form_key=None,
+    feature_form_details=(None, None),
 ):
-
-    cluster_order = cluster_order or cluster_stats.keys()
 
     clusters = []
 
-    for cluster_id in cluster_order:
+    for cluster_id, stats in cluster_stats.items():
 
-        stats = cluster_stats[cluster_id]
+        features = feature_clustering[cluster_id]
 
-        features = clustering[cluster_id]
+        # style = None
+        # if area_stat is not None:
+        #     cluster_width = calculate_area_mark(stats[area_stat], total_doc_count)
+        #     style = f"--w: {cluster_width:.3f}"
 
-        style = None
-        if area_stat is not None:
-            cluster_width = calculate_area_mark(stats[area_stat], total_doc_count)
-            style = f"--w: {cluster_width:.3f}rem"
+        # display = None
+        # if display_stat is not None:
+        #     display = h("span", klass="display-number")(stats[display_stat])
 
-        display = None
-        if display_stat is not None:
-            display = h("span", klass="display-number")(stats[display_stat])
+        # see_more_link = None
+        # if seemore_url_key is not None:
+        #     see_more_link = h(
+        #         "a",
+        #         href=stats[seemore_url_key],
+        #     )(f"See all in cluster {cluster_id}")
 
-        see_more_link = None
-        if seemore_url_key is not None:
-            see_more_link = h(
-                "a",
-                href=stats[seemore_url_key],
-            )(f"See all in cluster {cluster_id}")
+        # if heatmap_stat is not None:
+        #     heatmap_block =
+        # if count_stat is not None:
+
+        cluster_title = h("h2")("Cluster: ", cluster_id)
+        if header_url_key is not None:
+            cluster_title = h("a", href=stats[header_url_key])(cluster_title)
 
         clusters.append(
             h("li")(
-                h("div", klass="header stat-row")(
-                    h("a", href=stats[header_url_key])(
-                        h("h2")("Cluster: ", cluster_id),
-                    ),
-                    display,
-                    h("div", klass="area-mark", style=style)(),
-                ),
-                render_feature_stats_as_dl(
+                h("div", klass="feature-table-header")(cluster_title),
+                # h("div", klass="header stat-row")(
+                #     display,
+                #     h("div", klass="area-mark", style=style)(),
+                # ),
+                render_feature_stats_table(
                     features,
-                    area_stat=area_stat,
-                    display_stat=display_stat,
-                    total_doc_count=total_doc_count,
                     feature_url_key=feature_url_key,
-                    feature_form_id=feature_form_id,
-                    feature_form_key=feature_form_key,
+                    count_stat=count_stat,
+                    heatmap_stat=heatmap_stat,
+                    feature_form_details=feature_form_details,
                 ),
-                h("div")(see_more_link),
+                # h("div")(see_more_link),
             )
         )
 
-    return h("ul", klass="cluster feature-clustering")(clusters)
+    return h("ol", klass="stack feature-clustering")(clusters)
 
 
 def generate_nav(label, links, klass=None):
@@ -452,4 +458,77 @@ h1, h2, h3 {
     --space: var(--s-1);
 }
 
+
+/****** Layout for feature tables *******/
+.feature-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.feature-table thead {
+    whitespace: nowrap;
+    border-bottom: solid;
+    padding: var(--s-3);
+    background: white;
+}
+
+.feature-table thead th {
+    overflow-x: clip;
+    text-overflow: ellipsis;
+}
+
+.feature-table :is(td, th) {
+    padding: var(--s-3);
+}
+
+.feature-value {
+    overflow-x: clip;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: monospace, monospace;
+    text-align: end;
+    width: 50%;
+}
+
+.feature-field {
+    width: auto;
+}
+
+.repeat-in-run {
+    font-size: 0;
+}
+
+.heatmap-value {
+    font-size: 0;
+    width: 0;
+}
+
+.heatmap {
+    background: oklch(calc(1 - var(--w, 0)) 0 0);
+    color: oklch(
+        calc(round(var(--w, 1)))
+        0 0
+    );
+}
+
+.heatmap a, .heatmap a:visited {
+    color: oklch(
+        calc(round(var(--w, 1)))
+        0
+        0
+    );
+}
+
+.display-count {
+    text-align: end;
+    font-family: monospace, monospace;
+    width: auto;
+}
+
+.feature-clustering {
+    list-style: none;
+}
+
+/*************/
 """

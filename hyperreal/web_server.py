@@ -89,12 +89,11 @@ class IndexedField(HyperrealRequestHandler):
         }
 
         total_doc_count = self.idx.total_doc_count
-        rendered_features = web_rendering.render_feature_stats_as_dl(
+        rendered_features = web_rendering.render_feature_stats_table(
             features,
             feature_url_key="url",
-            area_stat="relative_doc_count",
-            total_doc_count=total_doc_count,
-            display_stat="doc_count",
+            heatmap_stat="relative_doc_count",
+            count_stat="doc_count",
         )
 
         linkable_fields = self.idx.field_handlers
@@ -168,7 +167,7 @@ def render_facets(idx, query, base_url):
     for title, features, table_filter in idx.facets:
         sorting = table_filter or TableFilter()
 
-        faceted = idx.facet_features(query, features)
+        faceted = sorting(idx.facet_features(query, features))
 
         for f, stats in faceted.items():
             query_string = idx.feature_to_querystring(f)
@@ -179,11 +178,10 @@ def render_facets(idx, query, base_url):
                 h("div", klass="header")(
                     h("h2")(title),
                 ),
-                web_rendering.render_feature_stats_as_dl(
-                    sorting(faceted),
-                    area_stat="jaccard_similarity",
-                    total_doc_count=idx.total_doc_count,
-                    display_stat="hits",
+                web_rendering.render_feature_stats_table(
+                    faceted,
+                    heatmap_stat="jaccard_similarity",
+                    count_stat="hits",
                     feature_url_key="url",
                 ),
             )
@@ -195,15 +193,15 @@ def render_facets(idx, query, base_url):
 class BrowseClusters(HyperrealRequestHandler):
     async def get(self):
 
-        top_k_features = int(self.get_argument("top_k_features", "20"))
-        top_k_clusters = int(self.get_argument("top_k_clusters", "20"))
+        top_k_features = int(self.get_argument("top_k_features", "10"))
+        top_k_clusters = int(self.get_argument("top_k_clusters", "40"))
         f = self.get_argument("f", None, strip=False)
         v = self.get_argument("v", None, strip=False)
         v1 = self.get_argument("v1", None, strip=False)
         v2 = self.get_argument("v2", None, strip=False)
         c = self.get_argument("c", None)
 
-        area_stat = "jaccard_similarity"
+        heatmap_stat = "jaccard_similarity"
         skip_feature_pivoting = False
 
         # Special case when nothing is selected to pivot by
@@ -217,7 +215,7 @@ class BrowseClusters(HyperrealRequestHandler):
             # Skip the expensive step for this case where we show all the clusters.
             skip_feature_pivoting = True
 
-            area_stat = "relative_doc_count"
+            heatmap_stat = "relative_doc_count"
 
         elif f is not None and v is not None:
             feature = self.idx.feature_from_url((f, v))
@@ -264,7 +262,7 @@ class BrowseClusters(HyperrealRequestHandler):
             cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
 
         cluster_filter = TableFilter(
-            order_by=area_stat, keep_above=0, first_k=top_k_clusters
+            order_by=heatmap_stat, keep_above=0, first_k=top_k_clusters
         )
         cluster_stats = cluster_filter.apply_filter(cluster_stats)
 
@@ -276,7 +274,7 @@ class BrowseClusters(HyperrealRequestHandler):
             )
 
         feature_filter = TableFilter(
-            order_by=area_stat, keep_above=0, first_k=top_k_features
+            order_by=heatmap_stat, keep_above=0, first_k=top_k_features
         )
 
         clustering = {
@@ -302,12 +300,11 @@ class BrowseClusters(HyperrealRequestHandler):
         rendered = web_rendering.render_feature_clustering(
             clustering,
             cluster_stats,
-            self.idx.total_doc_count,
             feature_url_key="url",
             header_url_key="header_url",
             seemore_url_key="seemore_url",
-            area_stat=area_stat,
-            display_stat="doc_count",
+            heatmap_stat=heatmap_stat,
+            count_stat="doc_count",
         )
 
         self.write(
@@ -322,7 +319,6 @@ class BrowseClusters(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
-                column_flex={0: 1.5, 2: 1.5},
             )
         )
 
@@ -350,8 +346,8 @@ class ClusterDrillDown(HyperrealRequestHandler):
 
         drill_cluster_id = int(cluster_id)
 
-        top_k_clusters = int(self.get_argument("top_k_clusters", "20"))
-        top_k_features = int(self.get_argument("top_k_features", "20"))
+        top_k_clusters = int(self.get_argument("top_k_clusters", "40"))
+        top_k_features = int(self.get_argument("top_k_features", "10"))
         f = self.get_argument("f", None, strip=False)
         v = self.get_argument("v", None, strip=False)
         v1 = self.get_argument("v1", None, strip=False)
