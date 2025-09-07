@@ -86,7 +86,7 @@ def render_feature_stats_table(
                 form=feature_form_details[0],
                 value=stats[feature_form_details[1]],
             )
-            cells.append(selector)
+            cells.append(h("td")(selector))
 
         body_rows.append(h("tr", klass="heatmap", style=style)(cells))
 
@@ -487,13 +487,13 @@ h1, h2, h3 {
 
 .feature-table :is(td, th) {
     padding: var(--s-3);
-}
-
-.feature-value {
     overflow-x: clip;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: monospace, monospace;
+}
+
+.feature-value {
     text-align: end;
     width: 50%;
 }

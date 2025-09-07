@@ -462,25 +462,27 @@ class ClusterDrillDown(HyperrealRequestHandler):
         drill_cluster_rendered = web_rendering.render_feature_clustering(
             drill_cluster_features,
             drill_cluster_order,
-            self.idx.total_doc_count,
             feature_url_key="url",
             header_url_key="header_url",
-            area_stat="jaccard_similarity",
-            display_stat="hits",
-            feature_form_id="feature-form",
-            feature_form_key="feature_form_value",
+            heatmap_stat="jaccard_similarity",
+            count_stat="hits",
+            feature_form_details=(
+                "feature-form",
+                "feature_form_value",
+            ),
         )
         other_clusters_rendered = web_rendering.render_feature_clustering(
             cluster_feature_order,
             cluster_order,
-            self.idx.total_doc_count,
             feature_url_key="url",
             header_url_key="header_url",
             seemore_url_key="seemore_url",
-            area_stat="jaccard_similarity",
-            display_stat="hits",
-            feature_form_id="feature-form",
-            feature_form_key="feature_form_value",
+            heatmap_stat="jaccard_similarity",
+            count_stat="hits",
+            feature_form_details=(
+                "feature-form",
+                "feature_form_value",
+            ),
         )
 
         # If just one feature is selected, use that for highlighting, not the original
@@ -529,7 +531,6 @@ class ClusterDrillDown(HyperrealRequestHandler):
                     ),
                 ],
                 body_header=feature_form,
-                column_flex={1: 1.5, 3: 1.5},
                 sub_nav_label="Change Clusters",
                 sub_nav_links=nav_links,
             )
