@@ -208,7 +208,7 @@ def full_page(
         h("body")(
             h("header")(main_nav, sub_nav),
             h("main")(
-                h("div", klass="main-header")(body_header),
+                h("div", klass="main-header")(body_header) if body_header else None,
                 h("div", klass="columns")(
                     (
                         h(
@@ -283,7 +283,6 @@ default_css = """
     --s-1: calc(var(--s0) / var(--ratio));
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
-    --header: #efefef;
 }
 
 .cluster {
@@ -292,10 +291,10 @@ default_css = """
 }
 
 header {
-    padding: var(--s0);
-    background-color: var(--header);
+    margin: var(--s0);
     height: fit-content;
-    border-bottom: solid;
+    border: solid;
+    padding: var(--s-1);
 }
 
 nav ul {
@@ -335,15 +334,49 @@ main > * {
 
 .columns {
     overflow: hidden;
-    gap: var(--s3);
+    gap: var(--s1);
     display: flex;
     flex-direction: row;
     flex: 1;
 }
 
 .column {
-    overflow: scroll;
+    overflow-y: scroll;
     flex: var(--column-flex, 1);
+    border: solid;
+    padding: var(--s0);
+
+    /* https://css-tricks.com/books/greatest-css-tricks/scroll-shadows/ */
+    background:
+        /* Shadow Cover TOP */
+        linear-gradient(
+          white 30%,
+          rgba(255, 255, 255, 0)
+        ) center top,
+
+        /* Shadow Cover BOTTOM */
+        linear-gradient(
+          rgba(255, 255, 255, 0),
+          white 70%
+        ) center bottom,
+
+        /* Shadow TOP */
+        radial-gradient(
+          farthest-side at 50% 0,
+          rgba(0, 0, 0, 0.2),
+          rgba(0, 0, 0, 0)
+        ) center top,
+
+        /* Shadow BOTTOM */
+        radial-gradient(
+          farthest-side at 50% 100%,
+          rgba(0, 0, 0, 0.2),
+          rgba(0, 0, 0, 0)
+        ) center bottom;
+
+    background-repeat: no-repeat;
+    background-size: 100% var(--s1), 100% var(--s1), 100% var(--s-1), 100% var(--s-1);
+    background-attachment: local, local, scroll, scroll;
 }
 
 pre {
@@ -366,96 +399,6 @@ h1, h2, h3 {
 
 .stack > * + * {
   margin-block-start: var(--space, 1rem);
-}
-
-.stat-row {
-    display: flex;
-    justify-content: end;
-    gap: var(--s-1);
-    flex-wrap: nowrap;
-    align-items: center;
-    padding: 0 var(--s-3);
-}
-
-.stat-row :not(:first-child) {
-    flex-shrink: 0;
-}
-
-.stat-row :first-child {
-    text-align: left;
-    text-overflow: ellipsis;
-    overflow: hidden;
-}
-
-:is(.header, .stat-row):has(>input:checked){
-    border: solid yellow;
-}
-
-.feature-list {
-    margin-block-end: var(--s0);
-}
-
-.feature-list a {
-    text-decoration: none;
-    display: inline-block;
-}
-
-.feature-list dt::after {
-    content: ":";
-}
-
-.area-mark {
-    height: 1rem;
-    width: 1rem;
-    text-align: center;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-}
-
-.area-mark::before {
-    content: "";
-    height: var(--w);
-    width: var(--w);
-    margin: 0 auto;
-    background: black;
-    display: inline-block;
-    vertical-align: middle;
-}
-
-.feature-clustering {
-    line-height: 130%;
-    gap: var(--s0);
-    align-items: stretch;
-    justify-content: space-between;
-}
-
-.feature-clustering > * {
-    --space: var(--s-3);
-    overflow-y: clip;
-    overflow-x: clip;
-    white-space: nowrap;
-    flex: 1 auto;
-    max-width: 100%;
-}
-
-.header {
-    background: var(--header);
-    text-align: right;
-    border-bottom: solid;
-    margin-block-end: var(--s-2);
-    position: sticky;
-    top: 0;
-    padding: var(--s-3);
-}
-
-.header h2 {
-    display: inline-block;
-    font-size: 100%;
-}
-
-.display-number {
-    font-family: monospace;
 }
 
 /* Concordance handling CSS */
