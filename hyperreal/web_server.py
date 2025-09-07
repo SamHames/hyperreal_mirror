@@ -187,7 +187,7 @@ def render_facets(idx, query, base_url):
             )
         )
 
-    return h("ul", klass="cluster feature-clustering")(rendered_facets)
+    return h("ul", klass="stack feature-clustering")(rendered_facets)
 
 
 class BrowseClusters(HyperrealRequestHandler):

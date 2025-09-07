@@ -564,7 +564,7 @@ if not clustering.cluster_ids:
     start_time = time.monotonic()
 
     random_clustering = clustering.initialise_random_clustering(
-        256, min_docs=10, include_fields=["body"]
+        256, min_docs=10, include_fields=["body", "subject"]
     )
 
     clustering.replace_clusters(random_clustering)
@@ -572,8 +572,8 @@ if not clustering.cluster_ids:
     clustering.refine_clustering(
         group_test_n_clusters=16,
         iterations=50,
-        random_group_checks=1,
-        use_passages=True,
+        random_group_checks=0,
+        use_passages=False,
     )
 
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")

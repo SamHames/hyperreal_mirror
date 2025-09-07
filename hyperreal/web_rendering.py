@@ -45,9 +45,9 @@ def render_feature_stats_table(
 
         field = feature[0]
 
-        klass = None
+        klass = "feature-field"
         if field == last_field:
-            klass = "repeat-in-run"
+            klass = "feature-field repeat-in-run"
 
         cells.append(h("th", scope="row", klass=klass)(field))
 
@@ -121,28 +121,31 @@ def render_feature_clustering(
         # if display_stat is not None:
         #     display = h("span", klass="display-number")(stats[display_stat])
 
-        # see_more_link = None
-        # if seemore_url_key is not None:
-        #     see_more_link = h(
-        #         "a",
-        #         href=stats[seemore_url_key],
-        #     )(f"See all in cluster {cluster_id}")
+        footer = None
+        if seemore_url_key is not None:
+            footer = h("div")(
+                h(
+                    "a",
+                    href=stats[seemore_url_key],
+                )("Show all (+)")
+            )
+        # TODO - display number of features, don't show the link if there's no
+        # expansion.
+        # Add anchor links to headers to return to the same point after expansion.
 
-        # if heatmap_stat is not None:
-        #     heatmap_block =
-        # if count_stat is not None:
+        style = None
+        if heatmap_stat is not None:
+            style = f"--w: {stats[heatmap_stat]:.3f}"
 
         cluster_title = h("h2")("Cluster: ", cluster_id)
         if header_url_key is not None:
             cluster_title = h("a", href=stats[header_url_key])(cluster_title)
 
+        header = h("div", klass="feature-table-header")(cluster_title)
+
         clusters.append(
-            h("li")(
-                h("div", klass="feature-table-header")(cluster_title),
-                # h("div", klass="header stat-row")(
-                #     display,
-                #     h("div", klass="area-mark", style=style)(),
-                # ),
+            h("li", klass="heatmap-border cluster-features", style=style)(
+                header,
                 render_feature_stats_table(
                     features,
                     feature_url_key=feature_url_key,
@@ -150,7 +153,7 @@ def render_feature_clustering(
                     heatmap_stat=heatmap_stat,
                     feature_form_details=feature_form_details,
                 ),
-                # h("div")(see_more_link),
+                footer,
             )
         )
 
@@ -369,20 +372,21 @@ main > * {
         /* Shadow TOP */
         radial-gradient(
           farthest-side at 50% 0,
-          rgba(0, 0, 0, 0.2),
+          rgba(0, 0, 0, 1.0),
           rgba(0, 0, 0, 0)
         ) center top,
 
         /* Shadow BOTTOM */
         radial-gradient(
           farthest-side at 50% 100%,
-          rgba(0, 0, 0, 0.2),
+          rgba(0, 0, 0, 1.0),
           rgba(0, 0, 0, 0)
         ) center bottom;
 
     background-repeat: no-repeat;
     background-size: 100% var(--s1), 100% var(--s1), 100% var(--s-1), 100% var(--s-1);
     background-attachment: local, local, scroll, scroll;
+    z-index: 1;
 }
 
 pre {
@@ -460,6 +464,11 @@ h1, h2, h3 {
 
 
 /****** Layout for feature tables *******/
+
+.cluster-features > * {
+    padding: var(--s-3);
+}
+
 .feature-table {
     width: 100%;
     border-collapse: collapse;
@@ -469,8 +478,6 @@ h1, h2, h3 {
 .feature-table thead {
     whitespace: nowrap;
     border-bottom: solid;
-    padding: var(--s-3);
-    background: white;
 }
 
 .feature-table thead th {
@@ -495,8 +502,13 @@ h1, h2, h3 {
     width: auto;
 }
 
+tbody :is(.feature-field, .feature-value) {
+    font-weight: normal;
+}
+
 .repeat-in-run {
-    font-size: 0;
+    font-size: 75%;
+    font-weight: lighter;
 }
 
 .heatmap-value {
@@ -507,17 +519,21 @@ h1, h2, h3 {
 .heatmap {
     background: oklch(calc(1 - var(--w, 0)) 0 0);
     color: oklch(
-        calc(round(var(--w, 1)))
+        calc(round(var(--w, 1) + 0.15))
         0 0
     );
 }
 
 .heatmap a, .heatmap a:visited {
     color: oklch(
-        calc(round(var(--w, 1)))
+        calc(round(var(--w, 1) + 0.15))
         0
         0
     );
+}
+
+.heatmap-border {
+    border-left: var(--s0) solid oklch(calc(1 - var(--w, 0)) 0 0);
 }
 
 .display-count {
