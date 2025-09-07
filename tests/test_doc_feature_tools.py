@@ -36,13 +36,13 @@ def test_neighbourhoods():
             test_doc_with_positional, to_match, window_size=1
         )
 
-        assert len(neighbourhoods["text"]) == expected
+        assert sum(len(lines) for lines in neighbourhoods["text"].values()) == expected
 
 
 def test_neighbourhoods_range():
 
     for match, expected in (
-        (("the", "the\u10FFFF"), 3),
+        (("the", "the\u10ffFF"), 3),
         # Exclusive upper bound, won't match cat.
         ((None, "cat"), 0),
         # Will match everything, inclusive lower bound
@@ -54,7 +54,7 @@ def test_neighbourhoods_range():
             test_doc_with_positional, to_match, window_size=1
         )
 
-        assert len(neighbourhoods["text"]) == expected
+        assert sum(len(lines) for lines in neighbourhoods["text"].values()) == expected
 
 
 def test_simple_match():
@@ -76,7 +76,7 @@ def test_range_match():
         test_doc_with_positional,
         [
             # Range query on the text the* - should match the and theodore
-            ("text", "the", "the\u10FFFF"),
+            ("text", "the", "the\u10ffFF"),
             # Should not match as upper bound is exclusive
             ("date", "2019-01-01", "2020-01-01"),
         ],
