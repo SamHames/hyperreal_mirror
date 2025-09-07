@@ -8,7 +8,7 @@ This corpus interface is designed to enable:
 
 - working with large collections of documents without loading everything into memory
 - leaving your documents where they are
-- fine-grained control over how your documents are transformed for display and indexing. 
+- fine-grained control over how your documents are transformed for display and indexing.
 
 Corpus requirements
 
@@ -304,8 +304,8 @@ class HyperrealCorpus:
                 )
 
             results.append(
-                h("li", klass="search-hit")(
-                    h("h3")("Document: ", doc_key), doc_html, doc_concordances
+                h("li", klass="search-hit stack")(
+                    h("h3")(doc_key), doc_html, doc_concordances
                 )
             )
 

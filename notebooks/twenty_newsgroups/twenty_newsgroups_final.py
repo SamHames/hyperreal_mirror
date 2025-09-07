@@ -162,7 +162,10 @@ def display_tokenise(text):
     return [text[start:end] for start, end in zip(token_starts, token_starts[1:])]
 
 
-print(display_tokenise(" The cat, he sat on Matt's\nlap, really!\n"))
+example_string = " The cat, he sat on Matt's\nlap, really!\n"
+print("Example string: ", example_string)
+print("Tokenised for indexing: ", tokenise(example_string))
+print("Tokenised for display: ", display_tokenise(example_string))
 
 
 class TwentyNewsgroups(corpus.HyperrealCorpus):

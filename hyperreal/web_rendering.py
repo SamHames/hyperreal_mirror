@@ -11,248 +11,6 @@ from urllib.parse import quote
 
 from tinyhtml import frag, h, html, raw
 
-# This is the default CSS.
-# A corpus can have additional CSS, it will be appended after this to allow it to
-# override/customise any default rules specified here.
-default_css = """
-/* Box sizing everywhere */
-*,
-*::before,
-*::after {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
-
-:root {
-    --ratio: 1.618;
-    --s0: 1rem;
-    --s1: calc(var(--s0) * var(--ratio));
-    --s2: calc(var(--s1) * var(--ratio));
-    --s3: calc(var(--s2) * var(--ratio));
-    --s-1: calc(var(--s0) / var(--ratio));
-    --s-2: calc(var(--s-1) / var(--ratio));
-    --s-3: calc(var(--s-2) / var(--ratio));
-    --header: #efefef;
-}
-
-.cluster {
-    display: flex;
-    flex-wrap: wrap;
-}
-
-header {
-    padding: var(--s0);
-    background-color: var(--header);
-    height: fit-content;
-    border-bottom: solid;
-}
-
-nav ul {
-    list-style: none;
-    margin-bottom: var(--s-1);
-}
-
-.nav-label {
-    margin-inline-end: var(--s-1);
-}
-
-.inlined {
-    display: inline-block;
-}
-
-
-ul > li {
-    list-style: none;
-    margin-right: var(--s-1);
-}
-
-body {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-}
-
-main {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-main > * {
-    margin: var(--s0);
-}
-
-.columns {
-    overflow: hidden;
-    gap: var(--s3);
-    display: flex;
-    flex-direction: row;
-    flex: 1;
-}
-
-.column {
-    overflow: scroll;
-    flex: var(--column-flex, 1);
-}
-
-pre {
-    white-space: pre-wrap;
-}
-
-.stack {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-}
-
-.stack > * {
-  margin-block: 0;
-}
-
-.stack > * + * {
-  margin-block-start: var(--space, 1rem);
-}
-
-.stat-row {
-    display: flex;
-    justify-content: end;
-    gap: var(--s-1);
-    flex-wrap: nowrap;
-    align-items: center;
-    padding: 0 var(--s-3);
-}
-
-.stat-row :not(:first-child) {
-    flex-shrink: 0;
-}
-
-.stat-row :first-child {
-    text-align: left;
-    text-overflow: ellipsis;
-    overflow: hidden;
-}
-
-:is(.header, .stat-row):has(>input:checked){
-    border: solid yellow;
-}
-
-.feature-list {
-    margin-block-end: var(--s0);
-}
-
-.feature-list a {
-    text-decoration: none;
-    display: inline-block;
-}
-
-.feature-list dt::after {
-    content: ":";
-}
-
-.area-mark {
-    height: 1rem;
-    width: 1rem;
-    text-align: center;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-}
-
-.area-mark::before {
-    content: "";
-    height: var(--w);
-    width: var(--w);
-    margin: 0 auto;
-    background: black;
-    display: inline-block;   
-    vertical-align: middle;
-}
-
-.feature-clustering {
-    line-height: 130%;
-    gap: var(--s0);
-    align-items: stretch;
-    justify-content: space-between;
-}
-
-.feature-clustering > * {
-    --space: var(--s-3);
-    overflow-y: clip;
-    overflow-x: clip;
-    white-space: nowrap;
-    flex: 1 auto;
-    max-width: 100%;
-}
-
-.header {
-    background: var(--header);
-    text-align: right;
-    border-bottom: solid;
-    margin-block-end: var(--s-2);
-    position: sticky;
-    top: 0;
-    padding: var(--s-3);
-}
-
-.header h2 {
-    display: inline-block;
-    font-size: 100%;
-}
-
-.display-number {
-    font-family: monospace;
-}
-
-/* Concordance handling CSS */
-.concordance {
-    --space: var(--s-2);
-    margin: var(--s-2);
-    width: 100%;
-    table-layout: fixed;
-}
-
-.concordance td {
-    text-overflow: ellipsis;
-    overflow: clip;
-    white-space: nowrap;
-}
-
-.concordance-match {
-    width: min-content;
-    padding: 0 var(--s-3);
-}
-
-.concordance-pre {
-    text-align: right;
-    direction: rtl;
-    width: auto;
-}
-
-.concordance-post {
-    text-align: left;
-    width: auto;
-}
-
-.matches summary,details {
-    display: inline;
-    cursor: pointer;
-}
-
-.matches > * {
-    margin-inline-end: var(--s-1);
-}
-
-.matches dt::after {
-    content: ":";
-}
-
-@view-transition {
-  navigation: replace;
-}
-
-"""
-
 
 def calculate_area_mark(normalised_area, total_doc_count, min_mapping_size=0.05):
     """
@@ -501,3 +259,254 @@ def render_field_table(index_summary):
             )
         ),
     )
+
+
+# This is the default CSS.
+# A corpus can have additional CSS, it will be appended after this to allow it to
+# override/customise any default rules specified here.
+default_css = """
+/* Box sizing everywhere */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --ratio: 1.618;
+    --s0: 1rem;
+    --s1: calc(var(--s0) * var(--ratio));
+    --s2: calc(var(--s1) * var(--ratio));
+    --s3: calc(var(--s2) * var(--ratio));
+    --s-1: calc(var(--s0) / var(--ratio));
+    --s-2: calc(var(--s-1) / var(--ratio));
+    --s-3: calc(var(--s-2) / var(--ratio));
+    --header: #efefef;
+}
+
+.cluster {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+header {
+    padding: var(--s0);
+    background-color: var(--header);
+    height: fit-content;
+    border-bottom: solid;
+}
+
+nav ul {
+    list-style: none;
+    margin-bottom: var(--s-1);
+}
+
+.nav-label {
+    margin-inline-end: var(--s-1);
+}
+
+.inlined {
+    display: inline-block;
+}
+
+
+ul > li {
+    list-style: none;
+    margin-right: var(--s-1);
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+main > * {
+    margin: var(--s0);
+}
+
+.columns {
+    overflow: hidden;
+    gap: var(--s3);
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+}
+
+.column {
+    overflow: scroll;
+    flex: var(--column-flex, 1);
+}
+
+pre {
+    white-space: pre-wrap;
+}
+
+h1, h2, h3 {
+    font-size: 100%;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.stack > * {
+  margin-block: 0;
+}
+
+.stack > * + * {
+  margin-block-start: var(--space, 1rem);
+}
+
+.stat-row {
+    display: flex;
+    justify-content: end;
+    gap: var(--s-1);
+    flex-wrap: nowrap;
+    align-items: center;
+    padding: 0 var(--s-3);
+}
+
+.stat-row :not(:first-child) {
+    flex-shrink: 0;
+}
+
+.stat-row :first-child {
+    text-align: left;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+:is(.header, .stat-row):has(>input:checked){
+    border: solid yellow;
+}
+
+.feature-list {
+    margin-block-end: var(--s0);
+}
+
+.feature-list a {
+    text-decoration: none;
+    display: inline-block;
+}
+
+.feature-list dt::after {
+    content: ":";
+}
+
+.area-mark {
+    height: 1rem;
+    width: 1rem;
+    text-align: center;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+}
+
+.area-mark::before {
+    content: "";
+    height: var(--w);
+    width: var(--w);
+    margin: 0 auto;
+    background: black;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.feature-clustering {
+    line-height: 130%;
+    gap: var(--s0);
+    align-items: stretch;
+    justify-content: space-between;
+}
+
+.feature-clustering > * {
+    --space: var(--s-3);
+    overflow-y: clip;
+    overflow-x: clip;
+    white-space: nowrap;
+    flex: 1 auto;
+    max-width: 100%;
+}
+
+.header {
+    background: var(--header);
+    text-align: right;
+    border-bottom: solid;
+    margin-block-end: var(--s-2);
+    position: sticky;
+    top: 0;
+    padding: var(--s-3);
+}
+
+.header h2 {
+    display: inline-block;
+    font-size: 100%;
+}
+
+.display-number {
+    font-family: monospace;
+}
+
+/* Concordance handling CSS */
+.concordance {
+    --space: var(--s-2);
+    margin: var(--s-2);
+    width: 100%;
+    table-layout: fixed;
+}
+
+.concordance td {
+    text-overflow: ellipsis;
+    overflow: clip;
+    white-space: nowrap;
+}
+
+.concordance-match {
+    width: min-content;
+    padding: 0 var(--s-3);
+}
+
+.concordance-pre {
+    text-align: right;
+    direction: rtl;
+    width: auto;
+}
+
+.concordance-post {
+    text-align: left;
+    width: auto;
+}
+
+.matches summary,details {
+    display: inline;
+    cursor: pointer;
+}
+
+.matches > * {
+    margin-inline-end: var(--s-1);
+}
+
+.matches dt::after {
+    content: ":";
+}
+
+@view-transition {
+  navigation: replace;
+}
+
+.search-hit > * {
+    --space: var(--s-1);
+}
+
+"""
