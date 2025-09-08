@@ -138,6 +138,7 @@ class IndexedField(HyperrealRequestHandler):
                 column_flex={1: 2},
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
+                body_header=web_rendering.heatmap_legend("Similarity", 0, 1, 10),
             )
         )
 
@@ -319,6 +320,7 @@ class BrowseClusters(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
+                body_header=web_rendering.heatmap_legend("Similarity", 0, 1, 10),
             )
         )
 
@@ -530,7 +532,10 @@ class ClusterDrillDown(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
-                body_header=feature_form,
+                body_header=(
+                    feature_form,
+                    web_rendering.heatmap_legend("Similarity", 0, 1, 10),
+                ),
                 sub_nav_label="Change Clusters",
                 sub_nav_links=nav_links,
             )

@@ -564,7 +564,7 @@ if not clustering.cluster_ids:
     start_time = time.monotonic()
 
     random_clustering = clustering.initialise_random_clustering(
-        256, min_docs=10, include_fields=["body", "subject"]
+        256, min_docs=10, include_fields=["body"]
     )
 
     clustering.replace_clusters(random_clustering)

@@ -12,6 +12,27 @@ from urllib.parse import quote
 from tinyhtml import frag, h, html, raw
 
 
+def heatmap_legend(label, start, stop, steps):
+    """
+    Make a legend for the heatmap scales.
+
+    """
+
+    width = stop - start
+    bin_width = width / steps
+
+    bins = []
+
+    for i in range(steps + 1):
+        step = start + bin_width * i
+        bins.append(h("td", klass="heatmap", style=f"--w: {step:.3f}")(f"{step:.1f}"))
+
+    return h("table", klass="legend")(
+        h("caption")("Legend for similarity score heatmap."),
+        h("tr", klass="cluster")(h("th", scope="col")(label), *bins),
+    )
+
+
 def render_feature_stats_table(
     feature_stats,
     caption=None,
@@ -31,7 +52,10 @@ def render_feature_stats_table(
     if count_stat:
         header_fields.append(h("th", scope="col", klass="display-count")(count_stat))
     if heatmap_stat:
-        header_fields.append(h("th", scope="col", klass="heatmap-value")(heatmap_stat))
+        header_fields.append(
+            # style might be set from the cluster level similarity, so need to reset
+            h("th", scope="col", klass="heatmap-value", style="--w: 0;")(heatmap_stat)
+        )
     if feature_form_details[0] is not None:
         header_fields.append(h("th", scope="col")("Select"))
 
@@ -144,7 +168,7 @@ def render_feature_clustering(
         header = h("div", klass="feature-table-header")(cluster_title)
 
         clusters.append(
-            h("li", klass="heatmap-border cluster-features", style=style)(
+            h("li", klass="heatmap-left cluster-features", style=style)(
                 header,
                 render_feature_stats_table(
                     features,
@@ -208,6 +232,9 @@ def full_page(
 
     column_flex = column_flex or {}
 
+    if sub_nav_links:
+        body_header = [sub_nav, body_header]
+
     return html(lang="en")(
         h("head")(
             h("meta", name="viewport", content="width=device-width, initial-scale=1"),
@@ -215,9 +242,13 @@ def full_page(
             h("style")(raw(default_css), raw(extra_css)),
         ),
         h("body")(
-            h("header")(main_nav, sub_nav),
+            h("header")(main_nav),
             h("main")(
-                h("div", klass="main-header")(body_header) if body_header else None,
+                (
+                    h("div", klass="main-header cluster")(body_header)
+                    if body_header
+                    else None
+                ),
                 h("div", klass="columns")(
                     (
                         h(
@@ -341,6 +372,10 @@ main > * {
     margin: var(--s0);
 }
 
+.main-header {
+    border: solid black;
+}
+
 .columns {
     overflow: hidden;
     gap: var(--s1);
@@ -354,39 +389,6 @@ main > * {
     flex: var(--column-flex, 1);
     border: solid;
     padding: var(--s0);
-
-    /* https://css-tricks.com/books/greatest-css-tricks/scroll-shadows/ */
-    background:
-        /* Shadow Cover TOP */
-        linear-gradient(
-          white 30%,
-          rgba(255, 255, 255, 0)
-        ) center top,
-
-        /* Shadow Cover BOTTOM */
-        linear-gradient(
-          rgba(255, 255, 255, 0),
-          white 70%
-        ) center bottom,
-
-        /* Shadow TOP */
-        radial-gradient(
-          farthest-side at 50% 0,
-          rgba(0, 0, 0, 1.0),
-          rgba(0, 0, 0, 0)
-        ) center top,
-
-        /* Shadow BOTTOM */
-        radial-gradient(
-          farthest-side at 50% 100%,
-          rgba(0, 0, 0, 1.0),
-          rgba(0, 0, 0, 0)
-        ) center bottom;
-
-    background-repeat: no-repeat;
-    background-size: 100% var(--s1), 100% var(--s1), 100% var(--s-1), 100% var(--s-1);
-    background-attachment: local, local, scroll, scroll;
-    z-index: 1;
 }
 
 pre {
@@ -462,6 +464,10 @@ h1, h2, h3 {
     --space: var(--s-1);
 }
 
+.legend :is(td, th) {
+    padding: var(--s-1);
+    margin: 0;
+}
 
 /****** Layout for feature tables *******/
 
@@ -477,7 +483,7 @@ h1, h2, h3 {
 
 .feature-table thead {
     whitespace: nowrap;
-    border-bottom: solid;
+    border-bottom: var(--s-3) double black;
 }
 
 .feature-table thead th {
@@ -507,13 +513,8 @@ tbody :is(.feature-field, .feature-value) {
 }
 
 .repeat-in-run {
-    font-size: 75%;
+    font-size: 60%;
     font-weight: lighter;
-}
-
-.heatmap-value {
-    font-size: 0;
-    width: 0;
 }
 
 .heatmap {
@@ -524,6 +525,11 @@ tbody :is(.feature-field, .feature-value) {
     );
 }
 
+.heatmap-value {
+    font-size: 0;
+    width: var(--s1);
+}
+
 .heatmap a, .heatmap a:visited {
     color: oklch(
         calc(round(var(--w, 1) + 0.15))
@@ -532,8 +538,8 @@ tbody :is(.feature-field, .feature-value) {
     );
 }
 
-.heatmap-border {
-    border-left: var(--s0) solid oklch(calc(1 - var(--w, 0)) 0 0);
+.heatmap-left {
+    border-left: var(--s1) solid oklch(calc(1 - var(--w, 0)) 0 0);
 }
 
 .display-count {
