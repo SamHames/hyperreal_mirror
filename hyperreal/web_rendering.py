@@ -215,8 +215,7 @@ def full_page(
     """Render a complete page with navigation and a page title."""
 
     nav_links = [
-        ("Home", "/"),
-        ("Feature Lists", "/indexed-field/"),
+        ("Index Overview", "/"),
         ("Browse", "/browse"),
         ("Drilldown", "/cluster/"),
     ]
@@ -231,6 +230,10 @@ def full_page(
     extra_css = extra_css or ""
 
     column_flex = column_flex or {}
+
+    column_width_style = None
+    if body_columns and len(body_columns) == 1:
+        column_width_style = f"--column-width: 100%"
 
     if sub_nav_links:
         body_header = [sub_nav, body_header]
@@ -249,7 +252,7 @@ def full_page(
                     if body_header
                     else None
                 ),
-                h("div", klass="columns")(
+                h("div", klass="columns", style=column_width_style)(
                     (
                         h(
                             "div",
@@ -323,6 +326,7 @@ default_css = """
     --s-1: calc(var(--s0) / var(--ratio));
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
+    --column-width: 72ch;
 }
 
 .cluster {
@@ -374,6 +378,10 @@ main > * {
 
 .main-header {
     border: solid black;
+    margin: var(--s0);
+    height: fit-content;
+    border: solid;
+    padding: var(--s-1);
 }
 
 .columns {
@@ -390,7 +398,7 @@ main > * {
     flex: var(--column-flex, 1);
     border: solid;
     padding: var(--s0);
-    max-width: 72ch;
+    max-width: var(--column-width);
 }
 
 pre {
@@ -464,6 +472,10 @@ h1, h2, h3 {
 
 .search-hit > * {
     --space: var(--s-1);
+}
+
+.search-hit {
+    --space: var(--s1);
 }
 
 .legend :is(td, th) {

@@ -145,20 +145,43 @@ class IndexedField(HyperrealRequestHandler):
 
 class IndexedFieldOverview(HyperrealRequestHandler):
     def get(self):
+        rendered_fields = {}
+
+        for field, stats in self.idx.indexed_field_summary.items():
+
+            row = stats.copy()
+            handler = self.idx.field_handlers[field][0]
+
+            row["Mininum Value"] = handler.to_html(row["Mininum Value"])
+            row["Maximum Value"] = handler.to_html(row["Maximum Value"])
+
+            key = h("a", href=self.reverse_url("field-features", field))(field)
+
+            rendered_fields[key] = row
+
+        table = web_rendering.render_field_table(rendered_fields)
+
         sub_nav_links = {
-            "Indexed Fields": [
+            "Indexed fields:": [
                 (f, self.reverse_url("field-features", f))
                 for f in self.idx.field_handlers
             ]
         }
+
         self.write(
             self.render_page(
                 f"Indexed Feature Overview",
-                [],
+                [table],
                 sub_nav_links=sub_nav_links,
-                sub_nav_label="Indexed Fields",
+                sub_nav_label="Indexed fields",
             )
         )
+
+
+class MainHandler(HyperrealRequestHandler):
+    def get(self):
+
+        self.write(self.render_page(f"Overview of Indexed Fields", [table]))
 
 
 def render_facets(idx, query, base_url):
@@ -593,37 +616,10 @@ class DeleteCluster(HyperrealRequestHandler):
     get = post
 
 
-class MainHandler(HyperrealRequestHandler):
-    def get(self):
-
-        rendered_fields = {}
-
-        for field, stats in self.idx.indexed_field_summary.items():
-
-            row = stats.copy()
-            handler = self.idx.field_handlers[field][0]
-
-            row["Mininum Value"] = handler.to_html(row["Mininum Value"])
-            row["Maximum Value"] = handler.to_html(row["Maximum Value"])
-
-            key = h("a", href=self.reverse_url("field-features", field))(field)
-
-            rendered_fields[key] = row
-
-        table = web_rendering.render_field_table(rendered_fields)
-
-        self.write(
-            self.render_page(
-                f"Overview of Indexed Fields",
-                [table],
-            )
-        )
-
-
 def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
     return tornado.web.Application(
         handlers=[
-            tornado.web.url(rf"{base_path}/", MainHandler, name="home"),
+            tornado.web.url(rf"{base_path}/", IndexedFieldOverview, name="home"),
             tornado.web.url(
                 rf"{base_path}/indexed-field/?",
                 IndexedFieldOverview,

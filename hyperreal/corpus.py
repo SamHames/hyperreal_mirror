@@ -304,8 +304,10 @@ class HyperrealCorpus:
                 )
 
             results.append(
-                h("li", klass="search-hit stack")(
-                    h("h3")(doc_key), doc_html, doc_concordances
+                h("li", klass="search-hit")(
+                    h("div", klass="stack")(
+                        h("h3")(doc_key), doc_html, doc_concordances
+                    )
                 )
             )
 
