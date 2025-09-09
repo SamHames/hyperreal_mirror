@@ -17,7 +17,7 @@ Out of scope for this component right now are:
 """
 
 import asyncio
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlencode
 
 import tornado
 from tinyhtml import h, raw
@@ -218,15 +218,22 @@ class BrowseClusters(HyperrealRequestHandler):
     async def get(self):
 
         top_k_features = int(self.get_argument("top_k_features", "10"))
-        top_k_clusters = int(self.get_argument("top_k_clusters", "40"))
+        top_k_clusters = int(self.get_argument("top_k_clusters", "30"))
         f = self.get_argument("f", None, strip=False)
         v = self.get_argument("v", None, strip=False)
         v1 = self.get_argument("v1", None, strip=False)
         v2 = self.get_argument("v2", None, strip=False)
         c = self.get_argument("c", None)
 
+        expand_clusters = set(int(e) for e in self.get_arguments("expand"))
+
         heatmap_stat = "jaccard_similarity"
         skip_feature_pivoting = False
+        return_query_items = []
+        """
+        Hold the query string components for returning to this query with additional
+        settings.
+        """
 
         # Special case when nothing is selected to pivot by
         if f is None and c is None:
@@ -242,18 +249,28 @@ class BrowseClusters(HyperrealRequestHandler):
             heatmap_stat = "relative_doc_count"
 
         elif f is not None and v is not None:
+            return_query_items.append(("f", f))
+            return_query_items.append(("v", v))
+
             feature = self.idx.feature_from_url((f, v))
             matching_docs, matching_doc_count, _ = self.idx[feature]
 
             highlight_features = [feature]
 
         elif f is not None and (v1 or v2 is not None):
+            return_query_items.append(("f", f))
+            if v1 is not None:
+                return_query_items.append(("v1", v1))
+            if v2 is not None:
+                return_query_items.append(("v2", v2))
+
             feature = self.idx.feature_from_url((f, v1, v2))
             matching_docs, matching_doc_count, _ = self.idx[feature]
 
             highlight_features = [feature]
 
         elif c is not None:
+            return_query_items.append(("c", c))
             cluster_id = int(c)
             matching_docs, matching_doc_count = self.feature_clusters.cluster_docs(
                 cluster_id
@@ -281,14 +298,16 @@ class BrowseClusters(HyperrealRequestHandler):
                 top_k_features=int(top_k_features)
             )
             # Override to show all clusters in this case
-            top_k_clusters = len(cluster_stats)
+            top_k_clusters = matched_cluster_count = len(cluster_stats)
         else:
             cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
+            matched_cluster_count = len(
+                TableFilter(order_by=heatmap_stat, keep_above=0)(cluster_stats)
+            )
 
-        cluster_filter = TableFilter(
+        cluster_stats = TableFilter(
             order_by=heatmap_stat, keep_above=0, first_k=top_k_clusters
-        )
-        cluster_stats = cluster_filter.apply_filter(cluster_stats)
+        )(cluster_stats)
 
         if skip_feature_pivoting:
             faceted = clustering
@@ -296,13 +315,24 @@ class BrowseClusters(HyperrealRequestHandler):
             faceted = self.feature_clusters.facet_clustering_by_query(
                 matching_docs, cluster_stats.keys()
             )
+            # Count the number of features that matched at all, regardless of whether
+            # they'll be displayed or not.
+            matching_filter = TableFilter(order_by=heatmap_stat, keep_above=0)
+            for cluster_id, features in faceted.items():
+                cluster_stats[cluster_id]["matching_feature_count"] = len(
+                    matching_filter(features)
+                )
 
         feature_filter = TableFilter(
             order_by=heatmap_stat, keep_above=0, first_k=top_k_features
         )
 
         clustering = {
-            cluster_id: feature_filter.apply_filter(features)
+            cluster_id: (
+                feature_filter(features)
+                if cluster_id not in expand_clusters
+                else features
+            )
             for cluster_id, features in faceted.items()
         }
 
@@ -313,24 +343,41 @@ class BrowseClusters(HyperrealRequestHandler):
             cluster_query = f"c={cluster_id}"
             cluster_stats[cluster_id]["header_url"] = base_url + cluster_query
 
-            # cluster_stats[cluster_id]["seemore_url"] = self.reverse_url(
-            #     "cluster-drilldown", cluster_id
-            # )
+            if cluster_stats[cluster_id]["matching_feature_count"] > top_k_features:
+
+                this_return = [*return_query_items, ("expand", cluster_id)]
+
+                return_url = self.reverse_url("browse") + urlencode(this_return)
+                cluster_stats[cluster_id]["seemore_url"] = return_url
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_querystring(f)
                 stats["url"] = base_url + query_string
                 stats["edit_form_feature_value"] = query_string
 
-        rendered = web_rendering.render_feature_clustering(
-            clustering,
-            cluster_stats,
-            feature_url_key="url",
-            header_url_key="header_url",
-            # seemore_url_key="seemore_url",
-            heatmap_stat=heatmap_stat,
-            count_stat="doc_count",
-            feature_form_details=("edit-model-form", "edit_form_feature_value"),
+        see_all_clusters_link = None
+
+        if len(cluster_stats) < matched_cluster_count:
+            return_query_items.append(("top_k_clusters", matched_cluster_count))
+            return_url = self.reverse_url("browse") + urlencode(return_query_items)
+            see_all_clusters_link = h("div")(
+                h("a", href=return_url)(
+                    "Show all ", matched_cluster_count, " matching clusters"
+                )
+            )
+
+        rendered = (
+            web_rendering.render_feature_clustering(
+                clustering,
+                cluster_stats,
+                feature_url_key="url",
+                header_url_key="header_url",
+                seemore_url_key="seemore_url",
+                heatmap_stat=heatmap_stat,
+                count_stat="doc_count",
+                feature_form_details=("edit-model-form", "edit_form_feature_value"),
+            ),
+            see_all_clusters_link,
         )
 
         form_link = self.reverse_url("create-cluster")

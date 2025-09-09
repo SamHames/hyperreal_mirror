@@ -136,13 +136,16 @@ def render_feature_clustering(
 
         features = feature_clustering[cluster_id]
 
+        display_feature_count = len(features)
+        matching_feature_count = stats["matching_feature_count"]
+
         footer = None
-        if seemore_url_key is not None:
+        if seemore_url_key is not None and stats.get(seemore_url_key, False):
             footer = h("div")(
                 h(
                     "a",
                     href=stats[seemore_url_key],
-                )("Show all (+)")
+                )("Show all ", matching_feature_count, " matching features")
             )
         # TODO - display number of features, don't show the link if there's no
         # expansion.
