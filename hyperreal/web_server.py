@@ -195,7 +195,7 @@ def render_facets(idx, query, base_url):
 
         for f, stats in faceted.items():
             query_string = idx.feature_to_querystring(f)
-            stats["url"] = base_url + query_string
+            stats["url"] = base_url + "?" + query_string
 
         rendered_facets.append(
             h("li")(
@@ -356,29 +356,36 @@ class BrowseClusters(HyperrealRequestHandler):
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
             cluster_query = f"c={cluster_id}"
-            cluster_stats[cluster_id]["header_url"] = base_url + cluster_query
+            cluster_stats[cluster_id]["header_url"] = "".join(
+                (base_url, "?", cluster_query)
+            )
 
             if cluster_stats[cluster_id]["matching_feature_count"] > top_k_features:
 
                 this_return = [*return_query_items, ("expand", cluster_id)]
 
-                return_url = (
-                    self.reverse_url("browse")
-                    + urlencode(this_return)
-                    + f"#cluster-{cluster_id}"
+                return_url = "".join(
+                    (
+                        self.reverse_url("browse"),
+                        "?",
+                        urlencode(this_return),
+                        f"#cluster-{cluster_id}",
+                    )
                 )
                 cluster_stats[cluster_id]["seemore_url"] = return_url
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_querystring(f)
-                stats["url"] = base_url + query_string
+                stats["url"] = "".join((base_url, "?", query_string))
                 stats["edit_form_feature_value"] = query_string
 
         see_all_clusters_link = None
 
         if len(cluster_stats) < matched_cluster_count:
             return_query_items.append(("top_k_clusters", matched_cluster_count))
-            return_url = self.reverse_url("browse") + urlencode(return_query_items)
+            return_url = "".join(
+                (self.reverse_url("browse"), "?", urlencode(return_query_items))
+            )
             see_all_clusters_link = h("div")(
                 h("a", href=return_url)(
                     "Show all ", matched_cluster_count, " matching clusters"
@@ -446,7 +453,7 @@ class CreateCluster(HyperrealRequestHandler):
             )
 
             self.redirect(
-                self.reverse_url("browse") + f"?c={new_cluster_id}",
+                self.reverse_url("browse") + f"?c={new_cluster_id}#{new_cluster_id}",
             )
 
         else:
@@ -472,7 +479,8 @@ class MergeClusters(HyperrealRequestHandler):
             merge_cluster_id = self.feature_clusters.merge_clusters(clusters)
 
             self.redirect(
-                self.reverse_url("browse") + f"?c={merge_cluster_id}",
+                self.reverse_url("browse")
+                + f"?c={merge_cluster_id}#{merge_cluster_id}",
             )
 
         else:
@@ -506,7 +514,7 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
         handlers=[
             tornado.web.url(rf"{base_path}/", IndexedFieldOverview, name="home"),
             tornado.web.url(
-                rf"{base_path}/indexed-field/?",
+                rf"{base_path}/indexed-field/",
                 IndexedFieldOverview,
                 name="field-index",
             ),
@@ -515,19 +523,19 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 IndexedField,
                 name="field-features",
             ),
-            tornado.web.url(rf"{base_path}/browse/?", BrowseClusters, name="browse"),
+            tornado.web.url(rf"{base_path}/browse/", BrowseClusters, name="browse"),
             tornado.web.url(
-                rf"{base_path}/cluster/create",
+                rf"{base_path}/cluster/create/",
                 CreateCluster,
                 name="create-cluster",
             ),
             tornado.web.url(
-                rf"{base_path}/cluster/merge",
+                rf"{base_path}/cluster/merge/",
                 MergeClusters,
                 name="merge-clusters",
             ),
             tornado.web.url(
-                rf"{base_path}/cluster/delete",
+                rf"{base_path}/cluster/delete/",
                 DeleteCluster,
                 name="delete-clusters",
             ),
