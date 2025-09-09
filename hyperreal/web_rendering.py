@@ -382,6 +382,7 @@ main > * {
     display: flex;
     flex-direction: row;
     flex: 1;
+    justify-content: center;
 }
 
 .column {
@@ -389,6 +390,7 @@ main > * {
     flex: var(--column-flex, 1);
     border: solid;
     padding: var(--s0);
+    max-width: 72ch;
 }
 
 pre {
