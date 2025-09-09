@@ -147,9 +147,6 @@ def render_feature_clustering(
                     href=stats[seemore_url_key],
                 )("Show all ", matching_feature_count, " matching features")
             )
-        # TODO - display number of features, don't show the link if there's no
-        # expansion.
-        # Add anchor links to headers to return to the same point after expansion.
 
         selector = None
         if feature_form_details[0] is not None:
@@ -165,13 +162,16 @@ def render_feature_clustering(
         if heatmap_stat is not None:
             style = f"--w: {stats[heatmap_stat]:.3f}"
 
-        cluster_title = h("h2", klass="cluster spread")(
+        cluster_title = h("h2", id=f"cluster-{cluster_id}", klass="cluster spread")(
             "Cluster: ", cluster_id, selector
         )
+
         if header_url_key is not None:
             cluster_title = h("a", href=stats[header_url_key])(cluster_title)
 
-        header = h("div", klass="feature-table-header")(cluster_title)
+        header = h("div", klass="feature-table-header")(
+            cluster_title,
+        )
 
         clusters.append(
             h("li", klass="heatmap-left cluster-features", style=style)(

@@ -225,7 +225,11 @@ class BrowseClusters(HyperrealRequestHandler):
         v2 = self.get_argument("v2", None, strip=False)
         c = self.get_argument("c", None)
 
-        expand_clusters = set(int(e) for e in self.get_arguments("expand"))
+        expand_cluster_list = [int(e) for e in self.get_arguments("expand")]
+        expand_clusters = set(expand_cluster_list)
+        anchor_cluster = None
+        if expand_cluster_list:
+            anchor_cluster = expand_cluster_list[-1]
 
         heatmap_stat = "jaccard_similarity"
         skip_feature_pivoting = False
@@ -234,6 +238,8 @@ class BrowseClusters(HyperrealRequestHandler):
         Hold the query string components for returning to this query with additional
         settings.
         """
+
+        return_query_items.extend([("expand", c) for c in expand_cluster_list])
 
         # Special case when nothing is selected to pivot by
         if f is None and c is None:
@@ -297,6 +303,13 @@ class BrowseClusters(HyperrealRequestHandler):
             clustering = self.feature_clusters.clustering(
                 top_k_features=int(top_k_features)
             )
+
+            # Override any clusters with expand = True
+            for cluster_id in expand_clusters:
+                clustering[cluster_id] = self.feature_clusters.cluster_features(
+                    cluster_id
+                )
+
             # Override to show all clusters in this case
             top_k_clusters = matched_cluster_count = len(cluster_stats)
         else:
@@ -311,6 +324,7 @@ class BrowseClusters(HyperrealRequestHandler):
 
         if skip_feature_pivoting:
             faceted = clustering
+
         else:
             faceted = self.feature_clusters.facet_clustering_by_query(
                 matching_docs, cluster_stats.keys()
@@ -323,15 +337,16 @@ class BrowseClusters(HyperrealRequestHandler):
                     matching_filter(features)
                 )
 
-        feature_filter = TableFilter(
+        top_feature_filter = TableFilter(
             order_by=heatmap_stat, keep_above=0, first_k=top_k_features
         )
+        non_zero_feature_filter = TableFilter(order_by=heatmap_stat, keep_above=0)
 
         clustering = {
             cluster_id: (
-                feature_filter(features)
+                top_feature_filter(features)
                 if cluster_id not in expand_clusters
-                else features
+                else non_zero_feature_filter(features)
             )
             for cluster_id, features in faceted.items()
         }
@@ -347,7 +362,11 @@ class BrowseClusters(HyperrealRequestHandler):
 
                 this_return = [*return_query_items, ("expand", cluster_id)]
 
-                return_url = self.reverse_url("browse") + urlencode(this_return)
+                return_url = (
+                    self.reverse_url("browse")
+                    + urlencode(this_return)
+                    + f"#cluster-{cluster_id}"
+                )
                 cluster_stats[cluster_id]["seemore_url"] = return_url
 
             for f, stats in clustering[cluster_id].items():

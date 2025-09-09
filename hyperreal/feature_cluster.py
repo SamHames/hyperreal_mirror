@@ -184,6 +184,7 @@ class FeatureClustering(IndexPlugin):
                 "doc_count": doc_count,
                 "relative_doc_count": doc_count / total_docs,
                 "feature_count": feature_count,
+                "matching_feature_count": feature_count,
             }
             for cluster_id, doc_count, feature_count in rows
         }
