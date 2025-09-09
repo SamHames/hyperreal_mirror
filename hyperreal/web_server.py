@@ -313,22 +313,30 @@ class BrowseClusters(HyperrealRequestHandler):
             cluster_query = f"c={cluster_id}"
             cluster_stats[cluster_id]["header_url"] = base_url + cluster_query
 
-            cluster_stats[cluster_id]["seemore_url"] = self.reverse_url(
-                "cluster-drilldown", cluster_id
-            )
+            # cluster_stats[cluster_id]["seemore_url"] = self.reverse_url(
+            #     "cluster-drilldown", cluster_id
+            # )
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_querystring(f)
                 stats["url"] = base_url + query_string
+                stats["edit_form_feature_value"] = query_string
 
         rendered = web_rendering.render_feature_clustering(
             clustering,
             cluster_stats,
             feature_url_key="url",
             header_url_key="header_url",
-            seemore_url_key="seemore_url",
+            # seemore_url_key="seemore_url",
             heatmap_stat=heatmap_stat,
             count_stat="doc_count",
+            feature_form_details=("edit-model-form", "edit_form_feature_value"),
+        )
+
+        form_link = self.reverse_url("create-cluster")
+        merge_cluster_link = self.reverse_url("merge-clusters")
+        edit_form = web_rendering.render_feature_edit_forms(
+            form_link, merge_cluster_link
         )
 
         self.write(
@@ -343,224 +351,10 @@ class BrowseClusters(HyperrealRequestHandler):
                         matching_doc_count=matching_doc_count,
                     ),
                 ],
-                body_header=web_rendering.heatmap_legend("Similarity", 0, 1, 10),
-            )
-        )
-
-
-class ClusterDrillDownRedirector(HyperrealRequestHandler):
-    """
-    When no cluster is selected, redirect to the one with the lowest cluster_id.
-
-    """
-
-    def get(self):
-        redirect_to_cluster = min(self.feature_clusters.cluster_ids)
-        self.redirect(
-            self.reverse_url("cluster-drilldown", redirect_to_cluster),
-        )
-
-
-class ClusterDrillDown(HyperrealRequestHandler):
-    """
-    View for drilling down into a specific cluster, laid out against other clusters.
-
-    """
-
-    async def get(self, cluster_id):
-
-        drill_cluster_id = int(cluster_id)
-
-        top_k_clusters = int(self.get_argument("top_k_clusters", "40"))
-        top_k_features = int(self.get_argument("top_k_features", "10"))
-        f = self.get_argument("f", None, strip=False)
-        v = self.get_argument("v", None, strip=False)
-        v1 = self.get_argument("v1", None, strip=False)
-        v2 = self.get_argument("v2", None, strip=False)
-        c = self.get_argument("c", None)
-
-        matching_docs, _ = self.feature_clusters.cluster_docs(drill_cluster_id)
-
-        other_docs = None
-
-        highlight_features = []
-        highlight_clusters = []
-
-        if f is None and c is None:
-            pass
-
-        elif f is not None and v is not None:
-            feature = self.idx.feature_from_url((f, v))
-            other_docs, count, _ = self.idx[feature]
-
-            highlight_features.append(feature)
-
-        elif f is not None and (v1 or v2 is not None):
-            feature = self.idx.feature_from_url((f, v1, v2))
-            other_docs, count, _ = self.idx[feature]
-            highlight_features.append(feature)
-
-        elif c is not None:
-            cluster_id = int(c)
-            other_docs, count = self.feature_clusters.cluster_docs(cluster_id)
-            highlight_clusters.append(cluster_id)
-
-        else:
-            raise ValueError("Invalid combination of feature or clusters.")
-
-        if other_docs is not None:
-            matching_docs &= other_docs
-
-        matching_doc_count = len(matching_docs)
-
-        docs = []
-        facets = None
-        base_url = self.reverse_url("cluster-drilldown", drill_cluster_id)
-        sample_doc_count = 20
-
-        search_results, sample_doc_count = self.render_html_sample_docs(
-            matching_docs, sample_doc_count, highlight_features=highlight_features
-        )
-
-        drill_cluster_filter = TableFilter(order_by="jaccard_similarity", keep_above=0)
-        cluster_filter = TableFilter(
-            order_by="jaccard_similarity", keep_above=0, first_k=top_k_clusters
-        )
-        feature_filter = TableFilter(
-            order_by="jaccard_similarity", keep_above=0, first_k=top_k_features
-        )
-
-        # Similarity of matching docs to all clusters
-        cluster_similarity = self.feature_clusters.facet_clusters_by_query(
-            matching_docs
-        )
-
-        # Pull out the selected cluster first before computing the order.
-        drill_cluster_order = {drill_cluster_id: cluster_similarity[drill_cluster_id]}
-
-        cluster_order = cluster_filter.apply_filter(cluster_similarity)
-        # Ensure that the selected cluster is still there after truncating
-        cluster_order[drill_cluster_id] = drill_cluster_order[drill_cluster_id]
-
-        # And then all features for all non-zero similarity clusters
-        cluster_feature_order = self.feature_clusters.facet_clustering_by_query(
-            matching_docs, cluster_order
-        )
-
-        # Pop the currently selected cluster/features out to display in detail
-        drill_cluster_features = {
-            drill_cluster_id: drill_cluster_filter.apply_filter(
-                cluster_feature_order[drill_cluster_id]
-            )
-        }
-
-        # And remove them from everything else so they can be left in place.
-        del cluster_order[drill_cluster_id]
-        del cluster_feature_order[drill_cluster_id]
-
-        cluster_feature_order = {
-            cluster_id: feature_filter.apply_filter(cluster_feature_order[cluster_id])
-            for cluster_id in cluster_order
-        }
-
-        facets = render_facets(self.idx, matching_docs, base_url)
-
-        # Update the clusters and features to include a url link
-        for cluster_id in cluster_order.keys():
-            cluster_query = f"c={cluster_id}"
-            cluster_order[cluster_id]["header_url"] = base_url + cluster_query
-            cluster_order[cluster_id]["seemore_url"] = self.reverse_url(
-                "cluster-drilldown", cluster_id
-            )
-
-            for f, stats in cluster_feature_order[cluster_id].items():
-                query_string = self.idx.feature_to_querystring(f)
-                stats["url"] = base_url + query_string
-                stats["feature_form_value"] = query_string
-
-        drill_cluster_order[drill_cluster_id]["header_url"] = base_url
-        for f, stats in drill_cluster_features[drill_cluster_id].items():
-            query_string = self.idx.feature_to_querystring(f)
-            stats["url"] = base_url + query_string
-            stats["feature_form_value"] = query_string
-
-        drill_cluster_rendered = web_rendering.render_feature_clustering(
-            drill_cluster_features,
-            drill_cluster_order,
-            feature_url_key="url",
-            header_url_key="header_url",
-            heatmap_stat="jaccard_similarity",
-            count_stat="hits",
-            feature_form_details=(
-                "feature-form",
-                "feature_form_value",
-            ),
-        )
-        other_clusters_rendered = web_rendering.render_feature_clustering(
-            cluster_feature_order,
-            cluster_order,
-            feature_url_key="url",
-            header_url_key="header_url",
-            seemore_url_key="seemore_url",
-            heatmap_stat="jaccard_similarity",
-            count_stat="hits",
-            feature_form_details=(
-                "feature-form",
-                "feature_form_value",
-            ),
-        )
-
-        # If just one feature is selected, use that for highlighting, not the original
-        # clustering? This might need some further UI work to make sense of the
-        # possible combinations.
-        if len(highlight_features) != 1:
-
-            highlight_features.extend(drill_cluster_features[drill_cluster_id])
-
-            for cluster_id in highlight_clusters:
-                highlight_features.extend(cluster_feature_order[cluster_id])
-
-        # Link to next, previous clusters, wrapping around to the other end at the limits
-        all_clusters = sorted(self.feature_clusters.cluster_ids)
-        n_clusters = len(all_clusters)
-        drill_loc = all_clusters.index(drill_cluster_id)
-        next_cluster = all_clusters[(drill_loc + 1) % n_clusters]
-        prev_cluster = all_clusters[(drill_loc - 1) % n_clusters]
-
-        nav_links = {
-            "Change Clusters": [
-                (
-                    "Previous Cluster",
-                    self.reverse_url("cluster-drilldown", prev_cluster),
-                ),
-                ("Next Cluster", self.reverse_url("cluster-drilldown", next_cluster)),
-            ]
-        }
-
-        form_link = self.reverse_url("create-cluster")
-        feature_form = h("form", id="feature-form", method="post", action=form_link)(
-            h("button", type="submit")("Create cluster from selected features")
-        )
-
-        self.write(
-            self.render_page(
-                f"Drill down to cluster {drill_cluster_id}",
-                [
-                    drill_cluster_rendered,
-                    other_clusters_rendered,
-                    facets,
-                    web_rendering.list_search_results(
-                        await search_results,
-                        sample_doc_count=sample_doc_count,
-                        matching_doc_count=matching_doc_count,
-                    ),
-                ],
                 body_header=(
-                    feature_form,
+                    edit_form,
                     web_rendering.heatmap_legend("Similarity", 0, 1, 10),
                 ),
-                sub_nav_label="Change Clusters",
-                sub_nav_links=nav_links,
             )
         )
 
@@ -586,11 +380,37 @@ class CreateCluster(HyperrealRequestHandler):
             )
 
             self.redirect(
-                self.reverse_url("cluster-drilldown", new_cluster_id),
+                self.reverse_url("browse") + f"?c={new_cluster_id}",
             )
 
         else:
             raise ValueError("no features provided")
+
+    get = post
+
+
+class MergeClusters(HyperrealRequestHandler):
+
+    def post(self):
+        """
+        Create a new cluster from the given features.
+
+        """
+
+        # Each feature is a bundled url string (double layered, to let us address
+        # arbitrary queries as features
+        clusters = [int(c) for c in self.get_arguments("c")]
+
+        if clusters:
+
+            merge_cluster_id = self.feature_clusters.merge_clusters(clusters)
+
+            self.redirect(
+                self.reverse_url("browse") + f"?c={merge_cluster_id}",
+            )
+
+        else:
+            raise ValueError("no clusters provided")
 
     get = post
 
@@ -608,9 +428,8 @@ class DeleteCluster(HyperrealRequestHandler):
 
         self.feature_clusters.delete_clusters(cluster_ids)
 
-        redirect_to_cluster = min(self.feature_clusters.cluster_ids)
         self.redirect(
-            self.reverse_url("cluster-drilldown", redirect_to_cluster),
+            self.reverse_url("browse"),
         )
 
     get = post
@@ -632,19 +451,14 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
             ),
             tornado.web.url(rf"{base_path}/browse/?", BrowseClusters, name="browse"),
             tornado.web.url(
-                rf"{base_path}/cluster/([0-9]+)/?",
-                ClusterDrillDown,
-                name="cluster-drilldown",
-            ),
-            tornado.web.url(
-                rf"{base_path}/cluster/?",
-                ClusterDrillDownRedirector,
-                name="first-cluster",
-            ),
-            tornado.web.url(
                 rf"{base_path}/cluster/create",
                 CreateCluster,
                 name="create-cluster",
+            ),
+            tornado.web.url(
+                rf"{base_path}/cluster/merge",
+                MergeClusters,
+                name="merge-clusters",
             ),
             tornado.web.url(
                 rf"{base_path}/cluster/delete",

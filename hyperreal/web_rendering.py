@@ -27,9 +27,9 @@ def heatmap_legend(label, start, stop, steps):
         step = start + bin_width * i
         bins.append(h("td", klass="heatmap", style=f"--w: {step:.3f}")(f"{step:.1f}"))
 
-    return h("table", klass="legend")(
+    return h("table")(
         h("caption")("Legend for similarity score heatmap."),
-        h("tr", klass="cluster")(h("th", scope="col")(label), *bins),
+        h("tr", klass="cluster legend")(h("th", scope="col")(label), *bins),
     )
 
 
@@ -136,15 +136,6 @@ def render_feature_clustering(
 
         features = feature_clustering[cluster_id]
 
-        # style = None
-        # if area_stat is not None:
-        #     cluster_width = calculate_area_mark(stats[area_stat], total_doc_count)
-        #     style = f"--w: {cluster_width:.3f}"
-
-        # display = None
-        # if display_stat is not None:
-        #     display = h("span", klass="display-number")(stats[display_stat])
-
         footer = None
         if seemore_url_key is not None:
             footer = h("div")(
@@ -157,11 +148,23 @@ def render_feature_clustering(
         # expansion.
         # Add anchor links to headers to return to the same point after expansion.
 
+        selector = None
+        if feature_form_details[0] is not None:
+            selector = h(
+                "input",
+                type="checkbox",
+                name="c",
+                form=feature_form_details[0],
+                value=cluster_id,
+            )
+
         style = None
         if heatmap_stat is not None:
             style = f"--w: {stats[heatmap_stat]:.3f}"
 
-        cluster_title = h("h2")("Cluster: ", cluster_id)
+        cluster_title = h("h2", klass="cluster spread")(
+            "Cluster: ", cluster_id, selector
+        )
         if header_url_key is not None:
             cluster_title = h("a", href=stats[header_url_key])(cluster_title)
 
@@ -182,6 +185,14 @@ def render_feature_clustering(
         )
 
     return h("ol", klass="stack feature-clustering")(clusters)
+
+
+def render_feature_edit_forms(create_action, merge_action):
+
+    return h("form", id="edit-model-form", method="post", action=create_action)(
+        h("button", type="submit")("Create cluster from selected features"),
+        h("button", type="submit", formaction=merge_action)("Merge selected clusters"),
+    )
 
 
 def generate_nav(label, links, klass=None):
@@ -217,7 +228,6 @@ def full_page(
     nav_links = [
         ("Index Overview", "/"),
         ("Browse", "/browse"),
-        ("Drilldown", "/cluster/"),
     ]
     main_nav = generate_nav("Main", nav_links)
 
@@ -332,6 +342,7 @@ default_css = """
 .cluster {
     display: flex;
     flex-wrap: wrap;
+    gap: var(--s-1);
 }
 
 header {
@@ -354,10 +365,8 @@ nav ul {
     display: inline-block;
 }
 
-
 ul > li {
     list-style: none;
-    margin-right: var(--s-1);
 }
 
 body {
@@ -478,6 +487,10 @@ h1, h2, h3 {
     --space: var(--s1);
 }
 
+.legend {
+    gap: 0
+}
+
 .legend :is(td, th) {
     padding: var(--s-1);
     margin: 0;
@@ -565,6 +578,12 @@ tbody :is(.feature-field, .feature-value) {
 .feature-clustering {
     list-style: none;
 }
+
+:is(tr, .feature-table-header):has(input:checked){
+    outline: solid yellow;
+}
+
+
 
 /*************/
 """

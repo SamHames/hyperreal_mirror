@@ -165,14 +165,27 @@ class FeatureClustering(IndexPlugin):
     @property
     def cluster_ids(self) -> dict[int, dict[str, float]]:
         """Return all defined clusters."""
-        rows = self.idx.db.execute("select cluster_id, doc_count from cluster")
+        rows = self.idx.db.execute(
+            """
+            SELECT 
+                cluster_id, 
+                doc_count,
+                (
+                    select count(*) 
+                    from feature_cluster fc 
+                    where fc.cluster_id = cluster.cluster_id
+                ) 
+            from cluster
+            """
+        )
         total_docs = self.idx.total_doc_count
         return {
             cluster_id: {
                 "doc_count": doc_count,
                 "relative_doc_count": doc_count / total_docs,
+                "feature_count": feature_count,
             }
-            for cluster_id, doc_count in rows
+            for cluster_id, doc_count, feature_count in rows
         }
 
     def _create_new_empty_cluster(self) -> int:
@@ -299,6 +312,8 @@ class FeatureClustering(IndexPlugin):
             "INSERT or ignore into changed_cluster values(?)",
             [(c,) for c in merge_clusters],
         )
+
+        return merge_cluster_id
 
     def _delete_features(self, features):
         self.idx.db.executemany(
