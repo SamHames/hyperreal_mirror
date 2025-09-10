@@ -360,7 +360,10 @@ class BrowseClusters(HyperrealRequestHandler):
                 (base_url, "?", cluster_query)
             )
 
-            if cluster_stats[cluster_id]["matching_feature_count"] > top_k_features:
+            if (
+                cluster_id not in expand_clusters
+                and cluster_stats[cluster_id]["matching_feature_count"] > top_k_features
+            ):
 
                 this_return = [*return_query_items, ("expand", cluster_id)]
 
