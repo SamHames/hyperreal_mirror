@@ -448,6 +448,7 @@ h1, h2, h3 {
 .concordance-match {
     width: min-content;
     padding: 0 var(--s-3);
+    text-align: center;
 }
 
 .concordance-pre {
@@ -490,7 +491,7 @@ h1, h2, h3 {
 }
 
 .legend :is(td, th) {
-    padding: var(--s-1);
+    padding: var(--s-2);
     margin: 0;
 }
 
