@@ -49,15 +49,24 @@ def render_feature_stats_table(
         h("th", scope="col", klass="feature-field")("Field"),
         h("th", scope="col", klass="feature-value")("Value"),
     ]
-    if count_stat:
-        header_fields.append(h("th", scope="col", klass="display-count")(count_stat))
-    if heatmap_stat:
-        header_fields.append(
-            # style might be set from the cluster level similarity, so need to reset
-            h("th", scope="col", klass="heatmap-value", style="--w: 0;")(heatmap_stat)
+
+    header_fields.append(
+        h("th", scope="col", klass="display-count")(count_stat if count_stat else "")
+    )
+
+    header_fields.append(
+        # style might be set from the cluster level similarity, so need to reset
+        h("th", scope="col", klass="heatmap-value", style="--w: 0;")(
+            heatmap_stat if heatmap_stat else ""
         )
+    )
+
+    select_header = ""
+
     if feature_form_details[0] is not None:
-        header_fields.append(h("th", scope="col")("Select"))
+        select_header = "Select"
+
+    header_fields.append(h("th", scope="col")(select_header))
 
     header = h("thead")(h("tr")(header_fields))
     body_rows = []
@@ -88,16 +97,23 @@ def render_feature_stats_table(
 
         # Show a count if present
         if count_stat is not None:
-            cells.append(h("td", klass="display-count")(stats[count_stat]))
+            count_cell = stats[count_stat]
+        else:
+            count_cell = ""
+        cells.append(h("td", klass="display-count")(count_cell))
 
         # Show a cell that will by default only show the heatmap colour, not the
         # actual count.
         style = None
-        if heatmap_stat is not None:
-            heatmap_value = stats[heatmap_stat]
-            style = f"--w: {heatmap_value:.3f};"
-            cells.append(h("td", klass="heatmap-value")(heatmap_value))
+        heatmap_cell = ""
 
+        if heatmap_stat is not None:
+            heatmap_value = heatmap_cell = stats[heatmap_stat]
+            style = f"--w: {heatmap_value:.3f};"
+
+        cells.append(h("td", klass="heatmap-value")(heatmap_cell))
+
+        selector = ""
         if feature_form_details[0] is not None and feature_form_details[1] is not None:
             selector = h(
                 "input",
@@ -106,7 +122,8 @@ def render_feature_stats_table(
                 form=feature_form_details[0],
                 value=stats[feature_form_details[1]],
             )
-            cells.append(h("td")(selector))
+
+        cells.append(h("td")(selector))
 
         body_rows.append(h("tr", klass="heatmap", style=style)(cells))
 
@@ -254,10 +271,10 @@ def full_page(
             h("style")(raw(default_css), raw(extra_css)),
         ),
         h("body")(
-            h("header")(main_nav),
+            h("header", klass="bordered")(main_nav),
             h("main")(
                 (
-                    h("div", klass="main-header cluster")(body_header)
+                    h("div", klass="main-header cluster bordered")(body_header)
                     if body_header
                     else None
                 ),
@@ -265,7 +282,7 @@ def full_page(
                     (
                         h(
                             "div",
-                            klass="column",
+                            klass="column bordered",
                             style=f"--column-flex: {column_flex.get(col_index, 1)}",
                         )(col)
                         for col_index, col in enumerate(body_columns)
@@ -336,6 +353,7 @@ default_css = """
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
     --column-width: 72ch;
+    --border-color: oklch(50% 0 0)
 }
 
 .cluster {
@@ -347,8 +365,11 @@ default_css = """
 header {
     margin: var(--s0);
     height: fit-content;
-    border: solid;
     padding: var(--s-1);
+}
+
+.bordered {
+    border: solid var(--border-color);
 }
 
 nav ul {
@@ -385,10 +406,8 @@ main > * {
 }
 
 .main-header {
-    border: solid black;
     margin: var(--s0);
     height: fit-content;
-    border: solid;
     padding: var(--s-1);
 }
 
@@ -404,7 +423,6 @@ main > * {
 .column {
     overflow-y: scroll;
     flex: var(--column-flex, 1);
-    border: solid;
     padding: var(--s-1);
     max-width: var(--column-width);
 }
@@ -429,6 +447,7 @@ h1, h2, h3 {
 
 .concordance-container {
     width: 100%;
+    display: inline-block;
 }
 
 /* Concordance handling CSS */
@@ -472,7 +491,7 @@ h1, h2, h3 {
     width: auto;
 }
 
-.matches summary,details {
+.matches summary {
     cursor: pointer;
 }
 
@@ -513,13 +532,21 @@ h1, h2, h3 {
 
 .feature-table {
     width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
+    display: grid;
+    grid-template-columns: auto auto auto auto auto;
 }
 
-.feature-table thead {
-    whitespace: nowrap;
+.feature-table thead, .feature-table tbody {
     border-bottom: var(--s-3) double black;
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: span 5;
+}
+
+.feature-table tr {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: span 5;
 }
 
 .feature-table thead th {
@@ -531,21 +558,9 @@ h1, h2, h3 {
     padding: var(--s-3);
     overflow-x: clip;
     text-overflow: ellipsis;
-    white-space: nowrap;
     font-family: monospace, monospace;
-}
-
-.feature-value {
-    text-align: end;
-    width: 50%;
-}
-
-.feature-field {
-    width: auto;
-}
-
-tbody :is(.feature-field, .feature-value) {
-    font-weight: normal;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 .heatmap {
@@ -584,10 +599,8 @@ tbody :is(.feature-field, .feature-value) {
 }
 
 :is(tr, .feature-table-header):has(input:checked){
-    outline: solid yellow;
+    border: var(--s-3) solid yellow;
 }
-
-
 
 /*************/
 """
