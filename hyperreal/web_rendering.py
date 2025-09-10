@@ -431,18 +431,32 @@ h1, h2, h3 {
   margin-block-start: var(--space, 1rem);
 }
 
+.concordance-container {
+    width: 100%;
+}
+
 /* Concordance handling CSS */
 .concordance {
     --space: var(--s-2);
     margin: var(--s-2);
     width: 100%;
-    table-layout: fixed;
+    white-space: nowrap;
+    display: grid;
+    grid-template-columns: auto auto auto;
+    list-style: none;
 }
 
-.concordance td {
+.concordance-line {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: span 3;
+    width: 100%;
+}
+
+.concordance-line > * {
     text-overflow: ellipsis;
     overflow: clip;
-    white-space: nowrap;
+    min-width: 0;
 }
 
 .concordance-match {

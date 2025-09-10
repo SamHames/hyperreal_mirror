@@ -236,31 +236,27 @@ class HyperrealCorpus:
                     pre_html = [
                         value_handler.to_html(v.replace("\n", " ")) for v in pre
                     ]
-                    match_html = h("mark")(
-                        value_handler.to_html(display_match.replace("\n", " "))
-                    )
+                    match_html = value_handler.to_html(display_match.replace("\n", " "))
                     post_html = [
                         value_handler.to_html(v.replace("\n", " ")) for v in post
                     ]
 
                     display_lines.append(
-                        h("tr")(
-                            h("td", klass="concordance-pre")(
-                                h("span", dir="ltr")(pre_html)
-                            ),
-                            h("td", klass="concordance-match")(match_html),
-                            h("td", klass="concordance-post")(post_html),
-                        )
+                        h("li", klass="concordance-line")(
+                            h("span", klass="concordance-pre", dir="ltr")(pre_html),
+                            h("mark", klass="concordance-match")(match_html),
+                            h("span", klass="concordance-post")(post_html),
+                        ),
                     )
 
                 output.append(
-                    h("dd")(
+                    h("dd", klass="concordance-container")(
                         h("details")(
                             h("summary")(
                                 match_value.replace("\n", " "),
                                 f" ({len(display_lines)})",
                             ),
-                            h("table", klass="concordance")(display_lines),
+                            h("ol", klass="concordance")(display_lines),
                         )
                     )
                 )
