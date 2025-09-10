@@ -69,11 +69,7 @@ def render_feature_stats_table(
 
         field = feature[0]
 
-        klass = "feature-field"
-        if field == last_field:
-            klass = "feature-field repeat-in-run"
-
-        cells.append(h("th", scope="row", klass=klass)(field))
+        cells.append(h("th", scope="row", klass="feature-field")(field))
 
         html_values = feature[1:]
 
@@ -550,11 +546,6 @@ h1, h2, h3 {
 
 tbody :is(.feature-field, .feature-value) {
     font-weight: normal;
-}
-
-.repeat-in-run {
-    font-size: 60%;
-    font-weight: lighter;
 }
 
 .heatmap {
