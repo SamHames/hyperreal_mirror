@@ -230,7 +230,7 @@ def full_page(
 
     nav_links = [
         ("Index Overview", "/"),
-        ("Browse", "/browse"),
+        ("Browse", "/browse/"),
     ]
     main_nav = generate_nav("Main", nav_links)
 
@@ -409,12 +409,8 @@ main > * {
     overflow-y: scroll;
     flex: var(--column-flex, 1);
     border: solid;
-    padding: var(--s0);
+    padding: var(--s-1);
     max-width: var(--column-width);
-}
-
-pre {
-    white-space: pre-wrap;
 }
 
 h1, h2, h3 {
@@ -466,12 +462,11 @@ h1, h2, h3 {
 }
 
 .matches summary,details {
-    display: inline;
     cursor: pointer;
 }
 
-.matches > * {
-    margin-inline-end: var(--s-1);
+.matches details summary > * {
+    display: inline;
 }
 
 .matches dt::after {
@@ -550,7 +545,7 @@ tbody :is(.feature-field, .feature-value) {
 .heatmap {
     background: oklch(calc(1 - var(--w, 0)) 0 0);
     color: oklch(
-        calc(round(var(--w, 1) + 0.15))
+        calc(round(var(--w, 1)))
         0 0
     );
 }
@@ -562,7 +557,7 @@ tbody :is(.feature-field, .feature-value) {
 
 .heatmap a, .heatmap a:visited {
     color: oklch(
-        calc(round(var(--w, 1) + 0.15))
+        calc(round(var(--w, 1)))
         0
         0
     );

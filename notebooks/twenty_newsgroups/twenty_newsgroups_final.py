@@ -170,26 +170,6 @@ print("Tokenised for display: ", display_tokenise(example_string))
 
 class TwentyNewsgroups(corpus.HyperrealCorpus):
 
-    extra_css = """
-        .snippets {
-            --space: var(--s-2);
-            margin: var(--s-2);
-        }
-        .snippets li {
-            list-style-type: roman;
-            margin-inline-start: var(--s2);
-        }
-
-        .doc dt::after {
-            content: ":";
-        }
-
-        .doc dl {
-            margin: var(--s0);
-            --space: var(--s-2);
-        }
-    """
-
     # Link to the documentation for this!
     def __init__(self):
         self.data_loc = data_loc
@@ -277,20 +257,20 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         "|".join(
             (
                 r"writes in",
-                r"writes:$",
-                r"wrote:$",
-                r"says:$",
-                r"said:$",
-                r"^In article",
-                r"^Quoted from",
-                r"^\|",
-                r"^>",
-                r"^}",
-                r"^{",
-                r"^#",
-                r"^]",
-                r"^:",
-                r"^\+",
+                r"writes:\s*$",
+                r"wrote:\s*$",
+                r"says:\s*$",
+                r"said:\s*$",
+                r"^\s*In article",
+                r"^\s*Quoted from",
+                r"^\s*\|",
+                r"^\s*>",
+                r"^\s*}",
+                r"^\s*{",
+                r"^\s*#",
+                r"^\s*]",
+                r"^\s*:",
+                r"^\s*\+",
             )
         )
     )
@@ -368,23 +348,47 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
         return indexed
 
+    extra_css = """
+        .search-hit details summary * {
+            display: inline;
+        }
+
+        .search-hit dt,dd {
+            display: inline;
+        }
+
+        .search-hit dt {
+            font-weight: bolder;
+        }
+
+        .search-hit dt:after {
+            content: ": ";
+        }
+
+        .search-hit {
+            white-space: pre-wrap;
+        }
+    """
+
     def doc_to_html(self, doc, highlight_features=None):
 
         mark_lines = self.mark_lines_ignore(doc["body"])
         # render quoted text distinctly from other text.
         doc_body = [h("em")(line) if ignore else line for ignore, line in mark_lines]
 
-        subject = doc.get("Subject", "")
+        subject = doc.get("Subject", "<no subject>")
+
+        display_fields = set(("From", "Newsgroups", "Date", "Organisation"))
 
         return h("details")(
-            h("summary")(subject),
+            h("summary")(h("dl")(h("dt")("Subject"), h("dd")(subject))),
             h("dl", klass="stack")(
                 *[
-                    (h("dt")(key), h("dd")(h("pre")(value)))
-                    for key, value in doc.items()
-                    if key not in ("Subject", "body")
+                    h("div")((h("dt")(key), h("dd")(doc[key])))
+                    for key in display_fields
+                    if key in doc
                 ],
-                (h("dt")("body"), h("dd")(h("pre")(doc_body))),
+                (h("div")(h("dt")("body"), h("dd")(doc_body))),
             ),
         )
 

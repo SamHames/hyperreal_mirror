@@ -376,7 +376,9 @@ class BrowseClusters(HyperrealRequestHandler):
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_querystring(f)
-                stats["url"] = "".join((base_url, "?", query_string))
+                stats["url"] = "".join(
+                    (base_url, "?", query_string, f"#cluster-{cluster_id}")
+                )
                 stats["edit_form_feature_value"] = query_string
 
         see_all_clusters_link = None
@@ -453,7 +455,8 @@ class CreateCluster(HyperrealRequestHandler):
             )
 
             self.redirect(
-                self.reverse_url("browse") + f"?c={new_cluster_id}#{new_cluster_id}",
+                self.reverse_url("browse")
+                + f"?c={new_cluster_id}#cluster-{new_cluster_id}",
             )
 
         else:
@@ -480,7 +483,7 @@ class MergeClusters(HyperrealRequestHandler):
 
             self.redirect(
                 self.reverse_url("browse")
-                + f"?c={merge_cluster_id}#{merge_cluster_id}",
+                + f"?c={merge_cluster_id}#cluster-{merge_cluster_id}",
             )
 
         else:
