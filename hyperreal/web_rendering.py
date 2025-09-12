@@ -182,12 +182,12 @@ def render_feature_clustering(
         if header_url_key is not None:
             cluster_title = h("a", href=stats[header_url_key])(cluster_title)
 
-        header = h("div", klass="feature-table-header")(
+        header = h("div", klass="feature-table-header heatmap", style=style)(
             cluster_title,
         )
 
         clusters.append(
-            h("li", klass="heatmap-left cluster-features", style=style)(
+            h("li", klass="cluster-features", style=style)(
                 header,
                 render_feature_stats_table(
                     features,
@@ -423,8 +423,9 @@ main > * {
 .column {
     overflow-y: scroll;
     flex: var(--column-flex, 1);
-    padding: var(--s-1);
+    padding: 0 var(--s-1);
     max-width: var(--column-width);
+    scrollbar-color: black white;
 }
 
 h1, h2, h3 {
@@ -527,7 +528,7 @@ h1, h2, h3 {
 /****** Layout for feature tables *******/
 
 .cluster-features > * {
-    padding: var(--s-3);
+    padding: var(--s-2);
 }
 
 .feature-table {
@@ -563,6 +564,10 @@ h1, h2, h3 {
     min-width: 0;
 }
 
+.feature-table-header {
+    margin: 0 calc(-1 * var(--s-1));
+}
+
 .heatmap {
     background: oklch(calc(1 - var(--w, 0)) 0 0);
     color: oklch(
@@ -582,10 +587,6 @@ h1, h2, h3 {
         0
         0
     );
-}
-
-.heatmap-left {
-    border-left: var(--s1) solid oklch(calc(1 - var(--w, 0)) 0 0);
 }
 
 .display-count {
