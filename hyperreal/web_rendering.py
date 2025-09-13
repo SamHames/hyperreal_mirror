@@ -369,7 +369,7 @@ header {
 }
 
 .bordered {
-    border: solid var(--border-color);
+    border: 0.1rem solid var(--border-color);
 }
 
 nav ul {
