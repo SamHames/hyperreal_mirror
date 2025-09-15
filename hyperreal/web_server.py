@@ -81,7 +81,7 @@ class IndexedField(HyperrealRequestHandler):
         for f, stats in features.items():
             base_url = self.reverse_url("field-features", field)
             query_string = self.idx.feature_to_querystring(f)
-            stats["feature_url"] = base_url + "?" + query_string
+            stats["doc_count_url"] = base_url + "?" + query_string
 
         html_features = {
             self.idx.feature_to_html(feature): stats
@@ -190,7 +190,7 @@ def render_facets(idx, query, base_url, select_form_id):
 
         for f, stats in faceted.items():
             query_string = idx.feature_to_querystring(f)
-            stats["feature_url"] = base_url + "?" + query_string
+            stats["doc_count_url"] = base_url + "?" + query_string
             stats["select_form_value"] = query_string
 
         rendered_facets.append(
@@ -361,7 +361,7 @@ class BrowseClusters(HyperrealRequestHandler):
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
             cluster_query = f"c={cluster_id}"
-            cluster_stats[cluster_id]["cluster_url"] = "".join(
+            cluster_stats[cluster_id]["doc_count_url"] = "".join(
                 (base_url, "?", cluster_query)
             )
 
@@ -384,7 +384,7 @@ class BrowseClusters(HyperrealRequestHandler):
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_querystring(f)
-                stats["feature_url"] = "".join(
+                stats["doc_count_url"] = "".join(
                     (base_url, "?", query_string, f"#cluster-{cluster_id}")
                 )
                 stats["select_form_value"] = query_string

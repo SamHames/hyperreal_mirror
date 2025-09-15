@@ -33,6 +33,46 @@ def heatmap_legend(label, start, stop, steps):
     )
 
 
+def heatmap_cells(stats):
+    """
+    Render the heatmap cell entries as td.
+
+    """
+    cells = []
+
+    ##### Hits/query similarity cells
+    hits = stats.get("hits", None)
+    similarity = stats.get("jaccard_similarity", None)
+
+    if hits is not None:
+        rounded_sim = f"{similarity:.3f}"
+        style = f"--sim: {rounded_sim}"
+
+        if hits_count_url := stats.get("hits_count_url", None):
+            hits = h("a", href=hits_count_url)(hits)
+
+        cells.append(h("td", klass="heatmap", style=style)(hits))
+        cells.append(h("td", klass="invisible")(rounded_sim))
+    else:
+        cells.append(h("td")(""))
+        cells.append(h("td", klass="invisible")(""))
+
+    ##### Docs/relative frequency cells
+    docs = stats["doc_count"]
+    rel_docs = stats["relative_doc_count"]
+
+    if doc_count_url := stats.get("doc_count_url", None):
+        docs = h("a", href=doc_count_url)(docs)
+
+    rounded_rel_docs = f"{rel_docs:.3f}"
+    style = f"--sim: {rounded_rel_docs}"
+
+    cells.append(h("td", klass="heatmap", style=style)(docs))
+    cells.append(h("td", klass="invisible")(rounded_rel_docs))
+
+    return cells
+
+
 def render_feature_stats_table(
     feature_stats,
     caption=None,
@@ -80,35 +120,7 @@ def render_feature_stats_table(
 
         cells.append(h("th", scope="row", klass="feature-value")(html_value))
 
-        ##### Hits/query similarity cells
-        hits = stats.get("hits", None)
-        similarity = stats.get("jaccard_similarity", None)
-
-        if hits is not None:
-            rounded_sim = f"{similarity:.3f}"
-            style = f"--sim: {rounded_sim}"
-
-            if query_url := stats.get("query_url", None):
-                hits = h("a", href=query_url)(hits)
-
-            cells.append(h("td", klass="heatmap", style=style)(hits))
-            cells.append(h("td", klass="invisible")(rounded_sim))
-        else:
-            cells.append(h("td")(""))
-            cells.append(h("td", klass="invisible")(""))
-
-        ##### Docs/relative frequency cells
-        docs = stats["doc_count"]
-        rel_docs = stats["relative_doc_count"]
-
-        if feature_url := stats.get("feature_url", None):
-            docs = h("a", href=feature_url)(docs)
-
-        rounded_rel_docs = f"{rel_docs:.3f}"
-        style = f"--sim: {rounded_rel_docs}"
-
-        cells.append(h("td", klass="heatmap", style=style)(docs))
-        cells.append(h("td", klass="invisible")(rounded_rel_docs))
+        cells.extend(heatmap_cells(stats))
 
         selector = ""
         if select_form_id and stats.get("select_form_value"):
@@ -137,10 +149,52 @@ def render_feature_clustering(
 
     for cluster_id, stats in cluster_stats.items():
 
+        header_fields = [
+            h("th", scope="col")(header_text)
+            for header_text in (
+                "Cluster",
+                "Matched Features",
+                "Total Features",
+                "Hits",
+                "Query Similarity",
+                "Docs",
+                "Relative Docs",
+                "Select" if select_form_id else "",
+            )
+        ]
+
+        header_fields[4] = h("th", scope="col", klass="invisible")("Query Similarity")
+        header_fields[6] = h("th", scope="col", klass="invisible")("Relative Docs")
+
+        cells = []
+
+        cells.append(h("th", scope="row", id=f"cluster-{cluster_id}")(cluster_id))
+
         features = feature_clustering[cluster_id]
 
         display_feature_count = len(features)
         matching_feature_count = stats["matching_feature_count"]
+
+        cells.append(h("td")(matching_feature_count))
+        cells.append(h("td")(stats["feature_count"]))
+
+        cells.extend(heatmap_cells(stats))
+
+        selector = ""
+        if select_form_id is not None:
+            selector = h(
+                "input",
+                type="checkbox",
+                name="c",
+                form=select_form_id,
+                value=cluster_id,
+            )
+
+        cells.append(h("td")(selector))
+
+        header = h("table", klass="cluster-stats-table")(
+            h("thead")(h("tr")(header_fields), h("tbody")(cells))
+        )
 
         footer = None
         if stats.get("expand_url", False):
@@ -151,31 +205,8 @@ def render_feature_clustering(
                 )("Show all ", matching_feature_count, " matching features")
             )
 
-        selector = None
-        if select_form_id is not None:
-            selector = h(
-                "input",
-                type="checkbox",
-                name="c",
-                form=select_form_id,
-                value=cluster_id,
-            )
-
-        style = f"--sim: {stats['jaccard_similarity']:.3f}"
-
-        cluster_title = h("h2", id=f"cluster-{cluster_id}", klass="cluster spread")(
-            "Cluster: ", cluster_id, selector
-        )
-
-        if stats.get("cluster_url", False):
-            cluster_title = h("a", href=stats[cluster_url])(cluster_title)
-
-        header = h("div", klass="feature-table-header heatmap", style=style)(
-            cluster_title,
-        )
-
         clusters.append(
-            h("li", klass="cluster-features", style=style)(
+            h("li", klass="cluster-features")(
                 header,
                 render_feature_stats_table(features, select_form_id=select_form_id),
                 footer,
@@ -542,6 +573,7 @@ h1, h2, h3 {
     min-width: 0;
 }
 
+
 .feature-table th {
     text-align: left;
 }
@@ -550,8 +582,26 @@ h1, h2, h3 {
     text-align: right;
 }
 
-.feature-table-header {
+.cluster-stats-table {
     margin: 0 calc(-1 * var(--s-1));
+    table-layout: fixed;
+    width: calc(100% + 2 * var(--s-1));
+}
+
+.cluster-stats-table :is(td, th) {
+    padding: var(--s-3);
+    overflow-x: clip;
+    text-overflow: ellipsis;
+    font-family: monospace, monospace;
+    min-width: 0;
+}
+
+.cluster-stats-table td {
+    text-align: right;
+}
+
+.cluster-stats-table td:last-child {
+    text-align: center;
 }
 
 .heatmap {
@@ -584,7 +634,7 @@ h1, h2, h3 {
     list-style: none;
 }
 
-:is(tr, .feature-table-header):has(input:checked){
+:is(tr, .cluster-stats-table):has(input:checked){
     border: var(--s-3) solid yellow;
 }
 
