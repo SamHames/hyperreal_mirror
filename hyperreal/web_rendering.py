@@ -222,7 +222,9 @@ def render_feature_edit_forms(add_to_query, create_action, merge_action, current
     if current_query is not None:
         query_input = h("input", type="hidden", name="query", value=current_query)
 
-    return h("form", id="edit-model-form", method="post", action=create_action)(
+    return h(
+        "form", klass="stack", id="edit-model-form", method="post", action=create_action
+    )(
         query_input,
         h("button", type="submit")("Create cluster from selected features"),
         h("button", type="submit", formaction=merge_action)("Merge selected clusters"),
@@ -533,6 +535,27 @@ h2, h3 {
 .legend :is(td, th) {
     padding: var(--s-2);
     margin: 0;
+}
+
+.field::after {
+    content: ": ";
+}
+
+.query {
+    --space: var(--s-3);
+}
+
+.query-operator-side {
+    border-right: var(--s-3) solid var(--border-color);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.query-operator-bottom {
+    border-bottom: var(--s-3) solid var(--border-color);
+    text-align: center;
+    font-size: 75%;
 }
 
 /****** Layout for feature tables *******/

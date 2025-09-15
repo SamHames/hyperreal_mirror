@@ -428,7 +428,9 @@ class HyperrealIndex:
 
         if len(feature) == 2:
             value = feature[1]
-            return field, handler.to_html(value)
+            return h("span", klass="field")(field), h("span", klass="value")(
+                handler.to_html(value)
+            )
 
         elif len(feature) == 3:
             value_start, value_end = feature[1:]
