@@ -20,6 +20,7 @@ import asyncio
 from urllib.parse import parse_qsl, urlencode
 
 import tornado
+from pyroaring import BitMap
 from tinyhtml import h, raw
 
 from . import web_rendering
@@ -179,7 +180,7 @@ class MainHandler(HyperrealRequestHandler):
         self.write(self.render_page(f"Overview of Indexed Fields", [table]))
 
 
-def render_facets(idx, query, base_url, select_form_id):
+def render_facets(idx, query, base_url, current_query_encode, select_form_id):
 
     rendered_facets = []
 
@@ -189,9 +190,12 @@ def render_facets(idx, query, base_url, select_form_id):
         faceted = sorting(idx.facet_features(query, features))
 
         for f, stats in faceted.items():
-            query_string = idx.feature_to_querystring(f)
-            stats["doc_count_url"] = base_url + "?" + query_string
-            stats["select_form_value"] = query_string
+            feature_encode = ("f", idx.feature_to_querystring(f))
+            stats["doc_count_url"] = base_url + "?" + urlencode([feature_encode])
+            stats["hit_count_url"] = (
+                base_url + "?" + urlencode([feature_encode, current_query_encode])
+            )
+            stats["select_form_value"] = urlencode([feature_encode])
 
         rendered_facets.append(
             h("li")(
@@ -208,22 +212,130 @@ def render_facets(idx, query, base_url, select_form_id):
     return h("ul", klass="stack feature-clustering")(rendered_facets)
 
 
+# This is a temporary implementation of a query language based on DNF - it is expected
+# that this will change a lot as the full details, including the index form are figured
+# out...
+
+
+def dnf_query_to_query_string(idx, dnf_query):
+
+    components = []
+
+    for clause in dnf_query:
+
+        n_clauses = len(clause)
+
+        for component in clause:
+            if isinstance(component, int):
+                components.append(("c", str(component)))
+
+            elif isinstance(component, tuple):
+                components.append(("f", idx.feature_to_querystring(component)))
+
+            else:
+                raise ValueError(f"Unsupported query element: {component}")
+
+        components.append(("g", str(n_clauses)))
+
+    return urlencode(components)
+
+
+def query_string_to_dnf_query(idx, query_string):
+
+    components = parse_qsl(query_string)
+
+    clauses = []
+    current_clause = []
+
+    for component_type, component in components:
+
+        if component_type == "c":
+            current_clause.append(int(component))
+
+        elif component_type == "f":
+            current_clause.append(idx.feature_from_querystring(component))
+
+        elif component_type == "g":
+            assert len(current_clause) == int(component)
+            clauses.append(current_clause)
+            current_clause = []
+
+        # Note that there is no else clause - other features are possible but ignored
+        # in the query, so we can have various other parameters.
+
+    # Implicitly terminate the last group if unterminated.
+    if current_clause:
+        clauses.append(current_clause)
+
+    return clauses
+
+
+def evaluate_dnf_query(clustering, dnf_query):
+
+    def evaluate_or_clause(clause):
+        result = BitMap()
+
+        for component in clause:
+            if isinstance(component, int):
+                result |= clustering.cluster_docs(component)[0]
+            elif isinstance(component, tuple):
+                result |= clustering.idx[component][0]
+            else:
+                raise ValueError(f"Unsupported query element: {component}")
+        return result
+
+    result = evaluate_or_clause(dnf_query[0])
+
+    for clause in dnf_query[1:]:
+        result &= evaluate_or_clause(clause)
+
+    return result
+
+
 class BrowseClusters(HyperrealRequestHandler):
     async def get(self):
 
         top_k_features = int(self.get_argument("top_k_features", "10"))
         top_k_clusters = int(self.get_argument("top_k_clusters", "30"))
-        f = self.get_argument("f", None, strip=False)
-        v = self.get_argument("v", None, strip=False)
-        v1 = self.get_argument("v1", None, strip=False)
-        v2 = self.get_argument("v2", None, strip=False)
-        c = self.get_argument("c", None)
+
+        # The original query at the core of this navigation
+        query = self.get_argument("query", "", strip=False)
+
+        # All c's and f's passed in become part of a new or clause in the overall DNF
+        # query.
+        current_query = query_string_to_dnf_query(self.idx, query)
+        new_clause = query_string_to_dnf_query(self.idx, self.request.query)
+
+        if new_clause:
+            current_query.append(new_clause[0])
+
+        print(current_query)
+
+        current_query_encode = (
+            "query",
+            dnf_query_to_query_string(self.idx, current_query),
+        )
 
         expand_cluster_list = [int(e) for e in self.get_arguments("expand")]
         expand_clusters = set(expand_cluster_list)
         anchor_cluster = None
         if expand_cluster_list:
             anchor_cluster = expand_cluster_list[-1]
+
+        highlight_clusters = {
+            item for clause in current_query for item in clause if isinstance(item, int)
+        }
+        highlight_features = {
+            item
+            for clause in current_query
+            for item in clause
+            if isinstance(item, tuple)
+        }
+
+        for cluster_id in highlight_clusters:
+            highlight_features |= set(
+                self.feature_clusters.cluster_features(cluster_id)
+            )
 
         heatmap_stat = "jaccard_similarity"
         skip_feature_pivoting = False
@@ -236,52 +348,18 @@ class BrowseClusters(HyperrealRequestHandler):
         return_query_items.extend([("expand", c) for c in expand_cluster_list])
 
         # Special case when nothing is selected to pivot by
-        if f is None and c is None:
+        if not current_query:
 
             matching_docs = self.idx.all_doc_ids()
             matching_doc_count = len(matching_docs)
 
-            highlight_features = None
-
             # Skip the expensive step for this case where we show all the clusters.
             skip_feature_pivoting = True
 
-            heatmap_stat = "relative_doc_count"
-
-        elif f is not None and v is not None:
-            return_query_items.append(("f", f))
-            return_query_items.append(("v", v))
-
-            feature = self.idx.feature_from_url((f, v))
-            matching_docs, matching_doc_count, _ = self.idx[feature]
-
-            highlight_features = [feature]
-
-        elif f is not None and (v1 or v2 is not None):
-            return_query_items.append(("f", f))
-            if v1 is not None:
-                return_query_items.append(("v1", v1))
-            if v2 is not None:
-                return_query_items.append(("v2", v2))
-
-            feature = self.idx.feature_from_url((f, v1, v2))
-            matching_docs, matching_doc_count, _ = self.idx[feature]
-
-            highlight_features = [feature]
-
-        elif c is not None:
-            return_query_items.append(("c", c))
-            cluster_id = int(c)
-            matching_docs, matching_doc_count = self.feature_clusters.cluster_docs(
-                cluster_id
-            )
-
-            highlight_features = list(
-                self.feature_clusters.cluster_features(cluster_id)
-            )
-
         else:
-            raise ValueError("Invalid combination of feature or clusters.")
+            # TODO: what is selected by the current query.
+            matching_docs = evaluate_dnf_query(self.feature_clusters, current_query)
+            matching_doc_count = len(matching_docs)
 
         sample_doc_count = 20
         docs = []
@@ -356,13 +434,22 @@ class BrowseClusters(HyperrealRequestHandler):
             for cluster_id, features in faceted.items()
         }
 
-        facets = render_facets(self.idx, matching_docs, base_url, "edit-model-form")
+        facets = render_facets(
+            self.idx, matching_docs, base_url, current_query_encode, "edit-model-form"
+        )
 
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
-            cluster_query = f"c={cluster_id}"
             cluster_stats[cluster_id]["doc_count_url"] = "".join(
-                (base_url, "?", cluster_query)
+                (base_url, "?", urlencode([("c", str(cluster_id))]))
+            )
+
+            cluster_stats[cluster_id]["hit_count_url"] = "".join(
+                (
+                    base_url,
+                    "?",
+                    urlencode([("c", str(cluster_id)), current_query_encode]),
+                )
             )
 
             if (
@@ -383,11 +470,26 @@ class BrowseClusters(HyperrealRequestHandler):
                 cluster_stats[cluster_id]["expand_url"] = return_url
 
             for f, stats in clustering[cluster_id].items():
-                query_string = self.idx.feature_to_querystring(f)
+                feature = self.idx.feature_to_querystring(f)
+                feature_encode = ("f", feature)
+                encoded = urlencode([feature_encode])
                 stats["doc_count_url"] = "".join(
-                    (base_url, "?", query_string, f"#cluster-{cluster_id}")
+                    (
+                        base_url,
+                        "?",
+                        encoded,
+                        f"#cluster-{cluster_id}",
+                    )
                 )
-                stats["select_form_value"] = query_string
+                stats["hit_count_url"] = "".join(
+                    (
+                        base_url,
+                        "?",
+                        urlencode([current_query_encode, feature_encode]),
+                        f"#cluster-{cluster_id}",
+                    )
+                )
+                stats["select_form_value"] = feature
 
         see_all_clusters_link = None
 
@@ -414,7 +516,10 @@ class BrowseClusters(HyperrealRequestHandler):
         form_link = self.reverse_url("create-cluster")
         merge_cluster_link = self.reverse_url("merge-clusters")
         edit_form = web_rendering.render_feature_edit_forms(
-            form_link, merge_cluster_link
+            self.reverse_url("browse"),
+            form_link,
+            merge_cluster_link,
+            dnf_query_to_query_string(self.idx, current_query),
         )
 
         self.write(
@@ -448,7 +553,7 @@ class CreateCluster(HyperrealRequestHandler):
         # Each feature is a bundled url string (double layered, to let us address
         # arbitrary queries as features
         features = [
-            self.idx.feature_from_querystring(f) for f in self.get_arguments("feature")
+            self.idx.feature_from_querystring(f) for f in self.get_arguments("f")
         ]
 
         if features:

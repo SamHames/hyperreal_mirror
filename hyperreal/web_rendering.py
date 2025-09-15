@@ -48,8 +48,8 @@ def heatmap_cells(stats):
         rounded_sim = f"{similarity:.3f}"
         style = f"--sim: {rounded_sim}"
 
-        if hits_count_url := stats.get("hits_count_url", None):
-            hits = h("a", href=hits_count_url)(hits)
+        if hit_count_url := stats.get("hit_count_url", None):
+            hits = h("a", href=hit_count_url)(hits)
 
         cells.append(h("td", klass="heatmap", style=style)(hits))
         cells.append(h("td", klass="invisible")(rounded_sim))
@@ -127,7 +127,7 @@ def render_feature_stats_table(
             selector = h(
                 "input",
                 type="checkbox",
-                name="feature",
+                name="f",
                 form=select_form_id,
                 value=stats["select_form_value"],
             )
@@ -216,11 +216,19 @@ def render_feature_clustering(
     return h("ol", klass="stack feature-clustering")(clusters)
 
 
-def render_feature_edit_forms(create_action, merge_action):
+def render_feature_edit_forms(add_to_query, create_action, merge_action, current_query):
+
+    query_input = None
+    if current_query is not None:
+        query_input = h("input", type="hidden", name="query", value=current_query)
 
     return h("form", id="edit-model-form", method="post", action=create_action)(
+        query_input,
         h("button", type="submit")("Create cluster from selected features"),
         h("button", type="submit", formaction=merge_action)("Merge selected clusters"),
+        h("button", type="submit", formmethod="get", formaction=add_to_query)(
+            "Add selected to query"
+        ),
     )
 
 
