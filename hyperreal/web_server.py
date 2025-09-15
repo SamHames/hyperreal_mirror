@@ -81,7 +81,7 @@ class IndexedField(HyperrealRequestHandler):
         for f, stats in features.items():
             base_url = self.reverse_url("field-features", field)
             query_string = self.idx.feature_to_querystring(f)
-            stats["url"] = base_url + "?" + query_string
+            stats["feature_url"] = base_url + "?" + query_string
 
         html_features = {
             self.idx.feature_to_html(feature): stats
@@ -89,12 +89,7 @@ class IndexedField(HyperrealRequestHandler):
         }
 
         total_doc_count = self.idx.total_doc_count
-        rendered_features = web_rendering.render_feature_stats_table(
-            features,
-            feature_url_key="url",
-            heatmap_stat="relative_doc_count",
-            count_stat="doc_count",
-        )
+        rendered_features = web_rendering.render_feature_stats_table(features)
 
         linkable_fields = self.idx.field_handlers
 
@@ -184,7 +179,7 @@ class MainHandler(HyperrealRequestHandler):
         self.write(self.render_page(f"Overview of Indexed Fields", [table]))
 
 
-def render_facets(idx, query, base_url):
+def render_facets(idx, query, base_url, select_form_id):
 
     rendered_facets = []
 
@@ -195,7 +190,8 @@ def render_facets(idx, query, base_url):
 
         for f, stats in faceted.items():
             query_string = idx.feature_to_querystring(f)
-            stats["url"] = base_url + "?" + query_string
+            stats["feature_url"] = base_url + "?" + query_string
+            stats["select_form_value"] = query_string
 
         rendered_facets.append(
             h("li")(
@@ -204,9 +200,7 @@ def render_facets(idx, query, base_url):
                 ),
                 web_rendering.render_feature_stats_table(
                     faceted,
-                    heatmap_stat="jaccard_similarity",
-                    count_stat="hits",
-                    feature_url_key="url",
+                    select_form_id=select_form_id,
                 ),
             )
         )
@@ -310,6 +304,17 @@ class BrowseClusters(HyperrealRequestHandler):
                     cluster_id
                 )
 
+            # Inject jaccard_similarity = relative_doc_count for the case when the
+            # implicit query matches all documents.
+            for c_stats in cluster_stats.values():
+                c_stats["hits"] = c_stats["doc_count"]
+                c_stats["jaccard_similarity"] = c_stats["relative_doc_count"]
+
+            for features in clustering.values():
+                for f_stats in features.values():
+                    f_stats["hits"] = f_stats["doc_count"]
+                    f_stats["jaccard_similarity"] = f_stats["relative_doc_count"]
+
             # Override to show all clusters in this case
             top_k_clusters = matched_cluster_count = len(cluster_stats)
         else:
@@ -351,7 +356,7 @@ class BrowseClusters(HyperrealRequestHandler):
             for cluster_id, features in faceted.items()
         }
 
-        facets = render_facets(self.idx, matching_docs, base_url)
+        facets = render_facets(self.idx, matching_docs, base_url, "edit-model-form")
 
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
@@ -379,10 +384,10 @@ class BrowseClusters(HyperrealRequestHandler):
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_querystring(f)
-                stats["url"] = "".join(
+                stats["feature_url"] = "".join(
                     (base_url, "?", query_string, f"#cluster-{cluster_id}")
                 )
-                stats["edit_form_feature_value"] = query_string
+                stats["select_form_value"] = query_string
 
         see_all_clusters_link = None
 
@@ -401,12 +406,7 @@ class BrowseClusters(HyperrealRequestHandler):
             web_rendering.render_feature_clustering(
                 clustering,
                 cluster_stats,
-                feature_url_key="url",
-                header_url_key="header_url",
-                seemore_url_key="seemore_url",
-                heatmap_stat=heatmap_stat,
-                count_stat="doc_count",
-                feature_form_details=("edit-model-form", "edit_form_feature_value"),
+                select_form_id="edit-model-form",
             ),
             see_all_clusters_link,
         )
