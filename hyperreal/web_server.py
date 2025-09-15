@@ -361,7 +361,7 @@ class BrowseClusters(HyperrealRequestHandler):
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
             cluster_query = f"c={cluster_id}"
-            cluster_stats[cluster_id]["header_url"] = "".join(
+            cluster_stats[cluster_id]["cluster_url"] = "".join(
                 (base_url, "?", cluster_query)
             )
 
@@ -380,7 +380,7 @@ class BrowseClusters(HyperrealRequestHandler):
                         f"#cluster-{cluster_id}",
                     )
                 )
-                cluster_stats[cluster_id]["seemore_url"] = return_url
+                cluster_stats[cluster_id]["expand_url"] = return_url
 
             for f, stats in clustering[cluster_id].items():
                 query_string = self.idx.feature_to_querystring(f)

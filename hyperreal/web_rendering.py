@@ -130,11 +130,6 @@ def render_feature_stats_table(
 def render_feature_clustering(
     feature_clustering,
     cluster_stats,
-    # count_stat=None,
-    # heatmap_stat=None,
-    # feature_url_key=None,
-    # header_url_key=None,
-    # seemore_url_key=None,
     select_form_id=None,
 ):
 
