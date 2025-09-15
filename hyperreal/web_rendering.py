@@ -612,12 +612,9 @@ h1, h2, h3 {
     text-align: center;
 }
 
-.heatmap {
-    background: oklch(calc(1 - var(--sim, 0)) 0 0);
-    color: oklch(
-        calc(round(var(--sim, 1)))
-        0 0
-    );
+.heatmap, .heatmap a, .heatmap a:visited  {
+    background: oklch(100% calc(sqrt(var(--sim, 0))*100%) 20);
+    color: black;
 }
 
 .invisible {
@@ -628,14 +625,6 @@ h1, h2, h3 {
 
 .feature-table td:last-child {
     text-align: center;
-}
-
-.heatmap a, .heatmap a:visited {
-    color: oklch(
-        calc(round(var(--sim, 1)))
-        0
-        0
-    );
 }
 
 .feature-clustering {
