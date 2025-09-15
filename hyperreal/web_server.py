@@ -124,14 +124,14 @@ class IndexedField(HyperrealRequestHandler):
             self.render_page(
                 f"Feature summary for field: {field}",
                 [
-                    rendered_features,
-                    web_rendering.list_search_results(
+                    (f"Features in field: {field}", rendered_features),
+                    (
+                        web_rendering.search_results_header(
+                            sample_doc_count, matching_doc_count
+                        ),
                         await search_results,
-                        sample_doc_count=sample_doc_count,
-                        matching_doc_count=matching_doc_count,
                     ),
                 ],
-                column_flex={1: 2},
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
                 body_header=web_rendering.heatmap_legend("Similarity", 0, 1, 10),
@@ -167,17 +167,11 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         self.write(
             self.render_page(
                 f"Indexed Feature Overview",
-                [table],
+                [("Summary of Indexed Fields", table)],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed fields",
             )
         )
-
-
-class MainHandler(HyperrealRequestHandler):
-    def get(self):
-
-        self.write(self.render_page(f"Overview of Indexed Fields", [table]))
 
 
 def render_facets(idx, query, base_url, current_query_encode, select_form_id):
@@ -524,12 +518,13 @@ class BrowseClusters(HyperrealRequestHandler):
             self.render_page(
                 f"Browse Feature Clusters",
                 [
-                    rendered,
-                    facets,
-                    web_rendering.list_search_results(
+                    ("Feature Clusters", rendered),
+                    ("Selected Facets", facets),
+                    (
+                        web_rendering.search_results_header(
+                            sample_doc_count, matching_doc_count
+                        ),
                         await search_results,
-                        sample_doc_count=sample_doc_count,
-                        matching_doc_count=matching_doc_count,
                     ),
                 ],
                 body_header=(

@@ -251,6 +251,10 @@ def generate_nav(label, links, klass=None):
     )
 
 
+def search_results_header(sample_doc_count, matching_doc_count):
+    return f"{sample_doc_count} of {matching_doc_count} matching documents"
+
+
 def full_page(
     page_title,
     body_columns,
@@ -304,31 +308,12 @@ def full_page(
                         h(
                             "div",
                             klass="column bordered",
-                            style=f"--column-flex: {column_flex.get(col_index, 1)}",
-                        )(col)
-                        for col_index, col in enumerate(body_columns)
+                        )(h("h1")(col_title), col)
+                        for col_title, col in body_columns
                     ),
                 ),
             ),
         ),
-    )
-
-
-def list_search_results(search_results, sample_doc_count=None, matching_doc_count=None):
-
-    header_label = "Sample of matching docs"
-    if sample_doc_count is not None and matching_doc_count is not None:
-        header_label = f"{sample_doc_count} of {matching_doc_count} matching documents"
-    elif sample_doc_count is not None:
-        header_label = f"{sample_doc_count} sample documents"
-    elif matching_doc_count is not None:
-        header_label = f"Sample of {matching_doc_count} matching_documents"
-
-    return (
-        h("div", klass="header")(
-            h("h2")(header_label),
-        ),
-        search_results,
     )
 
 
@@ -443,13 +428,17 @@ main > * {
 
 .column {
     overflow-y: scroll;
-    flex: var(--column-flex, 1);
     padding: 0 var(--s-1);
     max-width: var(--column-width);
     scrollbar-color: black white;
 }
 
-h1, h2, h3 {
+
+h1 {
+    font-size: 120%;
+}
+
+h2, h3 {
     font-size: 100%;
 }
 
