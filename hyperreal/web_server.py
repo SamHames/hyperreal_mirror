@@ -309,8 +309,6 @@ class BrowseClusters(HyperrealRequestHandler):
         if new_clause:
             current_query.append(new_clause[0])
 
-        print(current_query)
-
         current_query_encode = (
             "query",
             dnf_query_to_query_string(self.idx, current_query),
