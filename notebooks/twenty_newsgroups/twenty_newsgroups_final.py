@@ -563,7 +563,7 @@ clustering = newsgroups_idx.plugins["feature_clusters"]
 if not clustering.cluster_ids:
 
     # Set the state of the RNG to a consistent point.
-    clustering.random_state = random.Random(42)
+    newsgroups_idx.random_state = random.Random(42)
 
     start_time = time.monotonic()
 
