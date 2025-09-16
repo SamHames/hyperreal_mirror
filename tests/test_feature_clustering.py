@@ -57,7 +57,7 @@ def test_plaintext_feature_cluster(example_idx):
     merged_cluster_id = clustering.merge_clusters([1, 0])
     assert len(clustering.cluster_ids) == 15
     assert (
-        set(clustering.cluster_features(merge_cluster_id))
+        set(clustering.cluster_features(merged_cluster_id))
         == new_clustering[0] | new_clustering[1]
     )
 
