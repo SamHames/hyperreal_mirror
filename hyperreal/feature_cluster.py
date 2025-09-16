@@ -838,109 +838,108 @@ def _measure_feature_contribution_to_cluster(
     """
     starts, ends = offsets
 
-    with open(mmap_file, "r+b") as f:
-        with contextlib.closing(
-            mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        ) as mm:
-            # FIRST PHASE: compute the objective and minimal cover stats for the
-            # current cluster.
+    with open(mmap_file, "r+b") as f, contextlib.closing(
+        mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    ) as mm:
+        # FIRST PHASE: compute the objective and minimal cover stats for the
+        # current cluster.
 
-            # The union of all docs covered by the cluster
-            cluster_union = BitMap()
-            # The set of all docs covered at least twice.
-            # This will be used to work out which documents are only covered once.
-            covered_twice = BitMap()
+        # The union of all docs covered by the cluster
+        cluster_union = BitMap()
+        # The set of all docs covered at least twice.
+        # This will be used to work out which documents are only covered once.
+        covered_twice = BitMap()
 
-            hits = 0
-            n_features = len(clustering)
+        hits = 0
+        n_features = len(clustering)
 
-            if n_features == 0:
-                return (cluster_key, 0, [], [])
+        if n_features == 0:
+            return (cluster_key, 0, [], [])
 
-            # Construct the union of all cluster tokens, and also the set of
-            # documents only covered by a single feature.
-            for feature in clustering:
-                docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
+        # Construct the union of all cluster tokens, and also the set of
+        # documents only covered by a single feature.
+        for feature in clustering:
+            docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
 
-                hits += len(docs)
+            hits += len(docs)
 
-                # Docs covered at least twice
-                covered_twice |= cluster_union & docs
-                # All docs now covered
-                cluster_union |= docs
+            # Docs covered at least twice
+            covered_twice |= cluster_union & docs
+            # All docs now covered
+            cluster_union |= docs
 
-            only_once = cluster_union - covered_twice
+        only_once = cluster_union - covered_twice
 
-            c = len(cluster_union)
-            objective = hits / (c + n_features)
+        c = len(cluster_union)
+        objective = hits / (c + n_features)
 
-            # PHASE 2: compute the incremental change in objective from removing
-            # each feature (alone) from the current cluster.
+        # PHASE 2: compute the incremental change in objective from removing
+        # each feature (alone) from the current cluster.
 
-            n_return_features = n_features + len(check_features)
-            return_features = array.array("q", (0 for _ in range(n_return_features)))
-            return_scores = array.array("d", (0 for _ in range(n_return_features)))
+        n_return_features = n_features + len(check_features)
+        return_features = array.array("q", (0 for _ in range(n_return_features)))
+        return_scores = array.array("d", (0 for _ in range(n_return_features)))
 
-            i = 0
+        i = 0
 
-            # Features that are already in the cluster, so we need to calculate a remove
-            # operator. Effectively we're counting the negative of the score for
-            # removing that feature as the effect of adding it to the cluster.
-            for feature in clustering:
-                docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
+        # Features that are already in the cluster, so we need to calculate a remove
+        # operator. Effectively we're counting the negative of the score for
+        # removing that feature as the effect of adding it to the cluster.
+        for feature in clustering:
+            docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
 
-                feature_hits = len(docs)
+            feature_hits = len(docs)
 
-                old_hits = hits - feature_hits
-                only_once_hits = docs.intersection_cardinality(only_once)
-                old_c = c - only_once_hits
+            old_hits = hits - feature_hits
+            only_once_hits = docs.intersection_cardinality(only_once)
+            old_c = c - only_once_hits
 
-                # Check if this feature intersects with any other feature in this cluster
-                intersects_with_other_feature = only_once_hits < feature_hits
+            # Check if this feature intersects with any other feature in this cluster
+            intersects_with_other_feature = only_once_hits < feature_hits
 
-                # It's okay for the cluster to become empty - we'll just prune it.
-                if old_c and intersects_with_other_feature:
-                    old_objective = old_hits / (old_c + (n_features - 1))
+            # It's okay for the cluster to become empty - we'll just prune it.
+            if old_c and intersects_with_other_feature:
+                old_objective = old_hits / (old_c + (n_features - 1))
 
-                    delta = objective - old_objective
+                delta = objective - old_objective
 
-                # Penalises features that don't intersect with other features in the
-                # cluster.
-                elif old_c:
-                    delta = -1
-                # If it would otherwise be a singleton cluster, mark it as a bad move
-                else:
-                    delta = -1
+            # Penalises features that don't intersect with other features in the
+            # cluster.
+            elif old_c:
+                delta = -1
+            # If it would otherwise be a singleton cluster, mark it as a bad move
+            else:
+                delta = -1
 
-                return_features[i] = feature
-                return_scores[i] = delta
-                i += 1
+            return_features[i] = feature
+            return_scores[i] = delta
+            i += 1
 
-            # PHASE 3: Incremental delta from adding new features to the cluster.
+        # PHASE 3: Incremental delta from adding new features to the cluster.
 
-            # All tokens that are adds (not already in the cluster)
-            for feature in check_features:
-                docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
+        # All tokens that are adds (not already in the cluster)
+        for feature in check_features:
+            docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
 
-                feature_hits = len(docs)
+            feature_hits = len(docs)
 
-                if docs.intersect(cluster_union):
-                    new_hits = hits + feature_hits
-                    new_c = docs.union_cardinality(cluster_union)
-                    new_objective = new_hits / (new_c + (n_features + 1))
+            if docs.intersect(cluster_union):
+                new_hits = hits + feature_hits
+                new_c = docs.union_cardinality(cluster_union)
+                new_objective = new_hits / (new_c + (n_features + 1))
 
-                    delta = new_objective - objective
+                delta = new_objective - objective
 
-                # If the feature doesn't intersect with the cluster at all,
-                # give it a bad delta.
-                else:
-                    delta = -1
+            # If the feature doesn't intersect with the cluster at all,
+            # give it a bad delta.
+            else:
+                delta = -1
 
-                return_features[i] = feature
-                return_scores[i] = delta
-                i += 1
+            return_features[i] = feature
+            return_scores[i] = delta
+            i += 1
 
-            assert i == n_return_features
+        assert i == n_return_features
 
     return cluster_key, objective, return_features, return_scores
 
