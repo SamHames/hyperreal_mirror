@@ -168,7 +168,7 @@ def render_feature_clustering(
 
         cells = []
 
-        cells.append(h("th", scope="row", id=f"cluster-{cluster_id}")(cluster_id))
+        cells.append(h("th", scope="row")(cluster_id))
 
         features = feature_clustering[cluster_id]
 
@@ -192,7 +192,7 @@ def render_feature_clustering(
 
         cells.append(h("td")(selector))
 
-        header = h("table", klass="cluster-stats-table")(
+        header = h("table", klass="cluster-stats-table", id=f"cluster-{cluster_id}")(
             h("thead")(h("tr")(header_fields), h("tbody")(cells))
         )
 
@@ -361,7 +361,8 @@ default_css = """
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
     --column-width: 72ch;
-    --border-color: oklch(50% 0 0)
+    --border-color: oklch(50% 0 0);
+    --thin: 0.1rem;
 }
 
 .cluster {
@@ -377,7 +378,7 @@ header {
 }
 
 .bordered {
-    border: 0.1rem solid var(--border-color);
+    border: var(--thin) solid var(--border-color);
 }
 
 nav ul {
@@ -546,32 +547,29 @@ h2, h3 {
 }
 
 .query-operator-side {
-    border-right: var(--s-3) solid var(--border-color);
+    border-right: var(--thin) solid var(--border-color);
     display: flex;
     justify-content: center;
     align-items: center;
 }
 
 .query-operator-bottom {
-    border-bottom: var(--s-3) solid var(--border-color);
+    border-bottom: var(--thin) solid var(--border-color);
     text-align: center;
     font-size: 75%;
 }
 
 /****** Layout for feature tables *******/
 
-.cluster-features > * {
-    padding: var(--s-2);
-}
-
 .feature-table {
     width: 100%;
     display: grid;
-    grid-template-columns: auto auto auto auto auto auto auto;
+    grid-template-columns: auto auto auto 0 auto 0 auto;
+    padding: var(--s-1);
 }
 
-.feature-table thead, .feature-table tbody {
-    border-bottom: var(--s-3) double black;
+.feature-table :is(tbody, thead) {
+    border-bottom: var(--thin) solid black;
     display: grid;
     grid-template-columns: subgrid;
     grid-column: span 7;
@@ -603,9 +601,22 @@ h2, h3 {
 }
 
 .cluster-stats-table {
-    margin: 0 calc(-1 * var(--s-1));
-    table-layout: fixed;
-    width: calc(100% + 2 * var(--s-1));
+    display: grid;
+    grid-template-columns: auto auto auto auto 0 auto 0 auto;
+}
+
+.cluster-stats-table :is(thead, tbody) {
+    border-bottom: var(--thin) solid black;
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: span 8;
+    gap: 0;
+}
+
+.cluster-stats-table tr {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: span 8;
 }
 
 .cluster-stats-table :is(td, th) {
@@ -632,6 +643,7 @@ h2, h3 {
 .invisible {
     font-size: 0;
     width: 0;
+    max-width: 0;
     padding: 0 !important; 
 }
 
