@@ -338,6 +338,10 @@ class BrowseClusters(HyperrealRequestHandler):
             dnf_query_to_query_string(self.idx, current_query),
         )
 
+        # Keep track of current query selections so we can return to this view via
+        # expand etc.
+        return_query_items = [current_query_encode]
+
         current_query_rendered = h("span")("All Documents")
         if current_query:
             current_query_rendered = render_dnf_query(self.idx, current_query)
@@ -363,14 +367,9 @@ class BrowseClusters(HyperrealRequestHandler):
                 self.feature_clusters.cluster_features(cluster_id)
             )
 
-        heatmap_stat = "jaccard_similarity"
         skip_feature_pivoting = False
-        return_query_items = []
-        """
-        Hold the query string components for returning to this query with additional
-        settings.
-        """
 
+        # Allow returning to this query with expansions intact.
         return_query_items.extend([("expand", c) for c in expand_cluster_list])
 
         # Special case when nothing is selected to pivot by
@@ -395,6 +394,8 @@ class BrowseClusters(HyperrealRequestHandler):
         search_results, sample_doc_count = self.render_html_sample_docs(
             matching_docs, sample_doc_count, highlight_features=highlight_features
         )
+
+        order_by_stat = "jaccard_similarity"
 
         if skip_feature_pivoting:
             cluster_stats = self.feature_clusters.cluster_ids
@@ -424,11 +425,11 @@ class BrowseClusters(HyperrealRequestHandler):
         else:
             cluster_stats = self.feature_clusters.facet_clusters_by_query(matching_docs)
             matched_cluster_count = len(
-                TableFilter(order_by=heatmap_stat, keep_above=0)(cluster_stats)
+                TableFilter(order_by=order_by_stat, keep_above=0)(cluster_stats)
             )
 
         cluster_stats = TableFilter(
-            order_by=heatmap_stat, keep_above=0, first_k=top_k_clusters
+            order_by=order_by_stat, keep_above=0, first_k=top_k_clusters
         )(cluster_stats)
 
         if skip_feature_pivoting:
@@ -440,16 +441,16 @@ class BrowseClusters(HyperrealRequestHandler):
             )
             # Count the number of features that matched at all, regardless of whether
             # they'll be displayed or not.
-            matching_filter = TableFilter(order_by=heatmap_stat, keep_above=0)
+            matching_filter = TableFilter(order_by=order_by_stat, keep_above=0)
             for cluster_id, features in faceted.items():
                 cluster_stats[cluster_id]["matching_feature_count"] = len(
                     matching_filter(features)
                 )
 
         top_feature_filter = TableFilter(
-            order_by=heatmap_stat, keep_above=0, first_k=top_k_features
+            order_by=order_by_stat, keep_above=0, first_k=top_k_features
         )
-        non_zero_feature_filter = TableFilter(order_by=heatmap_stat, keep_above=0)
+        non_zero_feature_filter = TableFilter(order_by=order_by_stat, keep_above=0)
 
         clustering = {
             cluster_id: (
