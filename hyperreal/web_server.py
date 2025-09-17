@@ -286,33 +286,35 @@ def evaluate_dnf_query(clustering, dnf_query):
     return result
 
 
-def render_dnf_query(idx, dnf_query):
+def render_dnf_query(clustering, dnf_query):
 
     def render_clause(clause):
         items = []
 
         for component in clause:
             if isinstance(component, int):
-                # top_features = idx.cluster_features(component, top_k_features=3)
-                rendered = f"Cluster: {component}"
+                top_features = [
+                    clustering.idx.feature_to_html(f)
+                    for f in clustering.cluster_features(component, top_k_features=3)
+                ]
+                rendered = (f"Cluster: {component} (", *top_features, ")")
             elif isinstance(component, tuple):
-                rendered = idx.feature_to_html(component)
+                rendered = clustering.idx.feature_to_html(component)
             else:
                 raise ValueError(f"Unsupported query element: {component}")
 
             items.append(rendered)
+            items.append(h("span", klass="query-operator")(" OR "))
 
-        return h("div", klass="query-operator-bottom")("OR"), h("ul", klass="cluster")(
-            h("li")(item) for item in items
-        )
+        return h("ul", klass="cluster bordered")(h("li")(item) for item in items[:-1])
 
     rendered_clauses = []
     for clause in dnf_query:
         rendered_clauses.append(render_clause(clause))
+        rendered_clauses.append(h("div", klass="query-operator")("AND"))
 
     return h("div", klass="query cluster")(
-        h("div", klass="query-operator-side")("AND"),
-        h("ul", klass="stack")(h("li")(clause) for clause in rendered_clauses),
+        h("ul", klass="stack")(h("li")(clause) for clause in rendered_clauses[:-1]),
     )
 
 
@@ -344,7 +346,9 @@ class BrowseClusters(HyperrealRequestHandler):
 
         current_query_rendered = h("span")("All Documents")
         if current_query:
-            current_query_rendered = render_dnf_query(self.idx, current_query)
+            current_query_rendered = render_dnf_query(
+                self.feature_clusters, current_query
+            )
 
         expand_cluster_list = [int(e) for e in self.get_arguments("expand")]
         expand_clusters = set(expand_cluster_list)
