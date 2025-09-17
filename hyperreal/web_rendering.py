@@ -628,7 +628,7 @@ h2, h3 {
 }
 
 .heatmap, .heatmap a, .heatmap a:visited  {
-    background: oklch(100% calc(sqrt(var(--sim, 0))*100%) 20);
+    background: oklch(100% calc(sqrt(var(--sim, 0))*80%) 20);
     color: black;
 }
 
