@@ -546,17 +546,9 @@ h2, h3 {
     --space: var(--s-3);
 }
 
-.query-operator-side {
-    border-right: var(--thin) solid var(--border-color);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-.query-operator-bottom {
-    border-bottom: var(--thin) solid var(--border-color);
+.query-operator {
     text-align: center;
-    font-size: 75%;
+    font-style: italic;
 }
 
 /****** Layout for feature tables *******/
