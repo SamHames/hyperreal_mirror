@@ -297,7 +297,14 @@ def render_dnf_query(clustering, dnf_query):
                     clustering.idx.feature_to_html(f)
                     for f in clustering.cluster_features(component, top_k_features=3)
                 ]
-                rendered = (f"Cluster: {component} (", *top_features, ")")
+                top_features.append("...")
+                rendered = h("span", klass="cluster", style="--gap: var(--s-3);")(
+                    f"Cluster: {component} (",
+                    h("ul", klass="cluster")(
+                        h("li")(feature) for feature in top_features
+                    ),
+                    ")",
+                )
             elif isinstance(component, tuple):
                 rendered = clustering.idx.feature_to_html(component)
             else:

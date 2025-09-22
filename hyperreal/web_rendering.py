@@ -360,6 +360,7 @@ default_css = """
     --s-1: calc(var(--s0) / var(--ratio));
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
+    --space: var(--s-1);
     --column-width: 72ch;
     --border-color: oklch(50% 0 0);
     --thin: 0.1rem;
@@ -368,7 +369,7 @@ default_css = """
 .cluster {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--s-1);
+    gap: var(--space);
 }
 
 header {
@@ -466,8 +467,6 @@ h2, h3 {
 
 /* Concordance handling CSS */
 .concordance {
-    --space: var(--s-2);
-    margin: var(--s-2);
     width: 100%;
     white-space: nowrap;
     display: grid;

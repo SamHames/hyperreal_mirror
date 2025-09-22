@@ -225,9 +225,9 @@ class HyperrealCorpus:
             output.append(h("dt")(h("em")(field)))
 
             for match_value, match_lines in values.items():
-                value_handler = self.type_handlers[type(match_value)]
-
                 display_lines = []
+
+                value_handler = self.type_handlers[type(match_value)]
 
                 for match_position, pre, display_match, post in match_lines:
 
@@ -243,25 +243,15 @@ class HyperrealCorpus:
 
                     display_lines.append(
                         h("li", klass="concordance-line")(
-                            h("span", klass="concordance-pre", dir="ltr")(pre_html),
+                            h("span", klass="concordance-pre", dir="rtl")(pre_html),
                             h("mark", klass="concordance-match")(match_html),
                             h("span", klass="concordance-post")(post_html),
                         ),
                     )
 
-                output.append(
-                    h("dd", klass="concordance-container")(
-                        h("details")(
-                            h("summary")(
-                                match_value.replace("\n", " "),
-                                f" ({len(display_lines)})",
-                            ),
-                            h("ol", klass="concordance")(display_lines),
-                        )
-                    )
-                )
+                output.append(h("ol", klass="concordance")(display_lines))
 
-        return h("dl", klass="matches cluster")(output)
+        return h("dl", klass="matches stack", style="--space: var(--s-3);")(output)
 
     def html_search_results(self, doc_keys, highlight_features=None) -> frag:
         """
