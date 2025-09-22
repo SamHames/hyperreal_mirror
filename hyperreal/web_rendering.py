@@ -426,7 +426,6 @@ main > * {
     gap: var(--s1);
     display: flex;
     flex-direction: row;
-    flex: 1;
     justify-content: center;
 }
 
@@ -435,6 +434,7 @@ main > * {
     padding: 0 var(--s-1);
     max-width: var(--column-width);
     scrollbar-color: black white;
+    flex: 1;
 }
 
 
