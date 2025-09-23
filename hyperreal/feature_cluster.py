@@ -923,11 +923,14 @@ def _measure_feature_contribution_to_cluster(
 
             feature_hits = len(docs)
 
-            if docs.intersect(cluster_union):
-                new_hits = hits + feature_hits
-                new_c = docs.union_cardinality(cluster_union)
-                new_objective = new_hits / (new_c + (n_features + 1))
+            new_hits = hits + feature_hits
 
+            new_c = docs.union_cardinality(cluster_union)
+
+            # check whether there is any intersection from the union results
+            # using the inclusion-exclusion principle.
+            if old_c + feature_hits - new_c > 0:
+                new_objective = new_hits / (new_c + (n_features + 1))
                 delta = new_objective - objective
 
             # If the feature doesn't intersect with the cluster at all,
