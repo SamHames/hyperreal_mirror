@@ -16,7 +16,7 @@ from urllib.request import urlretrieve
 # Where the data is coming from
 data_url = "http://qwone.com/~jason/20Newsgroups/20news-19997.tar.gz"
 # Where we're going to put it.
-data_path = Path("data")
+data_path = Path("data", "twenty_newsgroups")
 tar_loc = data_path / "20news-19997.tar.gz"
 
 # Download the data, but only if it isn't already present
