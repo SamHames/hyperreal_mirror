@@ -231,7 +231,7 @@ def render_feature_edit_forms(
         h("button", type="submit")("Create cluster from selected features"),
         h("button", type="submit", formaction=merge_action)("Merge selected clusters"),
         h("button", type="submit", formmethod="get", formaction=add_to_query)(
-            "Add selected to query"
+            "Create query clause from selected"
         ),
         h("button", type="submit", formmethod="get", formaction=new_query)(
             "Start new query with selected"

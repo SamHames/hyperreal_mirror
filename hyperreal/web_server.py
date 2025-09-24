@@ -340,6 +340,13 @@ class BrowseClusters(HyperrealRequestHandler):
         new_clause = query_string_to_dnf_query(self.idx, self.request.query)
 
         if new_clause:
+            # Pull out duplicates of features currently included into the new clause.
+            # This enforces a simplify constraint that a feature can only occur once.
+            dedup = set(new_clause[0])
+            dedup_query_clauses = [
+                [f for f in clause if f not in dedup] for clause in current_query
+            ]
+            current_query = [clause for clause in dedup_query_clauses if clause]
             current_query.append(new_clause[0])
 
         current_query_encode = (
