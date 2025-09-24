@@ -562,6 +562,10 @@ class BrowseClusters(HyperrealRequestHandler):
             dnf_query_to_query_string(self.idx, current_query),
         )
 
+        cluster_nav = web_rendering.cluster_navigation(
+            self.reverse_url("browse"), self.feature_clusters.cluster_ids
+        )
+
         self.write(
             self.render_page(
                 f"Browse Feature Clusters",
@@ -578,6 +582,7 @@ class BrowseClusters(HyperrealRequestHandler):
                 body_header=(
                     edit_form,
                     web_rendering.heatmap_legend("Similarity", 0, 1, 10),
+                    cluster_nav,
                     current_query_rendered,
                 ),
             )
