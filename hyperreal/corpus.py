@@ -243,7 +243,9 @@ class HyperrealCorpus:
 
                     display_lines.append(
                         h("li", klass="concordance-line")(
-                            h("span", klass="concordance-pre", dir="rtl")(pre_html),
+                            h("span", klass="concordance-pre", dir="rtl")(
+                                h("span", dir="auto")(pre_html)
+                            ),
                             h("mark", klass="concordance-match")(match_html),
                             h("span", klass="concordance-post")(post_html),
                         ),
