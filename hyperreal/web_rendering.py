@@ -216,7 +216,9 @@ def render_feature_clustering(
     return h("ol", klass="stack feature-clustering")(clusters)
 
 
-def render_feature_edit_forms(add_to_query, create_action, merge_action, current_query):
+def render_feature_edit_forms(
+    add_to_query, create_action, merge_action, new_query, current_query
+):
 
     query_input = None
     if current_query is not None:
@@ -230,6 +232,9 @@ def render_feature_edit_forms(add_to_query, create_action, merge_action, current
         h("button", type="submit", formaction=merge_action)("Merge selected clusters"),
         h("button", type="submit", formmethod="get", formaction=add_to_query)(
             "Add selected to query"
+        ),
+        h("button", type="submit", formmethod="get", formaction=new_query)(
+            "Start new query with selected"
         ),
     )
 

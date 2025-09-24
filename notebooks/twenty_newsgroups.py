@@ -568,13 +568,13 @@ if not clustering.cluster_ids:
     start_time = time.monotonic()
 
     random_clustering = clustering.initialise_random_clustering(
-        100, min_docs=10, include_fields=["body"]
+        256, min_docs=10, include_fields=["body"]
     )
 
     clustering.replace_clusters(random_clustering)
 
     clustering.refine_clustering(
-        group_test_n_clusters=10,
+        group_test_n_clusters=32,
         iterations=50,
         random_group_checks=0,
         moving_feature_fraction_tolerance=0,

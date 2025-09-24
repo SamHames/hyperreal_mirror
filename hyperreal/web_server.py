@@ -553,10 +553,12 @@ class BrowseClusters(HyperrealRequestHandler):
 
         form_link = self.reverse_url("create-cluster")
         merge_cluster_link = self.reverse_url("merge-clusters")
+        new_query_link = self.reverse_url("browse-new-query")
         edit_form = web_rendering.render_feature_edit_forms(
             self.reverse_url("browse"),
             form_link,
             merge_cluster_link,
+            new_query_link,
             dnf_query_to_query_string(self.idx, current_query),
         )
 
@@ -580,6 +582,26 @@ class BrowseClusters(HyperrealRequestHandler):
                 ),
             )
         )
+
+
+class NewQueryBrowseClusters(HyperrealRequestHandler):
+
+    def get(self):
+        """
+        Redirect back to browse to start a new one without the current query.
+
+        """
+
+        args = self.request.arguments.copy()
+
+        # reset the query to empty
+        args["query"] = [b""]
+
+        query_string = urlencode(
+            [(key, val) for key, values in args.items() for val in values]
+        )
+
+        self.redirect(self.reverse_url("browse") + "?" + query_string)
 
 
 class CreateCluster(HyperrealRequestHandler):
@@ -675,6 +697,11 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 name="field-features",
             ),
             tornado.web.url(rf"{base_path}/browse/", BrowseClusters, name="browse"),
+            tornado.web.url(
+                rf"{base_path}/browse/new",
+                NewQueryBrowseClusters,
+                name="browse-new-query",
+            ),
             tornado.web.url(
                 rf"{base_path}/cluster/create/",
                 CreateCluster,
