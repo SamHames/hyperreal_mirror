@@ -608,6 +608,8 @@ newsgroups_idx.facets = [
     ),
 ]
 
+newsgroups_idx.search_fields = {"body": tokenise, "subject": tokenise}
+
 try:
     loop = asyncio.get_running_loop()
     task = loop.create_task(

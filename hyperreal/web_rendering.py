@@ -242,13 +242,21 @@ def render_feature_edit_forms(
 def cluster_navigation(browse_url, cluster_ids):
     """Generate a selector to jump to any cluster."""
 
-    return h(
-        "form", klass="stack", id="edit-model-form", method="get", action=browse_url
-    )(
+    return h("form", method="get", action=browse_url)(
         h("select", name="c")(
             [h("option", value=cluster_id)(cluster_id)] for cluster_id in cluster_ids
         ),
         h("button", type="submit")("Go to cluster"),
+    )
+
+
+def generate_search(search_url, search_fields):
+    return h("form", method="get", action=search_url)(
+        h("select", name="search-field")(
+            h("option", value=field)(field) for field in search_fields
+        ),
+        h("input", type="text", name="search-value")(),
+        h("button", type="submit")("Search"),
     )
 
 

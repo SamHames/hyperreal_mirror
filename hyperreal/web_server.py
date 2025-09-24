@@ -566,6 +566,10 @@ class BrowseClusters(HyperrealRequestHandler):
             self.reverse_url("browse"), self.feature_clusters.cluster_ids
         )
 
+        search_nav = web_rendering.generate_search(
+            self.reverse_url("search"), self.idx.search_fields
+        )
+
         self.write(
             self.render_page(
                 f"Browse Feature Clusters",
@@ -583,6 +587,7 @@ class BrowseClusters(HyperrealRequestHandler):
                     edit_form,
                     web_rendering.heatmap_legend("Similarity", 0, 1, 10),
                     cluster_nav,
+                    search_nav,
                     current_query_rendered,
                 ),
             )
@@ -607,6 +612,27 @@ class NewQueryBrowseClusters(HyperrealRequestHandler):
         )
 
         self.redirect(self.reverse_url("browse") + "?" + query_string)
+
+
+class Search(HyperrealRequestHandler):
+
+    def get(self):
+        search_features = []
+
+        search_field = self.get_argument("search-field", strip=False)
+        search_value = self.get_argument("search-value", strip=False)
+
+        tokeniser = self.idx.search_fields[search_field]
+        # TODO: tokenise should be optional? Default should be to use the field
+        # value handler on the given field.
+        search_tokens = tokeniser(search_value)
+
+        for value in search_tokens:
+            search_features.append(
+                ("f", self.idx.feature_to_querystring((search_field, value)))
+            )
+
+        self.redirect(self.reverse_url("browse") + "?" + urlencode(search_features))
 
 
 class CreateCluster(HyperrealRequestHandler):
@@ -702,6 +728,7 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 name="field-features",
             ),
             tornado.web.url(rf"{base_path}/browse/", BrowseClusters, name="browse"),
+            tornado.web.url(rf"{base_path}/search/", Search, name="search"),
             tornado.web.url(
                 rf"{base_path}/browse/new",
                 NewQueryBrowseClusters,
