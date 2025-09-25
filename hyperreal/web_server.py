@@ -366,9 +366,14 @@ class BrowseClusters(HyperrealRequestHandler):
 
         expand_cluster_list = [int(e) for e in self.get_arguments("expand")]
         expand_clusters = set(expand_cluster_list)
-        anchor_cluster = None
         if expand_cluster_list:
             anchor_cluster = expand_cluster_list[-1]
+        else:
+            anchor_cluster = None
+            for clause in current_query:
+                for component in clause:
+                    if isinstance(component, int):
+                        anchor_cluster = component
 
         highlight_clusters = {
             item for clause in current_query for item in clause if isinstance(item, int)
@@ -570,7 +575,9 @@ class BrowseClusters(HyperrealRequestHandler):
         )
 
         cluster_nav = web_rendering.cluster_navigation(
-            self.reverse_url("browse"), self.feature_clusters.cluster_ids
+            self.reverse_url("browse"),
+            self.feature_clusters.cluster_ids,
+            selected=anchor_cluster,
         )
 
         search_nav = web_rendering.generate_search(

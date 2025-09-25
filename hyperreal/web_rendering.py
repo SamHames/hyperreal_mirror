@@ -239,12 +239,13 @@ def render_feature_edit_forms(
     )
 
 
-def cluster_navigation(browse_url, cluster_ids):
+def cluster_navigation(browse_url, cluster_ids, selected=None):
     """Generate a selector to jump to any cluster."""
 
     return h("form", method="get", action=browse_url)(
         h("select", name="c")(
-            [h("option", value=cluster_id)(cluster_id)] for cluster_id in cluster_ids
+            [h("option", selected=cluster_id == selected, value=cluster_id)(cluster_id)]
+            for cluster_id in cluster_ids
         ),
         h("button", type="submit")("Go to cluster"),
     )
