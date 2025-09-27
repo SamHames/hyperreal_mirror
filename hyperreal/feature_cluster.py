@@ -477,9 +477,7 @@ class FeatureClustering(IndexPlugin):
         self,
         clustering: Clustering,
         iterations: int = 10,
-        group_test_n_clusters: typing.Optional[int] = None,
-        random_group_checks: int = 1,
-        moving_feature_fraction_tolerance: float = 0.05,
+        random_cluster_checks: int = 0,
         use_passages=False,
     ) -> Clustering:
 
@@ -517,15 +515,6 @@ class FeatureClustering(IndexPlugin):
 
         leaf_ids = list(surrogate_clusters.keys())
 
-        if (
-            group_test_n_clusters is not None
-            and group_test_n_clusters > n_clusters * 0.5
-        ):
-            raise ValueError(
-                f"{group_test_n_clusters=} must be less than half of {n_clusters=} to "
-                "have any benefit"
-            )
-
         # Construct the mmap of index features for faster loading/saving
         with tempfile.TemporaryDirectory() as tmpdir:
             working_file = os.path.join(tmpdir, "mmap.temp")
@@ -542,65 +531,45 @@ class FeatureClustering(IndexPlugin):
 
             all_features = set(surrogate_feature_cluster)
 
+            prev_best_clusters = collections.deque()
+
             for _ in range(iterations):
 
-                if group_test_n_clusters is None:
+                if random_cluster_checks:
+                    check_features = collections.defaultdict(set)
 
+                    for feature_id in all_features:
+                        for leaf_id in self.idx.random_state.sample(
+                            leaf_ids, random_cluster_checks
+                        ):
+                            check_features[leaf_id].add(feature_id)
+
+                    # Also always check against the best cluster from the previous
+                    # iter - it may not actually have moved.
+                    for feature_id, prev_best in enumerate(zip(*prev_best_clusters)):
+                        for cluster_id in set(prev_best):
+                            check_features[cluster_id].add(feature_id)
+
+                else:
                     # Slow path: check all features against all clusters.
                     check_features = {
                         leaf_id: all_features
                         for leaf_id, lf in surrogate_clusters.items()
                     }
 
-                else:
-                    # Fast and approximate path: conduct group tests, checking features
-                    # against unions of clusters to avoid checking all features against
-                    # all clusters.
-                    self.idx.random_state.shuffle(leaf_ids)
-
-                    group_keys = [
-                        leaf_ids[i::group_test_n_clusters]
-                        for i in range(group_test_n_clusters)
-                    ]
-
-                    group_cluster_features = {
-                        i: set.union(*(surrogate_clusters[c] for c in keys))
-                        for i, keys in enumerate(group_keys)
-                    }
-
-                    group_check_features = {
-                        i: all_features for i, _ in enumerate(group_keys)
-                    }
-
-                    _, best_moves = _score_proposed_moves(
-                        self.idx.pool,
-                        working_file,
-                        group_cluster_features,
-                        group_check_features,
-                        offsets,
-                    )
-
-                    check_features = collections.defaultdict(set)
-
-                    for feature_id, best_cluster_group in enumerate(best_moves):
-                        # Test against the best group, plus a random sample of other
-                        # groups.
-                        random_groups = self.idx.random_state.sample(
-                            group_keys, random_group_checks
-                        )
-                        best_group = group_keys[best_cluster_group]
-                        test_clusters = itertools.chain(best_group, *random_groups)
-
-                        for cluster_id in test_clusters:
-                            check_features[cluster_id].add(feature_id)
-
-                _, best_clusters = _score_proposed_moves(
+                objective_estimate, best_clusters = _score_proposed_moves(
                     self.idx.pool,
                     working_file,
                     surrogate_clusters,
                     check_features,
                     offsets,
                 )
+
+                if len(prev_best_clusters) == 2:
+                    # Remove the oldest previous best clustering
+                    prev_best_clusters.popleft()
+
+                prev_best_clusters.append(best_clusters)
 
                 self.idx.random_state.shuffle(feature_check_order)
                 possible_moves, _ = _apply_moves(
@@ -611,8 +580,10 @@ class FeatureClustering(IndexPlugin):
                     self.idx.random_state,
                 )
 
-                if possible_moves / n_features < moving_feature_fraction_tolerance:
+                if possible_moves == 0:
                     break
+
+                print(objective_estimate, possible_moves)
 
         # Convert the feature_ids back to features for the return
         return {
@@ -625,9 +596,7 @@ class FeatureClustering(IndexPlugin):
         self,
         cluster_ids: typing.Optional[typing.Iterable[int]] = None,
         iterations: int = 10,
-        group_test_n_clusters: typing.Optional[int] = None,
-        random_group_checks: int = 1,
-        moving_feature_fraction_tolerance: float = 0.05,
+        random_cluster_checks: int = 0,
         use_passages=False,
     ):
         """
@@ -648,9 +617,7 @@ class FeatureClustering(IndexPlugin):
         refined_clustering = self._refine_clustering(
             clustering,
             iterations=iterations,
-            group_test_n_clusters=group_test_n_clusters,
-            random_group_checks=random_group_checks,
-            moving_feature_fraction_tolerance=moving_feature_fraction_tolerance,
+            random_cluster_checks=random_cluster_checks,
             use_passages=use_passages,
         )
 
