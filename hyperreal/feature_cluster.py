@@ -12,6 +12,7 @@ import contextlib
 import itertools
 import math
 import mmap
+import multiprocessing as mp
 import os
 import tempfile
 import typing
@@ -167,14 +168,14 @@ class FeatureClustering(IndexPlugin):
         """Return all defined clusters."""
         rows = self.idx.db.execute(
             """
-            SELECT 
-                cluster_id, 
+            SELECT
+                cluster_id,
                 doc_count,
                 (
-                    select count(*) 
-                    from feature_cluster fc 
+                    select count(*)
+                    from feature_cluster fc
                     where fc.cluster_id = cluster.cluster_id
-                ) 
+                )
             from cluster
             """
         )
@@ -211,13 +212,13 @@ class FeatureClustering(IndexPlugin):
 
         self.idx.db.executemany(
             """
-            INSERT into feature_cluster(field, value, cluster_id, doc_count) 
+            INSERT into feature_cluster(field, value, cluster_id, doc_count)
                 values(
-                    ?1, 
-                    ?2, 
+                    ?1,
+                    ?2,
                     ?3,
                     (
-                        select doc_count 
+                        select doc_count
                         from inverted_index ii
                         where (ii.field, ii.value) = (?1, ?2)
                     )
@@ -477,7 +478,7 @@ class FeatureClustering(IndexPlugin):
         self,
         clustering: Clustering,
         iterations: int = 10,
-        random_cluster_checks: int = 0,
+        random_cluster_checks: typing.Optional[int] = None,
         use_passages=False,
     ) -> Clustering:
 
@@ -509,6 +510,11 @@ class FeatureClustering(IndexPlugin):
         n_features = len(features)
         n_clusters = len(surrogate_clusters)
 
+        # If random_cluster_checks is not set, use the sqrt of the number of clusters
+        # as an automatic value.
+        if random_cluster_checks is None:
+            random_cluster_checks = math.ceil(n_clusters**0.5)
+
         # will be used to randomise the order of feature checks for moving between
         # clusters.
         feature_check_order = array.array("q", surrogate_feature_cluster)
@@ -516,7 +522,7 @@ class FeatureClustering(IndexPlugin):
         leaf_ids = list(surrogate_clusters.keys())
 
         # Construct the mmap of index features for faster loading/saving
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory() as tmpdir, mp.Manager() as manager:
             working_file = os.path.join(tmpdir, "mmap.temp")
 
             # Construct the mmap in the background - this might take a little bit.
@@ -527,28 +533,46 @@ class FeatureClustering(IndexPlugin):
                 working_file,
                 use_passages=use_passages,
             )
+
+            work_queue = manager.Queue()
+            results_queue = manager.Queue()
+
             offsets = future.result()
 
-            all_features = set(surrogate_feature_cluster)
+            # Start the background workers.
+            workers = set()
 
-            prev_best_clusters = collections.deque()
+            for _ in range(self.idx.max_workers):
+                workers.add(
+                    self.idx.pool.submit(
+                        _measure_feature_contribution_to_cluster_worker,
+                        working_file,
+                        work_queue,
+                        results_queue,
+                        offsets,
+                    )
+                )
+
+            best_clusters = []
 
             for _ in range(iterations):
 
                 if random_cluster_checks:
+
                     check_features = collections.defaultdict(set)
 
-                    for feature_id in all_features:
+                    for feature_id in surrogate_feature_cluster:
+
                         for leaf_id in self.idx.random_state.sample(
-                            leaf_ids, random_cluster_checks
+                            leaf_ids,
+                            random_cluster_checks,
                         ):
                             check_features[leaf_id].add(feature_id)
 
                     # Also always check against the best cluster from the previous
                     # iter - it may not actually have moved.
-                    for feature_id, prev_best in enumerate(zip(*prev_best_clusters)):
-                        for cluster_id in set(prev_best):
-                            check_features[cluster_id].add(feature_id)
+                    for feature_id, cluster_id in enumerate(best_clusters):
+                        check_features[cluster_id].add(feature_id)
 
                 else:
                     # Slow path: check all features against all clusters.
@@ -557,22 +581,20 @@ class FeatureClustering(IndexPlugin):
                         for leaf_id, lf in surrogate_clusters.items()
                     }
 
-                objective_estimate, best_clusters = _score_proposed_moves(
-                    self.idx.pool,
-                    working_file,
-                    surrogate_clusters,
-                    check_features,
-                    offsets,
-                )
-
-                if len(prev_best_clusters) == 2:
-                    # Remove the oldest previous best clustering
-                    prev_best_clusters.popleft()
-
-                prev_best_clusters.append(best_clusters)
+                try:
+                    objective_estimate, best_clusters = _score_proposed_moves(
+                        work_queue,
+                        results_queue,
+                        surrogate_clusters,
+                        check_features,
+                    )
+                except _WorkerException:
+                    # We can't handle these, we need to finish the workers to even
+                    # observe the error.
+                    break
 
                 self.idx.random_state.shuffle(feature_check_order)
-                possible_moves, _ = _apply_moves(
+                possible_moves, applied_moves = _apply_moves(
                     best_clusters,
                     feature_check_order,
                     surrogate_clusters,
@@ -583,7 +605,14 @@ class FeatureClustering(IndexPlugin):
                 if possible_moves == 0:
                     break
 
-                print(objective_estimate, possible_moves)
+                print(objective_estimate, applied_moves, possible_moves)
+
+            # Shut down the workers
+            for _ in range(len(workers)):
+                work_queue.put(None)
+
+            for future in cf.as_completed(workers):
+                future.result()
 
         # Convert the feature_ids back to features for the return
         return {
@@ -596,7 +625,7 @@ class FeatureClustering(IndexPlugin):
         self,
         cluster_ids: typing.Optional[typing.Iterable[int]] = None,
         iterations: int = 10,
-        random_cluster_checks: int = 0,
+        random_cluster_checks: typing.Optional[int] = None,
         use_passages=False,
     ):
         """
@@ -696,12 +725,15 @@ def _construct_mmap(
     return starts, ends
 
 
+class _WorkerException(Exception):
+    """A worker raised an error that needs to be observed."""
+
+
 def _score_proposed_moves(
-    pool,
-    mmap_file,
+    work_queue,
+    results_queue,
     clustering,
     check_features,
-    offsets,
 ):
     """Score the proposed sets of moves between clusters."""
 
@@ -715,37 +747,45 @@ def _score_proposed_moves(
     )
 
     for cluster_id, fs in sort_order:
-        futures.add(
-            pool.submit(
-                _measure_feature_contribution_to_cluster,
-                mmap_file,
-                cluster_id,
-                fs,
-                check_features[cluster_id] - fs,
-                offsets,
-            )
-        )
+        work_queue.put((cluster_id, fs, check_features[cluster_id] - fs))
+
+    waiting_for = len(sort_order) * 3
 
     objective_estimate = 0
 
-    n_features = len(offsets[0])
+    n_features = sum(len(features) for features in clustering.values())
     best_clusters = array.array("q", (-1 for _ in range(n_features)))
     best_scores = array.array("d", (-math.inf for _ in range(n_features)))
 
-    for future in cf.as_completed(futures):
-        result = future.result()
-        test_cluster, objective, move_features, move_scores = result
-        objective_estimate += objective
+    while waiting_for:
 
-        for feature, delta in zip(move_features, move_scores):
-            if delta > best_scores[feature]:
-                best_scores[feature] = delta
-                best_clusters[feature] = test_cluster
+        result = results_queue.get()
+
+        # Error case - we need to exit this and try to terminate the workers to
+        # raise the correct error
+        if result == "exception":
+            raise _WorkerException()
+
+        cluster_id = result[0]
+
+        if len(result) == 2:
+            objective_estimate += result[1]
+
+        elif len(result) == 3:
+            for feature, delta in zip(result[1], result[2]):
+                # Break ties deterministically towards the highest cluster_id.
+                if (delta, cluster_id) > (best_scores[feature], best_clusters[feature]):
+                    best_scores[feature] = delta
+                    best_clusters[feature] = cluster_id
+
+        waiting_for -= 1
 
     return objective_estimate, best_clusters
 
 
-def _apply_moves(move_scores, check_feature_order, clustering, feature_clusters, rand):
+def _apply_moves(
+    best_clusters, check_feature_order, clustering, feature_clusters, rand
+):
     """
     Given a set of possible moves, apply the best moves to the given clustering.
 
@@ -756,10 +796,10 @@ def _apply_moves(move_scores, check_feature_order, clustering, feature_clusters,
     moves = 0
     possible_moves = 0
 
-    for feature in check_feature_order:
+    for feature_id in check_feature_order:
 
-        best_cluster = move_scores[feature]
-        current_cluster = feature_clusters[feature]
+        best_cluster = best_clusters[feature_id]
+        current_cluster = feature_clusters[feature_id]
 
         # This is not a move
         if best_cluster == current_cluster:
@@ -779,139 +819,152 @@ def _apply_moves(move_scores, check_feature_order, clustering, feature_clusters,
         # Note also: the numerator is -1: we calculate the probability according
         # to the size of from cluster after the feature is removed, so that we
         # avoid emptying a cluster out.
-        prob_acceptance = ((from_cluster_size - 1) / total_features) ** 2
+        prob_acceptance = (from_cluster_size - 1) / total_features
 
         if prob_acceptance < rand.random():
             continue
 
-        clustering[current_cluster].discard(feature)
-        clustering[best_cluster].add(feature)
-        feature_clusters[feature] = best_cluster
+        clustering[current_cluster].discard(feature_id)
+        clustering[best_cluster].add(feature_id)
+        feature_clusters[feature_id] = best_cluster
         moves += 1
 
     return possible_moves, moves
 
 
-def _measure_feature_contribution_to_cluster(
-    mmap_file, cluster_key, clustering, check_features, offsets
+def _measure_feature_contribution_to_cluster_worker(
+    mmap_file, work_queue, results_queue, offsets
 ):
     """
-    Measure objective change if we moved a single feature from one cluster to another.
+    Measure objective changes if we move a single feature from one cluster to another.
 
     This calculates the objective as if we were only moving that single feature. Of
     course we're going to be greedy and try to move them all at the same time (with a
     little stochasticity).
 
     """
+
     starts, ends = offsets
 
     with open(mmap_file, "r+b") as f, contextlib.closing(
         mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
     ) as mm:
-        # FIRST PHASE: compute the objective and minimal cover stats for the
-        # current cluster.
+        try:
+            for cluster_key, clustering, check_features in iter(work_queue.get, None):
+                # FIRST PHASE: compute the objective and minimal cover stats for the
+                # current cluster.
 
-        # The union of all docs covered by the cluster
-        cluster_union = BitMap()
-        # The set of all docs covered at least twice.
-        # This will be used to work out which documents are only covered once.
-        covered_twice = BitMap()
+                # The union of all docs covered by the cluster
+                cluster_union = BitMap()
+                # The set of all docs covered at least twice.
+                # This will be used to work out which documents are only covered once.
+                covered_twice = BitMap()
 
-        hits = 0
-        n_features = len(clustering)
+                hits = 0
+                n_features = len(clustering)
 
-        if n_features == 0:
-            return (cluster_key, 0, [], [])
+                if n_features == 0:
+                    return (cluster_key, 0, [], [])
 
-        # Construct the union of all cluster tokens, and also the set of
-        # documents only covered by a single feature.
-        for feature in clustering:
-            docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
+                # Construct the union of all cluster tokens, and also the set of
+                # documents only covered by a single feature.
+                for feature in clustering:
+                    docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
 
-            hits += len(docs)
+                    hits += len(docs)
 
-            # Docs covered at least twice
-            covered_twice |= cluster_union & docs
-            # All docs now covered
-            cluster_union |= docs
+                    # Docs covered at least twice
+                    covered_twice |= cluster_union & docs
+                    # All docs now covered
+                    cluster_union |= docs
 
-        only_once = cluster_union - covered_twice
+                only_once = cluster_union - covered_twice
 
-        c = len(cluster_union)
-        objective = hits / (c + n_features)
+                c = len(cluster_union)
+                objective = hits / (c + n_features)
 
-        # PHASE 2: compute the incremental change in objective from removing
-        # each feature (alone) from the current cluster.
+                results_queue.put((cluster_key, objective))
 
-        n_return_features = n_features + len(check_features)
-        return_features = array.array("q", (0 for _ in range(n_return_features)))
-        return_scores = array.array("d", (0 for _ in range(n_return_features)))
+                # PHASE 2: compute the incremental change in objective from removing
+                # each feature (alone) from the current cluster.
+                return_features = array.array("q", (0 for _ in range(n_features)))
+                return_scores = array.array("d", (0 for _ in range(n_features)))
 
-        i = 0
+                i = 0
 
-        # Features that are already in the cluster, so we need to calculate a remove
-        # operator. Effectively we're counting the negative of the score for
-        # removing that feature as the effect of adding it to the cluster.
-        for feature in clustering:
-            docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
+                # Features that are already in the cluster, so we need to calculate a remove
+                # operator. Effectively we're counting the negative of the score for
+                # removing that feature as the effect of adding it to the cluster.
+                for feature in clustering:
+                    docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
 
-            feature_hits = len(docs)
+                    feature_hits = len(docs)
 
-            old_hits = hits - feature_hits
-            only_once_hits = docs.intersection_cardinality(only_once)
-            old_c = c - only_once_hits
+                    old_hits = hits - feature_hits
+                    only_once_hits = docs.intersection_cardinality(only_once)
+                    old_c = c - only_once_hits
 
-            # Check if this feature intersects with any other feature in this cluster
-            intersects_with_other_feature = only_once_hits < feature_hits
+                    # Check if this feature intersects with any other feature in this cluster
+                    intersects_with_other_feature = only_once_hits < feature_hits
 
-            # It's okay for the cluster to become empty - we'll just prune it.
-            if old_c and intersects_with_other_feature:
-                old_objective = old_hits / (old_c + (n_features - 1))
+                    # It's okay for the cluster to become empty - we'll just prune it.
+                    if old_c and intersects_with_other_feature:
+                        old_objective = old_hits / (old_c + (n_features - 1))
 
-                delta = objective - old_objective
+                        delta = objective - old_objective
 
-            # Penalises features that don't intersect with other features in the
-            # cluster.
-            elif old_c:
-                delta = -1
-            # If it would otherwise be a singleton cluster, mark it as a bad move
-            else:
-                delta = -1
+                    # Penalises features that don't intersect with other features in the
+                    # cluster.
+                    elif old_c:
+                        delta = -1
+                    # If it would otherwise be a singleton cluster, mark it as a bad move
+                    else:
+                        delta = -1
 
-            return_features[i] = feature
-            return_scores[i] = delta
-            i += 1
+                    return_features[i] = feature
+                    return_scores[i] = delta
+                    i += 1
 
-        # PHASE 3: Incremental delta from adding new features to the cluster.
+                results_queue.put((cluster_key, return_features, return_scores))
 
-        # All tokens that are adds (not already in the cluster)
-        for feature in check_features:
-            docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
+                # PHASE 3: Incremental delta from adding new features to the cluster.
+                n_check_features = len(check_features)
+                return_features = array.array("q", (0 for _ in range(n_check_features)))
+                return_scores = array.array("d", (0 for _ in range(n_check_features)))
 
-            feature_hits = len(docs)
+                i = 0
+                # All tokens that are adds (not already in the cluster)
+                for feature in check_features:
+                    docs = BitMap.deserialize(mm[starts[feature] : ends[feature]])
 
-            new_hits = hits + feature_hits
+                    feature_hits = len(docs)
 
-            new_c = docs.union_cardinality(cluster_union)
+                    new_hits = hits + feature_hits
 
-            # check whether there is any intersection from the union results
-            # using the inclusion-exclusion principle.
-            if old_c + feature_hits - new_c > 0:
-                new_objective = new_hits / (new_c + (n_features + 1))
-                delta = new_objective - objective
+                    new_c = docs.union_cardinality(cluster_union)
 
-            # If the feature doesn't intersect with the cluster at all,
-            # give it a bad delta.
-            else:
-                delta = -1
+                    # check whether there is any intersection from the union results
+                    # using the inclusion-exclusion principle.
+                    if old_c + feature_hits - new_c > 0:
+                        new_objective = new_hits / (new_c + (n_features + 1))
+                        delta = new_objective - objective
 
-            return_features[i] = feature
-            return_scores[i] = delta
-            i += 1
+                    # If the feature doesn't intersect with the cluster at all,
+                    # give it a bad delta.
+                    else:
+                        delta = -1
 
-        assert i == n_return_features
+                    return_features[i] = feature
+                    return_scores[i] = delta
+                    i += 1
 
-    return cluster_key, objective, return_features, return_scores
+                results_queue.put((cluster_key, return_features, return_scores))
+
+        except Exception as e:
+            # Mark the exception to the main thread so that it can stop processing
+            # and observer the error.
+            results_queue.put("exception")
+            raise
 
 
 def _facet_cluster_worker(args):

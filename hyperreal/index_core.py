@@ -1126,9 +1126,9 @@ class HyperrealIndex:
 
         for matching in matching_positions.values():
 
-            passages |= matching | matching.shift(1)
+            passages |= matching
 
-        return passages
+        return passages | passages.shift(1)
 
     @db_utilities.atomic
     def match_phrase(self, *features):

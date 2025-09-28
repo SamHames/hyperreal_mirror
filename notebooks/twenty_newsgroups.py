@@ -574,8 +574,8 @@ if not clustering.cluster_ids:
     clustering.replace_clusters(random_clustering)
 
     clustering.refine_clustering(
-        iterations=100,
-        random_cluster_checks=16,
+        iterations=200,
+        random_cluster_checks=8,
         use_passages=False,
     )
 
