@@ -478,7 +478,7 @@ class FeatureClustering(IndexPlugin):
         self,
         clustering: Clustering,
         iterations: int = 10,
-        random_cluster_checks: typing.Optional[int] = None,
+        sampling_rate: typing.Optional[float] = None,
         use_passages=False,
     ) -> Clustering:
 
@@ -510,10 +510,9 @@ class FeatureClustering(IndexPlugin):
         n_features = len(features)
         n_clusters = len(surrogate_clusters)
 
-        # If random_cluster_checks is not set, use the sqrt of the number of clusters
-        # as an automatic value.
-        if random_cluster_checks is None:
-            random_cluster_checks = math.ceil(n_clusters**0.5)
+        # Set a default sampling rate if not specified
+        if sampling_rate is None:
+            sampling_rate = 1 / (n_clusters**0.5)
 
         # will be used to randomise the order of feature checks for moving between
         # clusters.
@@ -554,13 +553,13 @@ class FeatureClustering(IndexPlugin):
                 )
 
             best_clusters = []
-            random_feature_checks = math.ceil(
-                n_features * random_cluster_checks / n_clusters
-            )
+
+            # Convert the provided sampling_rate into the number of features to select.
+            random_feature_checks = math.ceil(sampling_rate * n_features)
 
             for iteration in range(iterations):
 
-                if random_cluster_checks:
+                if random_feature_checks:
 
                     best_check_features = collections.defaultdict(set)
 
@@ -607,6 +606,7 @@ class FeatureClustering(IndexPlugin):
                         )
 
                 else:
+                    # Dense case - check against everything.
                     for leaf_id in leaf_ids:
                         work_queue.put(
                             (
@@ -686,7 +686,7 @@ class FeatureClustering(IndexPlugin):
         self,
         cluster_ids: typing.Optional[typing.Iterable[int]] = None,
         iterations: int = 10,
-        random_cluster_checks: typing.Optional[int] = None,
+        sampling_rate: typing.Optional[float] = None,
         use_passages=False,
     ):
         """
@@ -707,7 +707,7 @@ class FeatureClustering(IndexPlugin):
         refined_clustering = self._refine_clustering(
             clustering,
             iterations=iterations,
-            random_cluster_checks=random_cluster_checks,
+            sampling_rate=sampling_rate,
             use_passages=use_passages,
         )
 

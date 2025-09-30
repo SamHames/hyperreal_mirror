@@ -575,7 +575,7 @@ if not clustering.cluster_ids:
 
     clustering.refine_clustering(
         iterations=200,
-        random_cluster_checks=8,
+        sampling_rate=None,
         use_passages=False,
     )
 
