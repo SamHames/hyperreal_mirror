@@ -554,43 +554,104 @@ class FeatureClustering(IndexPlugin):
                 )
 
             best_clusters = []
+            random_feature_checks = math.ceil(
+                n_features * random_cluster_checks / n_clusters
+            )
 
-            for _ in range(iterations):
+            for iteration in range(iterations):
 
                 if random_cluster_checks:
 
-                    check_features = collections.defaultdict(set)
+                    best_check_features = collections.defaultdict(set)
 
-                    for feature_id in surrogate_feature_cluster:
+                    # We'll use a random permutation of features for sampling, instead
+                    # of multiple calls to sampel or choices.
+                    self.idx.random_state.shuffle(feature_check_order)
 
-                        for leaf_id in self.idx.random_state.sample(
-                            leaf_ids,
-                            random_cluster_checks,
-                        ):
-                            check_features[leaf_id].add(feature_id)
+                    # Always check against the best cluster from the last iteration -
+                    # not all moves happen and if we found something better but didn't
+                    # move we should check it again.
+                    for feature_id, leaf_id in enumerate(best_clusters):
+                        best_check_features[leaf_id].add(feature_id)
 
-                    # Also always check against the best cluster from the previous
-                    # iter - it may not actually have moved.
-                    for feature_id, cluster_id in enumerate(best_clusters):
-                        check_features[cluster_id].add(feature_id)
+                    for leaf_id in leaf_ids:
+
+                        # Permutation based sampling of features from the shuffled array
+                        start = self.idx.random_state.randint(0, n_features)
+
+                        # The sampled index does not wrap around
+                        if start + random_feature_checks <= n_features:
+                            end = start + random_feature_checks
+                            sample_check_features = set(feature_check_order[start:end])
+                        # The sampled index does require a wraparound.
+                        else:
+                            wraparound = (start + random_feature_checks) % n_features
+
+                            sample_check_features = set(
+                                feature_check_order[start:]
+                            ) | set(feature_check_order[:wraparound])
+
+                        leaf_features = surrogate_clusters[leaf_id]
+
+                        all_check_features = (
+                            sample_check_features | best_check_features[leaf_id]
+                        ) - leaf_features
+
+                        # Dispatch work as soon as it's ready!
+                        work_queue.put(
+                            (
+                                leaf_id,
+                                array.array("q", leaf_features),
+                                array.array("q", all_check_features),
+                            )
+                        )
 
                 else:
-                    # Slow path: check all features against all clusters.
-                    check_features = {
-                        leaf_id: all_features
-                        for leaf_id, lf in surrogate_clusters.items()
-                    }
+                    for leaf_id in leaf_ids:
+                        work_queue.put(
+                            (
+                                leaf_id,
+                                array.array("q", surrogate_clusters[leaf_id]),
+                                array.array("q", range(n_features)),
+                            )
+                        )
 
-                try:
-                    objective_estimate, best_clusters = _score_proposed_moves(
-                        work_queue,
-                        results_queue,
-                        surrogate_clusters,
-                        check_features,
-                    )
-                except _WorkerException:
-                    # We can't handle these, we need to finish the workers to even
-                    # observe the error.
+                # Accumulate the results from the background worker
+                objective_estimate = 0
+                waiting_for = len(leaf_ids) * 3
+
+                best_clusters = array.array("q", (-1 for _ in range(n_features)))
+                best_scores = array.array("d", (-math.inf for _ in range(n_features)))
+
+                while waiting_for:
+
+                    result = results_queue.get()
+
+                    # Error case - we need to exit this and try to terminate the
+                    # workers to raise the correct error
+                    if result == "exception":
+                        break
+
+                    cluster_id = result[0]
+
+                    if len(result) == 2:
+                        objective_estimate += result[1]
+
+                    elif len(result) == 3:
+                        for feature, delta in zip(result[1], result[2]):
+                            # Break ties deterministically towards the highest
+                            # cluster_id.
+                            if (delta, cluster_id) > (
+                                best_scores[feature],
+                                best_clusters[feature],
+                            ):
+                                best_scores[feature] = delta
+                                best_clusters[feature] = cluster_id
+
+                    waiting_for -= 1
+
+                # Break out of iterations as well so we can observe the worker error.
+                if result == "exception":
                     break
 
                 self.idx.random_state.shuffle(feature_check_order)
@@ -605,7 +666,7 @@ class FeatureClustering(IndexPlugin):
                 if possible_moves == 0:
                     break
 
-                print(objective_estimate, applied_moves, possible_moves)
+                print(iteration, objective_estimate, applied_moves, possible_moves)
 
             # Shut down the workers
             for _ in range(len(workers)):
@@ -723,64 +784,6 @@ def _construct_mmap(
     idx.close()
 
     return starts, ends
-
-
-class _WorkerException(Exception):
-    """A worker raised an error that needs to be observed."""
-
-
-def _score_proposed_moves(
-    work_queue,
-    results_queue,
-    clustering,
-    check_features,
-):
-    """Score the proposed sets of moves between clusters."""
-
-    futures = set()
-
-    # dispatch clusters with the most features to process first
-    sort_order = sorted(
-        clustering.items(),
-        reverse=True,
-        key=lambda x: len(x[1] | check_features[x[0]]),
-    )
-
-    for cluster_id, fs in sort_order:
-        work_queue.put((cluster_id, fs, check_features[cluster_id] - fs))
-
-    waiting_for = len(sort_order) * 3
-
-    objective_estimate = 0
-
-    n_features = sum(len(features) for features in clustering.values())
-    best_clusters = array.array("q", (-1 for _ in range(n_features)))
-    best_scores = array.array("d", (-math.inf for _ in range(n_features)))
-
-    while waiting_for:
-
-        result = results_queue.get()
-
-        # Error case - we need to exit this and try to terminate the workers to
-        # raise the correct error
-        if result == "exception":
-            raise _WorkerException()
-
-        cluster_id = result[0]
-
-        if len(result) == 2:
-            objective_estimate += result[1]
-
-        elif len(result) == 3:
-            for feature, delta in zip(result[1], result[2]):
-                # Break ties deterministically towards the highest cluster_id.
-                if (delta, cluster_id) > (best_scores[feature], best_clusters[feature]):
-                    best_scores[feature] = delta
-                    best_clusters[feature] = cluster_id
-
-        waiting_for -= 1
-
-    return objective_estimate, best_clusters
 
 
 def _apply_moves(
