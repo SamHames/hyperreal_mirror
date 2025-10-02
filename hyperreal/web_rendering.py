@@ -288,7 +288,6 @@ def full_page(
     page_title,
     body_columns,
     body_header=None,
-    column_flex=None,
     sub_nav_links=None,
     sub_nav_label=None,
     extra_css=None,
@@ -309,14 +308,25 @@ def full_page(
 
     extra_css = extra_css or ""
 
-    column_flex = column_flex or {}
-
     column_width_style = None
     if body_columns and len(body_columns) == 1:
         column_width_style = f"--column-width: 100%"
 
     if sub_nav_links:
         body_header = [sub_nav, body_header]
+
+    columns = [
+        h("div", klass="column stack")(
+            [
+                (
+                    h("h1")(headline),
+                    h("div", klass="scrollable")(content),
+                )
+                for headline, content in column
+            ]
+        )
+        for column in body_columns
+    ]
 
     return html(lang="en")(
         h("head")(
@@ -332,15 +342,7 @@ def full_page(
                     if body_header
                     else None
                 ),
-                h("div", klass="columns", style=column_width_style)(
-                    (
-                        h(
-                            "div",
-                            klass="column bordered",
-                        )(h("h1")(col_title), col)
-                        for col_title, col in body_columns
-                    ),
-                ),
+                h("div", klass="columns", style=column_width_style)(columns),
             ),
         ),
     )
@@ -352,15 +354,15 @@ def render_field_table(index_summary):
 
     return h("table")(
         h("caption")("Overview of the indexed fields for this collection."),
-        h("thead")(h("tr")(h("th", scope="col")(col_name) for col_name in header)),
+        h("thead")(h("tr")([h("th", scope="col")(col_name) for col_name in header])),
         h("tbody")(
-            (
+            [
                 h("tr")(
                     h("th", scope="row")(key),
-                    (h("td")(item) for item in stats.values()),
+                    *[h("td")(item) for item in stats.values()],
                 )
                 for key, stats in index_summary.items()
-            )
+            ]
         ),
     )
 
@@ -457,11 +459,20 @@ main > * {
 }
 
 .column {
-    overflow-y: scroll;
+    overflow: hidden;
     padding: 0 var(--s-1);
     max-width: var(--column-width);
     scrollbar-color: black white;
     flex: 1;
+}
+
+.scrollable {
+    overflow-y: scroll;
+    flex: 1;
+}
+
+.column h1 {
+    border-bottom: var(--thin) solid var(--border-color);
 }
 
 

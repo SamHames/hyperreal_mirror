@@ -124,13 +124,20 @@ class IndexedField(HyperrealRequestHandler):
             self.render_page(
                 f"Feature summary for field: {field}",
                 [
-                    (f"Features in field: {field}", rendered_features),
-                    (
-                        web_rendering.search_results_header(
-                            sample_doc_count, matching_doc_count
+                    [
+                        (
+                            f"Features in field: {field}",
+                            rendered_features,
+                        )
+                    ],
+                    [
+                        (
+                            web_rendering.search_results_header(
+                                sample_doc_count, matching_doc_count
+                            ),
+                            await search_results,
                         ),
-                        await search_results,
-                    ),
+                    ],
                 ],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
@@ -167,7 +174,7 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         self.write(
             self.render_page(
                 f"Indexed Feature Overview",
-                [("Summary of Indexed Fields", table)],
+                [[("Summary of Indexed Fields", table)]],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed fields",
             )
@@ -588,21 +595,27 @@ class BrowseClusters(HyperrealRequestHandler):
             self.render_page(
                 f"Browse Feature Clusters",
                 [
-                    ("Feature Clusters", rendered),
-                    ("Selected Facets", facets),
-                    (
-                        web_rendering.search_results_header(
-                            sample_doc_count, matching_doc_count
+                    [
+                        ("Current Query", current_query_rendered),
+                    ],
+                    [
+                        (
+                            web_rendering.search_results_header(
+                                sample_doc_count, matching_doc_count
+                            ),
+                            await search_results,
                         ),
-                        await search_results,
-                    ),
+                    ],
+                    [
+                        ("Current Clusters", rendered),
+                        ("Selected Facets", facets),
+                    ],
                 ],
                 body_header=(
                     edit_form,
                     web_rendering.heatmap_legend("Similarity", 0, 1, 10),
                     cluster_nav,
                     search_nav,
-                    current_query_rendered,
                 ),
             )
         )

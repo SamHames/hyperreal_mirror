@@ -558,7 +558,7 @@ import time
 
 clustering = newsgroups_idx.plugins["feature_clusters"]
 
-clustering.delete_clusters(clustering.cluster_ids)
+# clustering.delete_clusters(clustering.cluster_ids)
 
 if not clustering.cluster_ids:
 
@@ -574,7 +574,7 @@ if not clustering.cluster_ids:
     clustering.replace_clusters(random_clustering)
 
     clustering.refine_clustering(
-        iterations=200,
+        iterations=50,
         sampling_rate=None,
         use_passages=False,
     )
