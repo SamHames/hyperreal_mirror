@@ -45,8 +45,14 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
 
     def render_page(self, *args, **kwargs):
 
+        search_url = kwargs.get("search_url", self.reverse_url("search"))
+
         return web_rendering.full_page(
-            *args, **kwargs, extra_css=self.extra_css
+            *args,
+            **kwargs,
+            search_url=search_url,
+            search_fields=self.idx.search_fields,
+            extra_css=self.extra_css,
         ).render()
 
     def render_html_sample_docs(
@@ -586,10 +592,6 @@ class BrowseClusters(HyperrealRequestHandler):
             selected=anchor_cluster,
         )
 
-        search_nav = web_rendering.generate_search(
-            self.reverse_url("search"), self.idx.search_fields
-        )
-
         self.write(
             self.render_page(
                 f"Browse Feature Clusters",
@@ -615,7 +617,6 @@ class BrowseClusters(HyperrealRequestHandler):
                 body_header=(
                     edit_form,
                     cluster_nav,
-                    search_nav,
                 ),
             )
         )

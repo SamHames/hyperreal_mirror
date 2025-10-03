@@ -214,7 +214,7 @@ def generate_search(search_url, search_fields):
     )
 
 
-def generate_nav(label, links, klass=None):
+def generate_nav(label, links, klass=None, search=None):
     """Generate a navigation element."""
 
     # Make sure this is a valid HTML id
@@ -222,14 +222,16 @@ def generate_nav(label, links, klass=None):
 
     nav_id = f"nav-{nav_label}"
     label = h("span", klass="nav-label", id=nav_id)(label)
-    return h("nav", aria_labelled_by=nav_id)(
-        label,
-        h("div", klass="inlined")(
-            h("ul", klass="cluster")(
-                h("li")(h("a", href=href)(link_text) if href else link_text)
-                for link_text, href in links
-            ),
-        ),
+
+    items = [
+        h("a", href=href)(link_text) if href else link_text for link_text, href in links
+    ]
+
+    if search:
+        items.append(search)
+
+    return h("nav", aria_labelled_by=nav_id, klass="cluster")(
+        label, h("ul", klass="cluster")([h("li")(item) for item in items])
     )
 
 
@@ -240,6 +242,8 @@ def search_results_header(sample_doc_count, matching_doc_count):
 def full_page(
     page_title,
     body_columns,
+    search_url=None,
+    search_fields=None,
     body_header=None,
     sub_nav_links=None,
     sub_nav_label=None,
@@ -247,11 +251,15 @@ def full_page(
 ):
     """Render a complete page with navigation and a page title."""
 
+    search = None
+    if search_url:
+        search = generate_search(search_url, search_fields)
+
     nav_links = [
         ("Index Overview", "/"),
         ("Browse", "/browse/"),
     ]
-    main_nav = generate_nav("Main", nav_links)
+    main_nav = generate_nav("Main", nav_links, search=search)
 
     sub_nav_links = sub_nav_links or {}
     sub_nav = [
