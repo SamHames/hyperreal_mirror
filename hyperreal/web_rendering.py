@@ -86,7 +86,7 @@ def render_features_dl(feature_stats, select_form_id=None):
         field = feature[0]
 
         if field != last_field:
-            elements.append(h("dd", klass="feature-field")(field))
+            elements.append(h("dt", klass="field")(field))
             last_field = field
 
         html_values = feature[1:]
@@ -164,7 +164,7 @@ def render_feature_clustering(
 
         items.append(footer)
 
-        clusters.append(h("li", klass="stack")(items))
+        clusters.append(h("li")(h("div", klass="stack feature-cluster")(items)))
 
     return h("ol", klass="stack feature-clustering")(clusters)
 
@@ -500,18 +500,6 @@ h2, h3 {
     width: auto;
 }
 
-.matches summary {
-    cursor: pointer;
-}
-
-.matches details summary > * {
-    display: inline;
-}
-
-.matches dt::after {
-    content: ":";
-}
-
 @view-transition {
   navigation: replace;
 }
@@ -551,7 +539,7 @@ h2, h3 {
 .feature-table {
     width: 100%;
     display: grid;
-    grid-template-columns: auto auto auto 0 auto 0 auto;
+    grid-template-columns: auto auto auto;
     padding: var(--s-1);
 }
 
@@ -559,14 +547,14 @@ h2, h3 {
     border-bottom: var(--thin) solid black;
     display: grid;
     grid-template-columns: subgrid;
-    grid-column: span 7;
+    grid-column: span 3;
     gap: 0;
 }
 
 .feature-table tr {
     display: grid;
     grid-template-columns: subgrid;
-    grid-column: span 7;
+    grid-column: span 3;
 }
 
 .feature-table :is(td, th) {
@@ -585,11 +573,6 @@ h2, h3 {
 
 .feature-table td {
     text-align: right;
-}
-
-.cluster-stats-table {
-    display: grid;
-    grid-template-columns: auto auto auto auto 0 auto 0 auto;
 }
 
 .invisible {
@@ -620,7 +603,7 @@ h2, h3 {
     gap: var(--s-3);
 }
 
-.feature-field:after dl {
+.feature-field dt::after {
     content: ':';
 }
 
@@ -628,12 +611,16 @@ h2, h3 {
     padding-left: var(--s-3);
 }
 
+.feature-cluster {
+    --space: var(--s-2);
+}
+
 .expand-url {
     text-align: right;
 }
 
-:is(tr, .cluster-stats-table):has(input:checked){
-    border: var(--s-3) solid yellow;
+.feature-value:has(input:checked){
+    background-color: yellow;
 }
 
 /*************/
