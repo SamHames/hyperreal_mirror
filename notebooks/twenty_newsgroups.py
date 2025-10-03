@@ -592,17 +592,17 @@ newsgroups_idx.facets = [
     (
         "The Twenty Newsgroups",
         newsgroups_idx.field_features("newsgroup", top_k_features=20),
-        TableFilter(order_by="hits", first_k=20),
+        TableFilter(order_by="jaccard_similarity", first_k=20, keep_above=0),
     ),
     (
         "Top Organisations",
         newsgroups_idx.field_features("organization"),
-        TableFilter(order_by="hits", first_k=20, keep_above=0),
+        TableFilter(order_by="jaccard_similarity", first_k=20, keep_above=0),
     ),
     (
         "Top Posters",
         newsgroups_idx.field_features("from"),
-        TableFilter(order_by="hits", first_k=20, keep_above=0),
+        TableFilter(order_by="jaccard_similarity", first_k=20, keep_above=0),
     ),
 ]
 

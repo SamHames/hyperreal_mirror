@@ -82,7 +82,7 @@ class IndexedField(HyperrealRequestHandler):
         for f, stats in features.items():
             base_url = self.reverse_url("field-features", field)
             query_string = self.idx.feature_to_querystring(f)
-            stats["doc_count_url"] = base_url + "?" + query_string
+            stats["feature_url"] = base_url + "?" + query_string
 
         html_features = {
             self.idx.feature_to_html(feature): stats
@@ -124,24 +124,19 @@ class IndexedField(HyperrealRequestHandler):
             self.render_page(
                 f"Feature summary for field: {field}",
                 [
-                    [
-                        (
-                            f"Features in field: {field}",
-                            rendered_features,
-                        )
-                    ],
-                    [
-                        (
-                            web_rendering.search_results_header(
-                                sample_doc_count, matching_doc_count
-                            ),
-                            await search_results,
+                    web_rendering.column_content_with_header(
+                        f"Features in field: {field}",
+                        rendered_features,
+                    ),
+                    web_rendering.column_content_with_header(
+                        web_rendering.search_results_header(
+                            sample_doc_count, matching_doc_count
                         ),
-                    ],
+                        await search_results,
+                    ),
                 ],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed Fields",
-                body_header=web_rendering.heatmap_legend("Similarity", 0, 1, 10),
             )
         )
 
@@ -174,7 +169,11 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         self.write(
             self.render_page(
                 f"Indexed Feature Overview",
-                [[("Summary of Indexed Fields", table)]],
+                [
+                    web_rendering.column_content_with_header(
+                        "Summary of Indexed Fields", table
+                    )
+                ],
                 sub_nav_links=sub_nav_links,
                 sub_nav_label="Indexed fields",
             )
@@ -191,26 +190,28 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
         faceted = sorting(idx.facet_features(query, features))
 
         for f, stats in faceted.items():
-            feature_encode = ("f", idx.feature_to_querystring(f))
-            stats["doc_count_url"] = base_url + "?" + urlencode([feature_encode])
+            feature_encode = idx.feature_to_querystring(f)
+            stats["feature_url"] = base_url + "?" + urlencode([("f", feature_encode)])
             stats["hit_count_url"] = (
-                base_url + "?" + urlencode([feature_encode, current_query_encode])
+                base_url
+                + "?"
+                + urlencode([("f", feature_encode), current_query_encode])
             )
-            stats["select_form_value"] = urlencode([feature_encode])
+            stats["select_form_value"] = feature_encode
 
         rendered_facets.append(
-            h("li")(
+            (
                 h("div", klass="header")(
                     h("h2")(title),
                 ),
-                web_rendering.render_feature_stats_table(
+                web_rendering.render_features_dl(
                     faceted,
                     select_form_id=select_form_id,
                 ),
             )
         )
 
-    return h("ul", klass="stack feature-clustering")(rendered_facets)
+    return h("div", klass="stack")(rendered_facets)
 
 
 # This is a temporary implementation of a query language based on DNF - it is expected
@@ -335,7 +336,7 @@ def render_dnf_query(clustering, dnf_query):
 class BrowseClusters(HyperrealRequestHandler):
     async def get(self):
 
-        top_k_features = int(self.get_argument("top_k_features", "10"))
+        top_k_features = int(self.get_argument("top_k_features", "20"))
         top_k_clusters = int(self.get_argument("top_k_clusters", "30"))
 
         # The original query at the core of this navigation
@@ -497,7 +498,7 @@ class BrowseClusters(HyperrealRequestHandler):
 
         # Update the clusters and features to include a url link
         for cluster_id in cluster_stats.keys():
-            cluster_stats[cluster_id]["doc_count_url"] = "".join(
+            cluster_stats[cluster_id]["feature_url"] = "".join(
                 (base_url, "?", urlencode([("c", str(cluster_id))]))
             )
 
@@ -530,7 +531,7 @@ class BrowseClusters(HyperrealRequestHandler):
                 feature = self.idx.feature_to_querystring(f)
                 feature_encode = ("f", feature)
                 encoded = urlencode([feature_encode])
-                stats["doc_count_url"] = "".join(
+                stats["feature_url"] = "".join(
                     (
                         base_url,
                         "?",
@@ -555,10 +556,8 @@ class BrowseClusters(HyperrealRequestHandler):
             return_url = "".join(
                 (self.reverse_url("browse"), "?", urlencode(return_query_items))
             )
-            see_all_clusters_link = h("div")(
-                h("a", href=return_url)(
-                    "Show all ", matched_cluster_count, " matching clusters"
-                )
+            see_all_clusters_link = h("div", klass="expand-url")(
+                h("a", href=return_url)("+ ", matched_cluster_count, " more clusters")
             )
 
         rendered = (
@@ -595,25 +594,26 @@ class BrowseClusters(HyperrealRequestHandler):
             self.render_page(
                 f"Browse Feature Clusters",
                 [
-                    [
-                        ("Current Query", current_query_rendered),
-                    ],
-                    [
-                        (
+                    (
+                        web_rendering.column_content_with_header(
+                            "Current Query",
+                            current_query_rendered,
+                            content_klass="flex-no-grow",
+                        ),
+                        web_rendering.column_content_with_header(
                             web_rendering.search_results_header(
                                 sample_doc_count, matching_doc_count
                             ),
                             await search_results,
                         ),
-                    ],
-                    [
-                        ("Current Clusters", rendered),
-                        ("Selected Facets", facets),
-                    ],
+                    ),
+                    web_rendering.column_content_with_header(
+                        "Similar Clusters", rendered
+                    ),
+                    web_rendering.column_content_with_header("Matching Facets", facets),
                 ],
                 body_header=(
                     edit_form,
-                    web_rendering.heatmap_legend("Similarity", 0, 1, 10),
                     cluster_nav,
                     search_nav,
                 ),

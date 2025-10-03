@@ -12,67 +12,6 @@ from urllib.parse import quote
 from tinyhtml import frag, h, html, raw
 
 
-def heatmap_legend(label, start, stop, steps):
-    """
-    Make a legend for the heatmap scales.
-
-    """
-
-    width = stop - start
-    bin_width = width / steps
-
-    bins = []
-
-    for i in range(steps + 1):
-        step = start + bin_width * i
-        bins.append(h("td", klass="heatmap", style=f"--sim: {step:.3f}")(f"{step:.1f}"))
-
-    return h("table")(
-        h("caption")("Legend for similarity score heatmap."),
-        h("tr", klass="cluster legend")(h("th", scope="col")(label), *bins),
-    )
-
-
-def heatmap_cells(stats):
-    """
-    Render the heatmap cell entries as td.
-
-    """
-    cells = []
-
-    ##### Hits/query similarity cells
-    hits = stats.get("hits", None)
-    similarity = stats.get("jaccard_similarity", None)
-
-    if hits is not None:
-        rounded_sim = f"{similarity:.3f}"
-        style = f"--sim: {rounded_sim}"
-
-        if hit_count_url := stats.get("hit_count_url", None):
-            hits = h("a", href=hit_count_url)(hits)
-
-        cells.append(h("td", klass="heatmap", style=style)(hits))
-        cells.append(h("td", klass="invisible")(rounded_sim))
-    else:
-        cells.append(h("td")(""))
-        cells.append(h("td", klass="invisible")(""))
-
-    ##### Docs/relative frequency cells
-    docs = stats["doc_count"]
-    rel_docs = stats["relative_doc_count"]
-
-    if doc_count_url := stats.get("doc_count_url", None):
-        docs = h("a", href=doc_count_url)(docs)
-
-    rounded_rel_docs = f"{rel_docs:.3f}"
-    style = f"--sim: {rounded_rel_docs}"
-
-    cells.append(h("td", klass="heatmap", style=style)(docs))
-    cells.append(h("td", klass="invisible")(rounded_rel_docs))
-
-    return cells
-
-
 def render_feature_stats_table(
     feature_stats,
     caption=None,
@@ -82,21 +21,16 @@ def render_feature_stats_table(
     if caption is not None:
         caption_elem = h("caption")(caption)
 
-    header_fields = [
-        h("th", scope="col")(header_text)
-        for header_text in (
-            "Field",
-            "Value",
-            "Hits",
-            "Query Similarity",
-            "Docs",
-            "Relative Docs",
-            "Select" if select_form_id else "",
-        )
+    headers = [
+        "Field",
+        "Value",
+        "Docs",
     ]
 
-    header_fields[3] = h("th", scope="col", klass="invisible")("Query Similarity")
-    header_fields[5] = h("th", scope="col", klass="invisible")("Relative Docs")
+    if select_form_id:
+        header_fields.append("Select")
+
+    header_fields = [h("th", scope="col")(header_text) for header_text in headers]
 
     header = h("thead")(h("tr")(header_fields))
     body_rows = []
@@ -118,9 +52,53 @@ def render_feature_stats_table(
         else:
             html_value = html_values[0]
 
+        if "feature_url" in stats:
+            html_value = h("a", href=stats["feature_url"])(html_value)
+
         cells.append(h("th", scope="row", klass="feature-value")(html_value))
 
-        cells.extend(heatmap_cells(stats))
+        cells.append(h("td")(stats.get("doc_count")))
+
+        if select_form_id and stats.get("select_form_value"):
+            selector = h(
+                "input",
+                type="checkbox",
+                name="f",
+                form=select_form_id,
+                value=stats["select_form_value"],
+            )
+
+            cells.append(h("td")(selector))
+
+        body_rows.append(h("tr")(cells))
+
+    return h("table", klass="feature-table")(caption, header, h("tbody")(body_rows))
+
+
+def render_features_dl(feature_stats, select_form_id=None):
+
+    last_field = None
+
+    elements = []
+
+    for i, (feature, stats) in enumerate(feature_stats.items()):
+
+        field = feature[0]
+
+        if field != last_field:
+            elements.append(h("dd", klass="feature-field")(field))
+            last_field = field
+
+        html_values = feature[1:]
+
+        if len(html_values) == 2:
+            html_value = (html_values[0], "-", html_values[1])
+        else:
+            html_value = html_values[0]
+
+        display_value = html_value
+        if "feature_url" in stats:
+            display_value = h("a", href=stats["feature_url"])(display_value)
 
         selector = ""
         if select_form_id and stats.get("select_form_value"):
@@ -132,11 +110,9 @@ def render_feature_stats_table(
                 value=stats["select_form_value"],
             )
 
-        cells.append(h("td")(selector))
+        elements.append(h("dd", klass="feature-value cluster")(display_value, selector))
 
-        body_rows.append(h("tr")(cells))
-
-    return h("table", klass="feature-table")(caption, header, h("tbody")(body_rows))
+    return h("dl", klass="feature-list cluster")(elements)
 
 
 def render_feature_clustering(
@@ -149,36 +125,11 @@ def render_feature_clustering(
 
     for cluster_id, stats in cluster_stats.items():
 
-        header_fields = [
-            h("th", scope="col")(header_text)
-            for header_text in (
-                "Cluster",
-                "Matched Features",
-                "Total Features",
-                "Hits",
-                "Query Similarity",
-                "Docs",
-                "Relative Docs",
-                "Select" if select_form_id else "",
-            )
-        ]
+        items = []
 
-        header_fields[4] = h("th", scope="col", klass="invisible")("Query Similarity")
-        header_fields[6] = h("th", scope="col", klass="invisible")("Relative Docs")
-
-        cells = []
-
-        cells.append(h("th", scope="row")(cluster_id))
-
-        features = feature_clustering[cluster_id]
-
-        display_feature_count = len(features)
-        matching_feature_count = stats["matching_feature_count"]
-
-        cells.append(h("td")(matching_feature_count))
-        cells.append(h("td")(stats["feature_count"]))
-
-        cells.extend(heatmap_cells(stats))
+        title = h("h2", id=f"cluster-{cluster_id}")(
+            h("a", href=stats["feature_url"])(f"Cluster {cluster_id}")
+        )
 
         selector = ""
         if select_form_id is not None:
@@ -190,28 +141,30 @@ def render_feature_clustering(
                 value=cluster_id,
             )
 
-        cells.append(h("td")(selector))
-
-        header = h("table", klass="cluster-stats-table", id=f"cluster-{cluster_id}")(
-            h("thead")(h("tr")(header_fields), h("tbody")(cells))
+        items.append(
+            h("div", klass="feature-value cluster")(
+                title,
+                selector,
+            )
         )
+
+        features = feature_clustering[cluster_id]
+
+        items.append(render_features_dl(features, select_form_id=select_form_id))
 
         footer = None
         if stats.get("expand_url", False):
-            footer = h("div")(
+            remaining_count = stats["matching_feature_count"] - len(features)
+            footer = h("div", klass="expand-url")(
                 h(
                     "a",
                     href=stats["expand_url"],
-                )("Show all ", matching_feature_count, " matching features")
+                )("+ ", remaining_count, " more")
             )
 
-        clusters.append(
-            h("li", klass="cluster-features")(
-                header,
-                render_feature_stats_table(features, select_form_id=select_form_id),
-                footer,
-            )
-        )
+        items.append(footer)
+
+        clusters.append(h("li", klass="stack")(items))
 
     return h("ol", klass="stack feature-clustering")(clusters)
 
@@ -315,18 +268,7 @@ def full_page(
     if sub_nav_links:
         body_header = [sub_nav, body_header]
 
-    columns = [
-        h("div", klass="column stack")(
-            [
-                (
-                    h("h1")(headline),
-                    h("div", klass="scrollable")(content),
-                )
-                for headline, content in column
-            ]
-        )
-        for column in body_columns
-    ]
+    columns = [h("div", klass="column stack")(column) for column in body_columns]
 
     return html(lang="en")(
         h("head")(
@@ -346,6 +288,10 @@ def full_page(
             ),
         ),
     )
+
+
+def column_content_with_header(title, content, content_klass="scrollable"):
+    return (h("h1")(title), h("div", klass=content_klass)(content))
 
 
 def render_field_table(index_summary):
@@ -389,6 +335,7 @@ default_css = """
     --s-1: calc(var(--s0) / var(--ratio));
     --s-2: calc(var(--s-1) / var(--ratio));
     --s-3: calc(var(--s-2) / var(--ratio));
+    --s-4: calc(var(--s-3) / var(--ratio));
     --space: var(--s-1);
     --column-width: 72ch;
     --border-color: oklch(50% 0 0);
@@ -461,18 +408,25 @@ main > * {
 .column {
     overflow: hidden;
     padding: 0 var(--s-1);
+    --space: var(--s0);
     max-width: var(--column-width);
     scrollbar-color: black white;
     flex: 1;
 }
 
-.scrollable {
-    overflow-y: scroll;
-    flex: 1;
+.column > * {
+    padding: 0 var(--s-2);
 }
 
 .column h1 {
-    border-bottom: var(--thin) solid var(--border-color);
+    box-shadow: var(--s-3) var(--s-3) var(--s-3) 0 var(--border-color);
+    background-color: oklch(90% 0 0);
+}
+
+.scrollable {
+    overflow-y: scroll;
+    flex: 1;
+    padding: var(--s-3);
 }
 
 
@@ -496,6 +450,10 @@ h2, h3 {
 
 .stack > * + * {
   margin-block-start: var(--space, 1rem);
+}
+
+.flex-no-grow {
+    flex: 0 1 auto;
 }
 
 .concordance-container {
@@ -634,41 +592,6 @@ h2, h3 {
     grid-template-columns: auto auto auto auto 0 auto 0 auto;
 }
 
-.cluster-stats-table :is(thead, tbody) {
-    border-bottom: var(--thin) solid black;
-    display: grid;
-    grid-template-columns: subgrid;
-    grid-column: span 8;
-    gap: 0;
-}
-
-.cluster-stats-table tr {
-    display: grid;
-    grid-template-columns: subgrid;
-    grid-column: span 8;
-}
-
-.cluster-stats-table :is(td, th) {
-    padding: var(--s-3);
-    overflow-x: clip;
-    text-overflow: ellipsis;
-    font-family: monospace, monospace;
-    min-width: 0;
-}
-
-.cluster-stats-table td {
-    text-align: right;
-}
-
-.cluster-stats-table td:last-child {
-    text-align: center;
-}
-
-.heatmap, .heatmap a, .heatmap a:visited  {
-    background: oklch(100% calc(sqrt(var(--sim, 0))*80%) 20);
-    color: black;
-}
-
 .invisible {
     font-size: 0;
     width: 0;
@@ -682,6 +605,31 @@ h2, h3 {
 
 .feature-clustering {
     list-style: none;
+}
+
+.feature-list {
+    flex: 1;
+    gap: var(--s-1);
+}
+
+.feature-list a {
+    text-decoration: none;   
+}
+
+.feature-value {
+    gap: var(--s-3);
+}
+
+.feature-field:after dl {
+    content: ':';
+}
+
+.feature-clustering > li {
+    padding-left: var(--s-3);
+}
+
+.expand-url {
+    text-align: right;
 }
 
 :is(tr, .cluster-stats-table):has(input:checked){
