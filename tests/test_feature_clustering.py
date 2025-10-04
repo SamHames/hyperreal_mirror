@@ -78,6 +78,24 @@ def test_plaintext_feature_cluster(example_idx):
     assert len(clustering.cluster_ids) == 16
 
 
+def test_dense_sparse_clustering(example_idx):
+    """
+    Test different parameters for the clustering.
+
+    """
+
+    clustering = example_idx.plugins["feature_clusters"]
+
+    for sampling_rate in (0, 1 / 16, 1 / 2):
+
+        # Initialise a clustering with 32 clusters
+        random_clustering = clustering.initialise_random_clustering(
+            16, min_docs=5, include_fields=["text"]
+        )
+        clustering.replace_clusters(random_clustering)
+        clustering.refine_clustering(iterations=10, sampling_rate=sampling_rate)
+
+
 def test_repeatable_runs(example_idx):
     """
     Test that runs with the same initialisation of the random state are repeatable.
