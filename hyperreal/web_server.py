@@ -192,7 +192,7 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
 
     rendered_facets = []
 
-    for title, features, table_filter in idx.facets:
+    for i, (title, features, table_filter) in enumerate(idx.facets):
         sorting = table_filter or TableFilter()
 
         faceted = sorting(idx.facet_features(query, features))
@@ -215,6 +215,7 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
                 web_rendering.render_feature_group(
                     faceted,
                     select_form_id=select_form_id,
+                    select_form_prefix=f"facet-{i}",
                 ),
             )
         )

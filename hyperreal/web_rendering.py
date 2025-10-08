@@ -121,6 +121,7 @@ def render_feature_group(
     display_docs=True,
     display_hits=True,
     select_form_id=None,
+    select_form_prefix="",
 ):
 
     header_rows = [h("th")("Field"), h("th")("Value")]
@@ -184,13 +185,21 @@ def render_feature_group(
         if display_docs:
             row.append(h("td")(stats["doc_count"]))
 
+        select_id = f"feature-{select_form_prefix}-{i}"
+
         if display_hits:
             sim = f'{stats["jaccard_similarity"]:.3f}'
             style = f"--sim: {sim};"
-            row.append(h("td", klass="doc-count", style=style)(stats["hits"]))
+            row.append(
+                h("td", klass="doc-count", style=style)(
+                    h("label", for_=select_id)(stats["hits"])
+                )
+            )
             row.append(
                 h("td", klass="doc-count")(
-                    h("span", style=style, klass="intensity")(sim)
+                    h("label", for_=select_id)(
+                        h("span", style=style, klass="intensity")(sim)
+                    )
                 )
             )
 
@@ -203,6 +212,7 @@ def render_feature_group(
                         name="f",
                         form=select_form_id,
                         value=stats["select_form_value"],
+                        id=select_id,
                     )
                 )
             )
@@ -241,16 +251,26 @@ def render_feature_clustering(
         if display_docs:
             items.append(h("li")(h("em")("Docs: "), stats["doc_count"]))
 
+        select_id = f"select-{cluster_id}"
+
         if display_hits:
-            items.append(h("li")(h("em")("Hits in Query: "), stats["hits"]))
+            items.append(
+                h("li")(
+                    h("label", for_=select_id)(
+                        h("em")("Hits in Query: "), stats["hits"]
+                    )
+                )
+            )
 
         if display_hits:
             sim = f'{stats["jaccard_similarity"]:.3f}'
             style = f"--sim: {sim};"
             items.append(
                 h("li")(
-                    h("em")("Similarity to Query: "),
-                    h("span", klass="intensity", style=style)(sim),
+                    h("label", for_=select_id)(
+                        h("em")("Similarity to Query: "),
+                        h("span", klass="intensity", style=style)(sim),
+                    )
                 )
             )
 
@@ -263,6 +283,7 @@ def render_feature_clustering(
                         name="c",
                         form=select_form_id,
                         value=cluster_id,
+                        id=select_id,
                     )
                 )
             )
@@ -284,6 +305,7 @@ def render_feature_clustering(
             display_hits=display_hits,
             display_docs=display_docs,
             select_form_id=select_form_id,
+            select_form_prefix=cluster_id,
             footer=group_footer,
         )
 
@@ -752,14 +774,6 @@ h2, h3 {
     content: ':';
 }
 
-.feature-clustering > li {
-    padding-left: var(--s-3);
-}
-
-.feature-cluster {
-    --space: var(--s-2);
-}
-
 .expand-url {
     text-align: right;
 }
@@ -781,7 +795,10 @@ h2, h3 {
 
 .feature-group tr:has(input:checked) > *:nth-last-child(-n+3) {
     background-color: yellow;
+}
 
+.group-header:has(input:checked) {
+    background-color: yellow;
 }
 
 .feature-group thead {
@@ -789,7 +806,6 @@ h2, h3 {
     background-color: white;
     top: calc(-1 * var(--s-1));
     font-weight: bold;
-    vertical-align: bottom;
 }
 
 .feature-group :is(tbody, tfooter) th {
@@ -811,6 +827,10 @@ h2, h3 {
     text-align: right;
 }
 
+.feature-group label {
+    display: block;
+}
+
 .feature-group thead th:nth-child(n+3) {
     text-align: right;
 }
@@ -830,9 +850,15 @@ h2, h3 {
     font-style: normal;
 }
 
-.intensity {
-    border-right: var(--s0) solid oklch(calc(sqrt(1 - var(--sim))) 0 0);
-    padding-right: var(--s-3);
+.intensity::after {
+    content: "";
+    border: var(--thin) solid var(--border-color);
+    background-color: oklch(calc(sqrt(1 - var(--sim))) 0 0);
+    margin-left: var(--s-3);
+    width: var(--s0);
+    height: 1lh;
+    display: inline-block;
+    vertical-align: text-bottom;
 }
 
 
