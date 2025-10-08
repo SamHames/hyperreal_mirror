@@ -310,7 +310,11 @@ def render_feature_edit_forms(
         query_input = h("input", type="hidden", name="query", value=current_query)
 
     return h(
-        "form", klass="stack", id="edit-model-form", method="post", action=create_action
+        "form",
+        klass="cluster",
+        id="edit-model-form",
+        method="post",
+        action=create_action,
     )(
         query_input,
         h("button", type="submit")("Create cluster from selected features"),
@@ -326,6 +330,8 @@ def render_feature_edit_forms(
 
 def cluster_navigation(browse_url, cluster_ids, selected=None):
     """Generate a selector to jump to any cluster."""
+
+    cluster_ids = sorted(cluster_ids)
 
     return h("form", method="get", action=browse_url)(
         h("select", name="c")(
@@ -792,14 +798,16 @@ h2, h3 {
 .feature-group th {
     vertical-align: top;
     text-align: left;
-    padding: var(--s-4);
+}
+
+.feature-group :is(th, td) {
+    padding: 0 var(--s-4);
+    width: min-content;
 }
 
 .feature-group td {
     font-size: 80%;
     text-align: right;
-    padding: var(--s-4);
-    width: min-content;
 }
 
 .feature-group thead th:nth-child(n+3) {
@@ -822,8 +830,8 @@ h2, h3 {
 }
 
 .intensity {
-    border: var(--s-4) solid oklch(calc(sqrt(1 - var(--sim))) 0 0);
-    padding: var(--thin) var(--s-2);
+    border-right: var(--s0) solid oklch(calc(sqrt(1 - var(--sim))) 0 0);
+    padding-right: var(--s-3);
 }
 
 
