@@ -96,7 +96,9 @@ class IndexedField(HyperrealRequestHandler):
         }
 
         total_doc_count = self.idx.total_doc_count
-        rendered_features = web_rendering.render_feature_stats_table(features)
+        rendered_features = web_rendering.render_feature_group(
+            features, display_hits=False
+        )
 
         linkable_fields = self.idx.field_handlers
 
@@ -210,7 +212,7 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
                 h("div", klass="header")(
                     h("h2")(title),
                 ),
-                web_rendering.render_features_dl(
+                web_rendering.render_feature_group(
                     faceted,
                     select_form_id=select_form_id,
                 ),
@@ -556,7 +558,6 @@ class BrowseClusters(HyperrealRequestHandler):
                 stats["select_form_value"] = feature
 
         see_all_clusters_link = None
-
         if len(cluster_stats) < matched_cluster_count:
             return_query_items.append(("top_k_clusters", matched_cluster_count))
             return_url = "".join(
@@ -571,8 +572,8 @@ class BrowseClusters(HyperrealRequestHandler):
                 clustering,
                 cluster_stats,
                 select_form_id="edit-model-form",
+                footer=see_all_clusters_link,
             ),
-            see_all_clusters_link,
         )
 
         form_link = self.reverse_url("create-cluster")

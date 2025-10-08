@@ -96,7 +96,7 @@ def render_features_dl(feature_stats, select_form_id=None):
         else:
             html_value = html_values[0]
 
-        display_value = html_value
+        display_value = (html_value, " (", stats["doc_count"], ")")
         if "feature_url" in stats:
             display_value = h("a", href=stats["feature_url"])(display_value)
 
@@ -110,15 +110,118 @@ def render_features_dl(feature_stats, select_form_id=None):
                 value=stats["select_form_value"],
             )
 
-        elements.append(h("dd", klass="feature-value cluster")(display_value, selector))
+        elements.append(h("dd", klass="feature-value stack")(display_value, selector))
 
     return h("dl", klass="feature-list cluster")(elements)
+
+
+def render_feature_group(
+    feature_stats,
+    footer=None,
+    display_docs=True,
+    display_hits=True,
+    select_form_id=None,
+):
+
+    header_rows = [h("th")("Field"), h("th")("Value")]
+    if display_docs:
+        header_rows.append(h("th")("Docs"))
+    if display_hits:
+        header_rows.append(h("th")("Hits in Query"))
+        header_rows.append(h("th")("Similarity to Query"))
+    if select_form_id:
+        header_rows.append(h("th")("Select"))
+
+    header = h("thead")(h("tr")(header_rows))
+
+    last_field = None
+
+    rows = []
+
+    # Work out where unique blocks of fields start to merge the cells
+    field_start_sizes = {}
+    last_field = None
+
+    for i, feature in enumerate(feature_stats):
+
+        field = feature[0]
+
+        if field != last_field:
+            field_start_sizes[i] = 1
+            last_field = field
+            last_start = i
+
+        else:
+            field_start_sizes[last_start] += 1
+
+    # Actually layout the table
+    for i, (feature, stats) in enumerate(feature_stats.items()):
+
+        row = []
+
+        field = feature[0]
+
+        if i in field_start_sizes:
+            row.append(
+                h("th", scope="row", klass="group-field", rowspan=field_start_sizes[i])(
+                    field
+                )
+            )
+
+        html_values = feature[1:]
+
+        if len(html_values) == 2:
+            html_value = (html_values[0], "-", html_values[1])
+        else:
+            html_value = html_values[0]
+
+        if "feature_url" in stats:
+            display_value = h("a", href=stats["feature_url"])(html_value)
+
+        row.append(h("th", scope="row", klass="group-value")(display_value))
+
+        style = None
+        if display_docs:
+            row.append(h("td")(stats["doc_count"]))
+
+        if display_hits:
+            sim = f'{stats["jaccard_similarity"]:.3f}'
+            style = f"--sim: {sim};"
+            row.append(h("td", klass="doc-count", style=style)(stats["hits"]))
+            row.append(
+                h("td", klass="doc-count")(
+                    h("span", style=style, klass="intensity")(sim)
+                )
+            )
+
+        if select_form_id and stats.get("select_form_value"):
+            row.append(
+                h("td")(
+                    h(
+                        "input",
+                        type="checkbox",
+                        name="f",
+                        form=select_form_id,
+                        value=stats["select_form_value"],
+                    )
+                )
+            )
+
+        rows.append(h("tr")(row))
+
+    if footer:
+        rows.append(h("tfoot")(h("tr")(h("td", colspan="100%")(footer))))
+
+    return h("table", klass="feature-group")(header, rows)
 
 
 def render_feature_clustering(
     feature_clustering,
     cluster_stats,
+    display_docs=True,
+    display_hits=True,
     select_form_id=None,
+    footer=None,
 ):
 
     clusters = []
@@ -127,44 +230,73 @@ def render_feature_clustering(
 
         items = []
 
-        title = h("h2", id=f"cluster-{cluster_id}")(
-            h("a", href=stats["feature_url"])(f"Cluster {cluster_id}")
-        )
-
-        selector = ""
-        if select_form_id is not None:
-            selector = h(
-                "input",
-                type="checkbox",
-                name="c",
-                form=select_form_id,
-                value=cluster_id,
-            )
-
         items.append(
-            h("div", klass="feature-value cluster")(
-                title,
-                selector,
+            h("li")(
+                h("h2", id=f"cluster-{cluster_id}")(
+                    h("a", href=stats["feature_url"])(f"Cluster {cluster_id}")
+                )
             )
         )
+
+        if display_docs:
+            items.append(h("li")(h("em")("Docs: "), stats["doc_count"]))
+
+        if display_hits:
+            items.append(h("li")(h("em")("Hits in Query: "), stats["hits"]))
+
+        if display_hits:
+            sim = f'{stats["jaccard_similarity"]:.3f}'
+            style = f"--sim: {sim};"
+            items.append(
+                h("li")(
+                    h("em")("Similarity to Query: "),
+                    h("span", klass="intensity", style=style)(sim),
+                )
+            )
+
+        if select_form_id is not None:
+            items.append(
+                h("li")(
+                    h(
+                        "input",
+                        type="checkbox",
+                        name="c",
+                        form=select_form_id,
+                        value=cluster_id,
+                    )
+                )
+            )
+
+        header = h("ul", klass="cluster group-header")(items)
 
         features = feature_clustering[cluster_id]
 
-        items.append(render_features_dl(features, select_form_id=select_form_id))
-
-        footer = None
+        group_footer = None
         if stats.get("expand_url", False):
             remaining_count = stats["matching_feature_count"] - len(features)
-            footer = h("div", klass="expand-url")(
-                h(
-                    "a",
-                    href=stats["expand_url"],
-                )("+ ", remaining_count, " more")
+            group_footer = h(
+                "a",
+                href=stats["expand_url"],
+            )("+ ", remaining_count, " more")
+
+        feature_group = render_feature_group(
+            features,
+            display_hits=display_hits,
+            display_docs=display_docs,
+            select_form_id=select_form_id,
+            footer=group_footer,
+        )
+
+        clusters.append(
+            h("li")(
+                h("figure", klass="stack feature-cluster")(
+                    h("figcaption")(header), feature_group
+                )
             )
+        )
 
-        items.append(footer)
-
-        clusters.append(h("li")(h("div", klass="stack feature-cluster")(items)))
+    if footer:
+        clusters.append(h("li")(footer))
 
     return h("ol", klass="stack feature-clustering")(clusters)
 
@@ -418,7 +550,6 @@ main > * {
     padding: 0 var(--s-1);
     --space: var(--s0);
     max-width: var(--column-width);
-    scrollbar-color: black white;
     flex: 1;
 }
 
@@ -439,11 +570,11 @@ main > * {
 
 
 h1 {
-    font-size: 120%;
+    font-size: 144%;
 }
 
 h2, h3 {
-    font-size: 100%;
+    font-size: 120%;
 }
 
 .stack {
@@ -630,6 +761,71 @@ h2, h3 {
 .feature-value:has(input:checked){
     background-color: yellow;
 }
+
+
+.feature-group {
+    border-collapse: collapse;
+}
+
+
+.feature-group a {
+    text-decoration: none;
+    display: block;
+}
+
+.feature-group tr:has(input:checked) > *:nth-last-child(-n+3) {
+    background-color: yellow;
+
+}
+
+.feature-group thead {
+    position: sticky;
+    background-color: white;
+    top: calc(-1 * var(--s-1));
+    font-weight: bold;
+}
+
+.feature-group :is(tbody, tfooter) th {
+    font-weight: normal;
+}
+
+.feature-group th {
+    vertical-align: top;
+    text-align: left;
+    padding: var(--s-4);
+}
+
+.feature-group td {
+    font-size: 80%;
+    text-align: right;
+    padding: var(--s-4);
+    width: min-content;
+}
+
+.feature-group thead th:nth-child(n+3) {
+    text-align: right;
+}
+
+.group-value {
+    max-width: 50%;
+    white-space: no-wrap;
+    text-overflow: scroll;
+}
+
+.group-header {
+    align-items: end;
+}
+
+.group-header em {
+    font-weight: bold;
+    font-style: normal;
+}
+
+.intensity {
+    border: var(--s-4) solid oklch(calc(sqrt(1 - var(--sim))) 0 0);
+    padding: var(--thin) var(--s-2);
+}
+
 
 /*************/
 """
