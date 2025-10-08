@@ -422,9 +422,9 @@ def full_page(
             h("title")(page_title),
             h("style")(raw(default_css), raw(extra_css)),
         ),
-        h("body")(
+        h("body", klass="stack")(
             h("header", klass="bordered")(main_nav),
-            h("main")(
+            h("main", klass="stack")(
                 (
                     h("div", klass="main-header cluster bordered")(body_header)
                     if body_header
@@ -534,7 +534,7 @@ main {
 }
 
 main > * {
-    margin: var(--s0);
+    margin: 0 var(--s0);
 }
 
 .main-header {
@@ -789,6 +789,7 @@ h2, h3 {
     background-color: white;
     top: calc(-1 * var(--s-1));
     font-weight: bold;
+    vertical-align: bottom;
 }
 
 .feature-group :is(tbody, tfooter) th {
