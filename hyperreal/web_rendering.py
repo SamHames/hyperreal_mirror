@@ -11,108 +11,23 @@ from urllib.parse import quote
 
 from tinyhtml import frag, h, html, raw
 
-
-def render_feature_stats_table(
-    feature_stats,
-    caption=None,
-    select_form_id=None,
-):
-
-    if caption is not None:
-        caption_elem = h("caption")(caption)
-
-    headers = [
-        "Field",
-        "Value",
-        "Docs",
-    ]
-
-    if select_form_id:
-        header_fields.append("Select")
-
-    header_fields = [h("th", scope="col")(header_text) for header_text in headers]
-
-    header = h("thead")(h("tr")(header_fields))
-    body_rows = []
-
-    for feature, stats in feature_stats.items():
-
-        cells = []
-
-        ##### Field and value cells
-
-        field = feature[0]
-
-        cells.append(h("th", scope="row", klass="feature-field")(field))
-
-        html_values = feature[1:]
-
-        if len(html_values) == 2:
-            html_value = (html_values[0], "-", html_values[1])
-        else:
-            html_value = html_values[0]
-
-        if "feature_url" in stats:
-            html_value = h("a", href=stats["feature_url"])(html_value)
-
-        cells.append(h("th", scope="row", klass="feature-value")(html_value))
-
-        cells.append(h("td")(stats.get("doc_count")))
-
-        if select_form_id and stats.get("select_form_value"):
-            selector = h(
-                "input",
-                type="checkbox",
-                name="f",
-                form=select_form_id,
-                value=stats["select_form_value"],
-            )
-
-            cells.append(h("td")(selector))
-
-        body_rows.append(h("tr")(cells))
-
-    return h("table", klass="feature-table")(caption, header, h("tbody")(body_rows))
+SI_ABBR = {0: "", 1: "k", 2: "M", 3: "G", -1: "m", -2: "μ", -3: "n"}
 
 
-def render_features_dl(feature_stats, select_form_id=None):
+def format_si_magnitude(number):
+    """Format a number as an SI magnitude with human readable suffix."""
 
-    last_field = None
+    magnitude = math.log10(number)
+    suffix_range = magnitude // 3
 
-    elements = []
+    precision_range = magnitude - (suffix_range * 3)
 
-    for i, (feature, stats) in enumerate(feature_stats.items()):
+    if suffix_range == 0:
+        approx = number
+    else:
+        approx = round(number / (10 ** (3 * suffix_range)), 1)
 
-        field = feature[0]
-
-        if field != last_field:
-            elements.append(h("dt", klass="field")(field))
-            last_field = field
-
-        html_values = feature[1:]
-
-        if len(html_values) == 2:
-            html_value = (html_values[0], "-", html_values[1])
-        else:
-            html_value = html_values[0]
-
-        display_value = (html_value, " (", stats["doc_count"], ")")
-        if "feature_url" in stats:
-            display_value = h("a", href=stats["feature_url"])(display_value)
-
-        selector = ""
-        if select_form_id and stats.get("select_form_value"):
-            selector = h(
-                "input",
-                type="checkbox",
-                name="f",
-                form=select_form_id,
-                value=stats["select_form_value"],
-            )
-
-        elements.append(h("dd", klass="feature-value stack")(display_value, selector))
-
-    return h("dl", klass="feature-list cluster")(elements)
+    return str(approx) + SI_ABBR[suffix_range]
 
 
 def render_feature_group(
@@ -124,12 +39,14 @@ def render_feature_group(
     select_form_prefix="",
 ):
 
-    header_rows = [h("th")("Field"), h("th")("Value")]
+    header_rows = [h("th")("Field"), h("th", klass="group-value")("Value")]
     if display_docs:
         header_rows.append(h("th")("Docs"))
+
     if display_hits:
-        header_rows.append(h("th")("Hits in Query"))
-        header_rows.append(h("th")("Similarity to Query"))
+        header_rows.append(h("th")("Hits"))
+        header_rows.append(h("th")("Sim."))
+
     if select_form_id:
         header_rows.append(h("th")("Select"))
 
@@ -181,24 +98,28 @@ def render_feature_group(
 
         row.append(h("th", scope="row", klass="group-value")(display_value))
 
-        style = None
         if display_docs:
-            row.append(h("td")(stats["doc_count"]))
+            row.append(h("td")(format_si_magnitude(stats["doc_count"])))
 
         select_id = f"feature-{select_form_prefix}-{i}"
 
         if display_hits:
-            sim = f'{stats["jaccard_similarity"]:.3f}'
-            style = f"--sim: {sim};"
+            score = stats["jaccard_similarity"]
+            style = f"--sim: {score:.3f};"
+            display = f"{score:.3f}"
+
+            if display[0] == "0":
+                display = display[1:]
+
             row.append(
                 h("td", klass="doc-count", style=style)(
-                    h("label", for_=select_id)(stats["hits"])
+                    h("label", for_=select_id)(format_si_magnitude(stats["hits"]))
                 )
             )
             row.append(
                 h("td", klass="doc-count")(
                     h("label", for_=select_id)(
-                        h("span", style=style, klass="intensity")(sim)
+                        h("span", style=style, klass="intensity")(display)
                     )
                 )
             )
@@ -255,11 +176,7 @@ def render_feature_clustering(
 
         if display_hits:
             items.append(
-                h("li")(
-                    h("label", for_=select_id)(
-                        h("em")("Hits in Query: "), stats["hits"]
-                    )
-                )
+                h("li")(h("label", for_=select_id)(h("em")("Hits: "), stats["hits"]))
             )
 
         if display_hits:
@@ -268,7 +185,7 @@ def render_feature_clustering(
             items.append(
                 h("li")(
                     h("label", for_=select_id)(
-                        h("em")("Similarity to Query: "),
+                        h("em")("Sim.: "),
                         h("span", klass="intensity", style=style)(sim),
                     )
                 )
@@ -311,7 +228,7 @@ def render_feature_clustering(
 
         clusters.append(
             h("li")(
-                h("figure", klass="stack feature-cluster")(
+                h("figure", klass="feature-group-container")(
                     h("figcaption")(header), feature_group
                 )
             )
@@ -703,98 +620,28 @@ h2, h3 {
 
 /****** Layout for feature tables *******/
 
-.feature-table {
-    width: 100%;
-    display: grid;
-    grid-template-columns: auto auto auto;
-    padding: var(--s-1);
+.feature-group-container {
+    max-width: 100%;
 }
-
-.feature-table :is(tbody, thead) {
-    border-bottom: var(--thin) solid black;
-    display: grid;
-    grid-template-columns: subgrid;
-    grid-column: span 3;
-    gap: 0;
-}
-
-.feature-table tr {
-    display: grid;
-    grid-template-columns: subgrid;
-    grid-column: span 3;
-}
-
-.feature-table :is(td, th) {
-    padding: var(--s-3);
-    overflow-x: clip;
-    text-overflow: ellipsis;
-    font-family: monospace, monospace;
-    white-space: nowrap;
-    min-width: 0;
-}
-
-
-.feature-table th {
-    text-align: left;
-}
-
-.feature-table td {
-    text-align: right;
-}
-
-.invisible {
-    font-size: 0;
-    width: 0;
-    max-width: 0;
-    padding: 0 !important; 
-}
-
-.feature-table td:last-child {
-    text-align: center;
-}
-
-.feature-clustering {
-    list-style: none;
-}
-
-.feature-list {
-    flex: 1;
-    gap: var(--s-1);
-}
-
-.feature-list a {
-    text-decoration: none;   
-}
-
-.feature-value {
-    gap: var(--s-3);
-}
-
-.feature-field dt::after {
-    content: ':';
-}
-
-.expand-url {
-    text-align: right;
-}
-
-.feature-value:has(input:checked){
-    background-color: yellow;
-}
-
 
 .feature-group {
+    font-family: monospace, monospace;
     border-collapse: collapse;
 }
-
 
 .feature-group a {
     text-decoration: none;
     display: block;
+    overflow-x: auto;
 }
 
-.feature-group tr:has(input:checked) > *:nth-last-child(-n+3) {
+.feature-group tr:has(input:checked) > *:not(.group-field) {
     background-color: yellow;
+}
+
+.group-header {
+    background-color: oklch(90% 0 0);
+    padding: var(--s-3);
 }
 
 .group-header:has(input:checked) {
@@ -804,8 +651,12 @@ h2, h3 {
 .feature-group thead {
     position: sticky;
     background-color: white;
-    top: calc(-1 * var(--s-1));
+    top: calc(-2 * var(--s-3));
     font-weight: bold;
+}
+
+.feature-group thead :is(tr, td) {
+    background-color: oklch(90% 0 0);
 }
 
 .feature-group :is(tbody, tfooter) th {
@@ -818,13 +669,17 @@ h2, h3 {
 }
 
 .feature-group :is(th, td) {
-    padding: 0 var(--s-4);
-    width: min-content;
+    padding: var(--thin) var(--s-3);;
 }
 
 .feature-group td {
     font-size: 80%;
     text-align: right;
+}
+
+.feature-group input {
+    margin: 0 auto;
+    display: block;
 }
 
 .feature-group label {
@@ -835,12 +690,6 @@ h2, h3 {
     text-align: right;
 }
 
-.group-value {
-    max-width: 50%;
-    white-space: no-wrap;
-    text-overflow: scroll;
-}
-
 .group-header {
     align-items: end;
 }
@@ -848,6 +697,14 @@ h2, h3 {
 .group-header em {
     font-weight: bold;
     font-style: normal;
+}
+
+.group-value {
+    max-width: 30ch;
+}
+
+.intensity {
+    text-wrap: nowrap;
 }
 
 .intensity::after {

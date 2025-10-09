@@ -209,13 +209,13 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
 
         rendered_facets.append(
             (
-                h("div", klass="header")(
-                    h("h2")(title),
-                ),
-                web_rendering.render_feature_group(
-                    faceted,
-                    select_form_id=select_form_id,
-                    select_form_prefix=f"facet-{i}",
+                h("figure", klass="feature-group-container")(
+                    h("figcaption", klass="group-header")(h("h2")(title)),
+                    web_rendering.render_feature_group(
+                        faceted,
+                        select_form_id=select_form_id,
+                        select_form_prefix=f"facet-{i}",
+                    ),
                 ),
             )
         )
