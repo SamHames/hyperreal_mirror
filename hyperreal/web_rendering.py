@@ -39,7 +39,10 @@ def render_feature_group(
     select_form_prefix="",
 ):
 
-    header_rows = [h("th")("Field"), h("th", klass="group-value")("Value")]
+    header_rows = [
+        h("th", klass="group-field")("Field"),
+        h("th", klass="group-value")("Value"),
+    ]
     if display_docs:
         header_rows.append(h("th")("Docs"))
 
@@ -81,9 +84,12 @@ def render_feature_group(
 
         if i in field_start_sizes:
             row.append(
-                h("th", scope="row", klass="group-field", rowspan=field_start_sizes[i])(
-                    field
-                )
+                h(
+                    "th",
+                    scope="rowgroup",
+                    klass="group-field",
+                    rowspan=field_start_sizes[i],
+                )(field)
             )
 
         html_values = feature[1:]
@@ -700,24 +706,11 @@ h2, h3 {
 }
 
 .group-value {
-    max-width: 30ch;
 }
 
 .intensity {
-    text-wrap: nowrap;
+    border: var(--s-3) solid oklch(calc(sqrt(1 - var(--sim))) 0 0);
 }
-
-.intensity::after {
-    content: "";
-    border: var(--thin) solid var(--border-color);
-    background-color: oklch(calc(sqrt(1 - var(--sim))) 0 0);
-    margin-left: var(--s-3);
-    width: var(--s0);
-    height: 1lh;
-    display: inline-block;
-    vertical-align: text-bottom;
-}
-
 
 /*************/
 """
