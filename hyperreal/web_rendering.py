@@ -277,13 +277,27 @@ def cluster_navigation(browse_url, cluster_ids, selected=None):
     """Generate a selector to jump to any cluster."""
 
     cluster_ids = sorted(cluster_ids)
+    n_clusters = len(cluster_ids)
 
-    return h("form", method="get", action=browse_url)(
-        h("select", name="c")(
-            [h("option", selected=cluster_id == selected, value=cluster_id)(cluster_id)]
-            for cluster_id in cluster_ids
-        ),
-        h("button", type="submit")("Go to cluster"),
+    if selected is not None:
+        cluster_offset = cluster_ids.index(selected)
+        next_cluster = cluster_ids[(cluster_offset + 1) % n_clusters]
+        prev_cluster = cluster_ids[(cluster_offset - 1) % n_clusters]
+        link_to = [
+            ("First Cluster", cluster_ids[0]),
+            ("Previous Cluster", prev_cluster),
+            ("Next Cluster", next_cluster),
+            ("Last Cluster", cluster_ids[-1]),
+        ]
+    else:
+        link_to = [
+            ("First Cluster", cluster_ids[0]),
+            ("Last Cluster", cluster_ids[-1]),
+        ]
+
+    return h("ul", klass="cluster")(
+        h("li")(h("a", href=browse_url + f"?c={cluster_id}")(text))
+        for text, cluster_id in link_to
     )
 
 
