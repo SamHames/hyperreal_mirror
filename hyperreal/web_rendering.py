@@ -59,38 +59,22 @@ def render_feature_group(
 
     rows = []
 
-    # Work out where unique blocks of fields start to merge the cells
-    field_start_sizes = {}
     last_field = None
 
-    for i, feature in enumerate(feature_stats):
-
-        field = feature[0]
-
-        if field != last_field:
-            field_start_sizes[i] = 1
-            last_field = field
-            last_start = i
-
-        else:
-            field_start_sizes[last_start] += 1
-
-    # Actually layout the table
+    # Layout the table
     for i, (feature, stats) in enumerate(feature_stats.items()):
 
         row = []
 
         field = feature[0]
 
-        if i in field_start_sizes:
-            row.append(
-                h(
-                    "th",
-                    scope="rowgroup",
-                    klass="group-field",
-                    rowspan=field_start_sizes[i],
-                )(field)
-            )
+        field_css_class = "running-field"
+        if field != last_field:
+            field_css_class = None
+
+        last_field = field
+
+        row.append(h("th", scope="row", klass=field_css_class)(field))
 
         html_values = feature[1:]
 
@@ -695,6 +679,10 @@ h2, h3 {
 .feature-group td {
     font-size: 80%;
     text-align: right;
+}
+
+.running-field {
+    color: oklch(0 0 0 / 20%);
 }
 
 .feature-group input {
