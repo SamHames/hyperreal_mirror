@@ -96,10 +96,13 @@ def render_feature_group(
 
         select_id = f"feature-{select_form_prefix}-{i}"
 
+        style = None
+        row_class = None
         if display_hits:
             score = stats["jaccard_similarity"]
             style = f"--sim: {score:.3f};"
             display = f"{score:.3f}"
+            row_class = "intensity"
 
             if display[0] == "0":
                 display = display[1:]
@@ -107,7 +110,7 @@ def render_feature_group(
             row.append(
                 h("td")(h("label", for_=select_id)(format_si_magnitude(stats["hits"])))
             )
-            row.append(h("td", style=style, klass="intensity")(display))
+            row.append(h("td")(h("span", klass="bordered")(display)))
 
         if select_form_id and stats.get("select_form_value"):
             row.append(
@@ -123,7 +126,7 @@ def render_feature_group(
                 )
             )
 
-        rows.append(h("tr")(row))
+        rows.append(h("tr", klass=row_class, style=style)(row))
 
     if footer:
         rows.append(h("tfoot")(h("tr")(h("td", colspan=2)(footer))))
@@ -166,16 +169,20 @@ def render_feature_clustering(
                 )
             )
 
+        header_class = "cluster group-header"
+        style = None
         if display_hits:
             sim = f'{stats["jaccard_similarity"]:.3f}'
             style = f"--sim: {sim};"
             if sim[0] == "0":
                 sim = sim[1:]
 
+            header_class += " intensity"
+
             cluster_data.append(
                 h("div", klass="stack")(
                     h("dt")("Sim."),
-                    h("dd", klass="intensity", style=style)(sim),
+                    h("dd", klass="bordered")(sim),
                 )
             )
 
@@ -197,7 +204,7 @@ def render_feature_clustering(
                 )
             )
 
-        header = h("div", klass="cluster group-header")(
+        header = h("div", klass=header_class, style=style)(
             heading, h("dl", klass="cluster")(cluster_data)
         )
 
@@ -700,8 +707,18 @@ h2, h3 {
 }
 
 .intensity {
-    padding-right: var(--s-3);
-    border-right: var(--s-1) solid oklch(100% calc(sqrt(var(--sim)) * 100%) 20);
+    position: relative;
+}
+
+.intensity::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 100%;
+    background-color: oklch(80% 100% 20 / 10%);
+    width: calc(var(--sim) * 100%);
+    display: block;
 }
 
 /*************/
