@@ -285,7 +285,14 @@ def cluster_navigation(browse_url, cluster_ids, selected=None):
         ]
 
     return h("ul", klass="cluster")(
-        h("li")(h("a", href=browse_url + f"?c={cluster_id}")(text))
+        h("li")(
+            h(
+                "a",
+                href=browse_url
+                # Link to the cluster and expand to show all terms
+                + f"?c={cluster_id}&expand={cluster_id}#{cluster_id}",
+            )(text)
+        )
         for text, cluster_id in link_to
     )
 
@@ -719,6 +726,7 @@ h2, h3 {
     background-color: oklch(80% 100% 20 / 10%);
     width: calc(var(--sim) * 100%);
     display: block;
+    z-index: -1;
 }
 
 /*************/
