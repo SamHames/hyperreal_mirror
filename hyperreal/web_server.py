@@ -208,19 +208,17 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
             stats["select_form_value"] = feature_encode
 
         rendered_facets.append(
-            (
-                h("figure", klass="feature-group-container")(
-                    h("figcaption", klass="group-header")(h("h2")(title)),
-                    web_rendering.render_feature_group(
-                        faceted,
-                        select_form_id=select_form_id,
-                        select_form_prefix=f"facet-{i}",
-                    ),
+            h("li", klass="stack")(
+                h("h2", klass="group-header")(title),
+                web_rendering.render_feature_group(
+                    faceted,
+                    select_form_id=select_form_id,
+                    select_form_prefix=f"facet-{i}",
                 ),
             )
         )
 
-    return h("div", klass="stack")(rendered_facets)
+    return h("ul", klass="stack")(rendered_facets)
 
 
 # This is a temporary implementation of a query language based on DNF - it is expected

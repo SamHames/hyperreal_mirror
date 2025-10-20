@@ -43,6 +43,7 @@ def render_feature_group(
         h("th", klass="group-field")("Field"),
         h("th", klass="group-value")("Value"),
     ]
+
     if display_docs:
         header_rows.append(h("th")("Docs"))
 
@@ -52,6 +53,8 @@ def render_feature_group(
 
     if select_form_id:
         header_rows.append(h("th")("Select"))
+
+    column_style = f""
 
     header = h("thead")(h("tr")(header_rows))
 
@@ -102,17 +105,9 @@ def render_feature_group(
                 display = display[1:]
 
             row.append(
-                h("td", klass="doc-count", style=style)(
-                    h("label", for_=select_id)(format_si_magnitude(stats["hits"]))
-                )
+                h("td")(h("label", for_=select_id)(format_si_magnitude(stats["hits"])))
             )
-            row.append(
-                h("td", klass="doc-count")(
-                    h("label", for_=select_id)(
-                        h("span", style=style, klass="intensity")(display)
-                    )
-                )
-            )
+            row.append(h("td", style=style, klass="intensity")(display))
 
         if select_form_id and stats.get("select_form_value"):
             row.append(
@@ -131,7 +126,7 @@ def render_feature_group(
         rows.append(h("tr")(row))
 
     if footer:
-        rows.append(h("tfoot")(h("tr")(h("td", colspan="100%")(footer))))
+        rows.append(h("tfoot")(h("tr")(h("td", colspan=2)(footer))))
 
     return h("table", klass="feature-group")(header, rows)
 
@@ -149,53 +144,62 @@ def render_feature_clustering(
 
     for cluster_id, stats in cluster_stats.items():
 
-        items = []
-
-        items.append(
-            h("li")(
-                h("h2", id=f"cluster-{cluster_id}")(
-                    h("a", href=stats["feature_url"])(f"Cluster {cluster_id}")
-                )
-            )
+        cluster_html_id = f"cluster-{cluster_id}"
+        heading = h("h2", id=cluster_html_id)(
+            h("a", href=stats["feature_url"])(f"Cluster {cluster_id}")
         )
 
+        cluster_data = []
         if display_docs:
-            items.append(h("li")(h("em")("Docs: "), stats["doc_count"]))
+            cluster_data.append(
+                h("div", klass="stack")(
+                    h("dt")("Docs"), h("dd")(format_si_magnitude(stats["doc_count"]))
+                )
+            )
 
         select_id = f"select-{cluster_id}"
 
         if display_hits:
-            items.append(
-                h("li")(h("label", for_=select_id)(h("em")("Hits: "), stats["hits"]))
+            cluster_data.append(
+                h("div", klass="stack")(
+                    h("dt")("Hits"), h("dd")(format_si_magnitude(stats["hits"]))
+                )
             )
 
         if display_hits:
             sim = f'{stats["jaccard_similarity"]:.3f}'
             style = f"--sim: {sim};"
-            items.append(
-                h("li")(
-                    h("label", for_=select_id)(
-                        h("em")("Sim.: "),
-                        h("span", klass="intensity", style=style)(sim),
-                    )
+            if sim[0] == "0":
+                sim = sim[1:]
+
+            cluster_data.append(
+                h("div", klass="stack")(
+                    h("dt")("Sim."),
+                    h("dd", klass="intensity", style=style)(sim),
                 )
             )
 
         if select_form_id is not None:
-            items.append(
-                h("li")(
-                    h(
-                        "input",
-                        type="checkbox",
-                        name="c",
-                        form=select_form_id,
-                        value=cluster_id,
-                        id=select_id,
-                    )
+            cluster_data.append(
+                h("div", klass="stack")(
+                    h("dt")("Select"),
+                    h("dd")(
+                        h(
+                            "input",
+                            type="checkbox",
+                            name="c",
+                            form=select_form_id,
+                            value=cluster_id,
+                            id=select_id,
+                            aria_labelled_by=cluster_html_id,
+                        )
+                    ),
                 )
             )
 
-        header = h("ul", klass="cluster group-header")(items)
+        header = h("div", klass="cluster group-header")(
+            heading, h("dl", klass="cluster")(cluster_data)
+        )
 
         features = feature_clustering[cluster_id]
 
@@ -216,13 +220,7 @@ def render_feature_clustering(
             footer=group_footer,
         )
 
-        clusters.append(
-            h("li")(
-                h("figure", klass="feature-group-container")(
-                    h("figcaption")(header), feature_group
-                )
-            )
-        )
+        clusters.append(h("li", klass="stack")(header, feature_group))
 
     if footer:
         clusters.append(h("li")(footer))
@@ -519,11 +517,11 @@ main > * {
 
 
 h1 {
-    font-size: 144%;
+    font-size: 160%;
 }
 
 h2, h3 {
-    font-size: 120%;
+    font-size: 130%;
 }
 
 .stack {
@@ -624,28 +622,34 @@ h2, h3 {
 
 /****** Layout for feature tables *******/
 
-.feature-group-container {
-    max-width: 100%;
-}
-
 .feature-group {
     font-family: monospace, monospace;
     border-collapse: collapse;
+    width: 100%;
 }
 
 .feature-group a {
     text-decoration: none;
     display: block;
-    overflow-x: auto;
 }
 
-.feature-group tr:has(input:checked) > *:not(.group-field) {
+.feature-group tr:has(input:checked) {
     background-color: yellow;
 }
 
 .group-header {
-    background-color: oklch(90% 0 0);
+    gap: var(--s0);
     padding: var(--s-3);
+    width: 100%;
+    font-family: monospace, monospace;
+    border-bottom: var(--thin) solid var(--border-color);
+
+    dl {
+        --space: var(--s-2);
+    }
+    dt {
+        font-weight: bold;
+    }
 }
 
 .group-header:has(input:checked) {
@@ -653,14 +657,9 @@ h2, h3 {
 }
 
 .feature-group thead {
-    position: sticky;
     background-color: white;
     top: calc(-2 * var(--s-3));
     font-weight: bold;
-}
-
-.feature-group thead :is(tr, td) {
-    background-color: oklch(90% 0 0);
 }
 
 .feature-group :is(tbody, tfooter) th {
@@ -676,8 +675,8 @@ h2, h3 {
     padding: var(--thin) var(--s-3);;
 }
 
-.feature-group td {
-    font-size: 80%;
+.feature-group tbody td {
+    font-size: 90%;
     text-align: right;
 }
 
@@ -685,9 +684,11 @@ h2, h3 {
     color: oklch(0 0 0 / 20%);
 }
 
-.feature-group input {
-    margin: 0 auto;
-    display: block;
+.feature-group, .group-header {
+    input {
+        margin: 0 auto;
+        display: block;
+    }
 }
 
 .feature-group label {
@@ -698,20 +699,9 @@ h2, h3 {
     text-align: right;
 }
 
-.group-header {
-    align-items: end;
-}
-
-.group-header em {
-    font-weight: bold;
-    font-style: normal;
-}
-
-.group-value {
-}
-
 .intensity {
-    border: var(--s-3) solid oklch(calc(sqrt(1 - var(--sim))) 0 0);
+    padding-right: var(--s-3);
+    border-right: var(--s-1) solid oklch(100% calc(sqrt(var(--sim)) * 100%) 20);
 }
 
 /*************/
