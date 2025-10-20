@@ -574,9 +574,8 @@ if not clustering.cluster_ids:
     clustering.replace_clusters(random_clustering)
 
     clustering.refine_clustering(
-        iterations=50,
+        iterations=200,
         sampling_rate=None,
-        use_passages=False,
     )
 
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")
