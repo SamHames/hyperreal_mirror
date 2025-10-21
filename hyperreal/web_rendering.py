@@ -293,7 +293,7 @@ def cluster_navigation(browse_url, cluster_ids, selected=None):
                 "a",
                 href=browse_url
                 # Link to the cluster and expand to show all terms
-                + f"?c={cluster_id}&expand={cluster_id}#{cluster_id}",
+                + f"?c={cluster_id}&expand={cluster_id}#cluster-{cluster_id}",
             )(text)
         )
         for text, cluster_id in link_to
