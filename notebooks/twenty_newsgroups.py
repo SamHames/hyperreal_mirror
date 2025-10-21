@@ -353,7 +353,7 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
             display: inline;
         }
 
-        .search-hit dt,dd {
+        .search-hit :is(dt, dd) {
             display: inline;
         }
 
@@ -568,7 +568,7 @@ if not clustering.cluster_ids:
     start_time = time.monotonic()
 
     random_clustering = clustering.initialise_random_clustering(
-        256, min_docs=10, include_fields=["body"]
+        100, min_docs=10, include_fields=["body"]
     )
 
     clustering.replace_clusters(random_clustering)
@@ -591,17 +591,17 @@ newsgroups_idx.facets = [
     (
         "The Twenty Newsgroups",
         newsgroups_idx.field_features("newsgroup", top_k_features=20),
-        TableFilter(order_by="jaccard_similarity", first_k=20, keep_above=0),
+        TableFilter(order_by="hits", first_k=20, keep_above=0),
     ),
     (
         "Top Organisations",
         newsgroups_idx.field_features("organization"),
-        TableFilter(order_by="jaccard_similarity", first_k=20, keep_above=0),
+        TableFilter(order_by="hits", first_k=20, keep_above=0),
     ),
     (
         "Top Posters",
         newsgroups_idx.field_features("from"),
-        TableFilter(order_by="jaccard_similarity", first_k=20, keep_above=0),
+        TableFilter(order_by="hits", first_k=20, keep_above=0),
     ),
 ]
 

@@ -577,11 +577,13 @@ class BrowseClusters(HyperrealRequestHandler):
 
         form_link = self.reverse_url("create-cluster")
         merge_cluster_link = self.reverse_url("merge-clusters")
+        delete_cluster_link = self.reverse_url("delete-clusters")
         new_query_link = self.reverse_url("browse-new-query")
         edit_form = web_rendering.render_feature_edit_forms(
             self.reverse_url("browse"),
             form_link,
             merge_cluster_link,
+            delete_cluster_link,
             new_query_link,
             dnf_query_to_query_string(self.idx, current_query),
         )

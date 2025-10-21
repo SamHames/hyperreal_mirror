@@ -110,7 +110,7 @@ def render_feature_group(
             row.append(
                 h("td")(h("label", for_=select_id)(format_si_magnitude(stats["hits"])))
             )
-            row.append(h("td")(h("span", klass="bordered")(display)))
+            row.append(h("td")(h("span", klass="underline")(display)))
 
         if select_form_id and stats.get("select_form_value"):
             row.append(
@@ -182,7 +182,7 @@ def render_feature_clustering(
             cluster_data.append(
                 h("div", klass="stack")(
                     h("dt")("Sim."),
-                    h("dd", klass="bordered")(sim),
+                    h("dd", klass="underline")(sim),
                 )
             )
 
@@ -236,7 +236,7 @@ def render_feature_clustering(
 
 
 def render_feature_edit_forms(
-    add_to_query, create_action, merge_action, new_query, current_query
+    add_to_query, create_action, merge_action, delete_action, new_query, current_query
 ):
 
     query_input = None
@@ -253,6 +253,9 @@ def render_feature_edit_forms(
         query_input,
         h("button", type="submit")("Create cluster from selected features"),
         h("button", type="submit", formaction=merge_action)("Merge selected clusters"),
+        h("button", type="submit", formaction=delete_action)(
+            "Delete selected clusters"
+        ),
         h("button", type="submit", formmethod="get", formaction=add_to_query)(
             "Create query clause from selected"
         ),
@@ -727,6 +730,10 @@ h2, h3 {
     width: calc(var(--sim) * 100%);
     display: block;
     z-index: -1;
+}
+
+.underline {
+    text-decoration: underline;
 }
 
 /*************/
