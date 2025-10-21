@@ -40,19 +40,19 @@ def render_feature_group(
 ):
 
     header_rows = [
-        h("th", klass="group-field")("Field"),
-        h("th", klass="group-value")("Value"),
+        h("th", klass="sr-only", scope="col")("Field"),
+        h("th", scope="col")("Value"),
     ]
 
     if display_docs:
-        header_rows.append(h("th")("Docs"))
+        header_rows.append(h("th", scope="col")("Docs"))
 
     if display_hits:
-        header_rows.append(h("th")("Hits"))
-        header_rows.append(h("th")("Sim."))
+        header_rows.append(h("th", scope="col")("Hits"))
+        header_rows.append(h("th", scope="col")("Sim."))
 
     if select_form_id:
-        header_rows.append(h("th")("Select"))
+        header_rows.append(h("th", scope="col")("Select"))
 
     column_style = f""
 
@@ -71,7 +71,7 @@ def render_feature_group(
 
         field = feature[0]
 
-        field_css_class = "running-field"
+        field_css_class = "sr-only"
         if field != last_field:
             field_css_class = None
 
@@ -96,13 +96,10 @@ def render_feature_group(
 
         select_id = f"feature-{select_form_prefix}-{i}"
 
-        style = None
-        row_class = None
         if display_hits:
             score = stats["jaccard_similarity"]
             style = f"--sim: {score:.3f};"
             display = f"{score:.3f}"
-            row_class = "intensity"
 
             if display[0] == "0":
                 display = display[1:]
@@ -110,7 +107,11 @@ def render_feature_group(
             row.append(
                 h("td")(h("label", for_=select_id)(format_si_magnitude(stats["hits"])))
             )
-            row.append(h("td")(h("span", klass="underline")(display)))
+            row.append(
+                h("td", klass="intensity", style=style)(
+                    h("span", klass="underline")(display)
+                )
+            )
 
         if select_form_id and stats.get("select_form_value"):
             row.append(
@@ -126,7 +127,7 @@ def render_feature_group(
                 )
             )
 
-        rows.append(h("tr", klass=row_class, style=style)(row))
+        rows.append(h("tr", klass="has-bar")(row))
 
     if footer:
         rows.append(h("tfoot")(h("tr")(h("td", colspan=2)(footer))))
@@ -177,7 +178,7 @@ def render_feature_clustering(
             if sim[0] == "0":
                 sim = sim[1:]
 
-            header_class += " intensity"
+            header_class += " has-bar intensity"
 
             cluster_data.append(
                 h("div", klass="stack")(
@@ -513,8 +514,8 @@ main > * {
     overflow: hidden;
     padding: 0 var(--s-1);
     --space: var(--s0);
-    max-width: var(--column-width);
-    flex: 1;
+    flex: 0 1 var(--column-width);
+    width: auto;
 }
 
 .column > * {
@@ -523,7 +524,8 @@ main > * {
 
 .column h1 {
     box-shadow: var(--s-3) var(--s-3) var(--s-3) 0 var(--border-color);
-    background-color: oklch(90% 0 0);
+    background-color: black;
+    color: white;
 }
 
 .scrollable {
@@ -641,13 +643,27 @@ h2, h3 {
 
 .feature-group {
     font-family: monospace, monospace;
-    border-collapse: collapse;
     width: 100%;
+    display: grid;
+    grid-template-columns: 1fr repeat(4, auto);
+
+    tr, thead, tbody, tfoot {
+        display: grid;
+        grid-template-columns: subgrid;
+        grid-column: span 5;
+    }
+
+    th, td {
+        min-width: 0;
+    }
+
 }
 
 .feature-group a {
     text-decoration: none;
     display: block;
+    overflow: clip;
+    text-overflow: ellipsis;
 }
 
 .feature-group tr:has(input:checked) {
@@ -697,8 +713,25 @@ h2, h3 {
     text-align: right;
 }
 
-.running-field {
-    color: oklch(0 0 0 / 20%);
+.feature-group th:first-child {
+    grid-column: span 5;
+    background-color: white;
+}
+
+.feature-group tbody th:first-child:before {
+    content: "Field: " / "";
+    font-weight: bold;
+}
+
+.sr-only {
+    clip: rect(1px, 1px, 1px, 1px);
+    clip-path: inset(50%);
+    height: 1px;
+    width: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute; 
 }
 
 .feature-group, .group-header {
@@ -716,7 +749,7 @@ h2, h3 {
     text-align: right;
 }
 
-.intensity {
+.has-bar {
     position: relative;
 }
 
@@ -726,7 +759,7 @@ h2, h3 {
     left: 0;
     bottom: 0;
     height: 100%;
-    background-color: oklch(80% 100% 20 / 10%);
+    background-color: #FFD700;
     width: calc(var(--sim) * 100%);
     display: block;
     z-index: -1;
