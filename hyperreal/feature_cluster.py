@@ -152,8 +152,14 @@ class FeatureClustering(IndexPlugin):
                 cluster_docs = self.idx.match_any(features)
 
                 self.idx.db.execute(
-                    "UPDATE cluster set doc_count = ?, doc_ids = ? where cluster_id = ?",
-                    [len(cluster_docs), cluster_docs, cluster_id],
+                    """
+                    UPDATE cluster set 
+                        feature_count = ?, 
+                        doc_count = ?, 
+                        doc_ids = ? 
+                    where cluster_id = ?
+                    """,
+                    [len(features), len(cluster_docs), cluster_docs, cluster_id],
                 )
             else:
                 # This is a cluster that needs to be cleaned up from the header as well
