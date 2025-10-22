@@ -343,7 +343,7 @@ def render_dnf_query(clustering, dnf_query):
 class BrowseClusters(HyperrealRequestHandler):
     async def get(self):
 
-        top_k_features = int(self.get_argument("top_k_features", "20"))
+        top_k_features = int(self.get_argument("top_k_features", "15"))
         top_k_clusters = int(self.get_argument("top_k_clusters", "30"))
 
         # The original query at the core of this navigation
@@ -562,7 +562,7 @@ class BrowseClusters(HyperrealRequestHandler):
             return_url = "".join(
                 (self.reverse_url("browse"), "?", urlencode(return_query_items))
             )
-            see_all_clusters_link = h("div", klass="expand-url")(
+            see_all_clusters_link = h("div")(
                 h("a", href=return_url)("+ ", matched_cluster_count, " more clusters")
             )
 
