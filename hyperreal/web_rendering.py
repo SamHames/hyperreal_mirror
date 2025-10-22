@@ -641,7 +641,12 @@ h2, h3 {
 
 /****** Layout for feature tables *******/
 
+.feature-clustering {
+    --space: var(--s1);
+}
+
 .feature-group {
+    --space: var(--s-2);
     font-family: monospace, monospace;
     width: 100%;
     display: grid;
@@ -657,14 +662,14 @@ h2, h3 {
         min-width: 0;
     }
 
+    a {
+        text-decoration: none;
+        display: block;
+        overflow: clip;
+        text-overflow: ellipsis;
+    }
 }
 
-.feature-group a {
-    text-decoration: none;
-    display: block;
-    overflow: clip;
-    text-overflow: ellipsis;
-}
 
 .feature-group tr:has(input:checked) {
     background-color: yellow;
@@ -677,11 +682,17 @@ h2, h3 {
     font-family: monospace, monospace;
     border-bottom: var(--thin) solid var(--border-color);
 
+    --bar-color: #00CED1;
+
     dl {
         --space: var(--s-2);
     }
     dt {
         font-weight: bold;
+    }
+
+    h2 {
+        flex: 1;
     }
 }
 
@@ -691,7 +702,6 @@ h2, h3 {
 
 .feature-group thead {
     background-color: white;
-    top: calc(-2 * var(--s-3));
     font-weight: bold;
 }
 
@@ -759,7 +769,7 @@ h2, h3 {
     left: 0;
     bottom: 0;
     height: 100%;
-    background-color: #FFD700;
+    background-color: rgb(from var(--bar-color, #FFD700) r g b / 40%);
     width: calc(var(--sim) * 100%);
     display: block;
     z-index: -1;
