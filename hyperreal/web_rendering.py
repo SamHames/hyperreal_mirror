@@ -38,7 +38,6 @@ def render_feature_group(
     select_form_id=None,
     select_form_prefix="",
 ):
-
     header_rows = [
         h("th", klass="sr-only", scope="col")("Field"),
         h("th", scope="col")("Value"),
@@ -66,7 +65,6 @@ def render_feature_group(
 
     # Layout the table
     for i, (feature, stats) in enumerate(feature_stats.items()):
-
         row = []
 
         field = feature[0]
@@ -143,11 +141,9 @@ def render_feature_clustering(
     select_form_id=None,
     footer=None,
 ):
-
     clusters = []
 
     for cluster_id, stats in cluster_stats.items():
-
         cluster_html_id = f"cluster-{cluster_id}"
         heading = h("h2", id=cluster_html_id)(
             h("a", href=stats["feature_url"])(f"Cluster {cluster_id}")
@@ -237,9 +233,9 @@ def render_feature_clustering(
 
 
 def render_feature_edit_forms(
-    add_to_query, create_action, merge_action, delete_action, new_query, current_query
+    reverse_url,
+    current_query,
 ):
-
     query_input = None
     if current_query is not None:
         query_input = h("input", type="hidden", name="query", value=current_query)
@@ -249,20 +245,28 @@ def render_feature_edit_forms(
         klass="cluster",
         id="edit-model-form",
         method="post",
-        action=create_action,
+        action=reverse_url("create-cluster"),
     )(
         query_input,
         h("button", type="submit")("Create cluster from selected features"),
-        h("button", type="submit", formaction=merge_action)("Merge selected clusters"),
-        h("button", type="submit", formaction=delete_action)(
+        h("button", type="submit", formaction=reverse_url("merge-clusters"))(
+            "Merge selected clusters"
+        ),
+        h("button", type="submit", formaction=reverse_url("delete-clusters"))(
             "Delete selected clusters"
         ),
-        h("button", type="submit", formmethod="get", formaction=add_to_query)(
+        h("button", type="submit", formaction=reverse_url("split-clusters"))(
+            "Split selected clusters"
+        ),
+        h("button", type="submit", formmethod="get", formaction=reverse_url("browse"))(
             "Create query clause from selected"
         ),
-        h("button", type="submit", formmethod="get", formaction=new_query)(
-            "Start new query with selected"
-        ),
+        h(
+            "button",
+            type="submit",
+            formmethod="get",
+            formaction=reverse_url("browse-new-query"),
+        )("Start new query with selected"),
     )
 
 
@@ -400,7 +404,6 @@ def column_content_with_header(title, content, content_klass="scrollable"):
 
 
 def render_field_table(index_summary):
-
     header = ["Field"] + list(next(iter(index_summary.values())).keys())
 
     return h("table")(

@@ -44,7 +44,6 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
         self.extra_css = self.idx.corpus.extra_css
 
     def render_page(self, *args, **kwargs):
-
         search_url = kwargs.get("search_url", self.reverse_url("search"))
 
         return web_rendering.full_page(
@@ -154,7 +153,6 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         rendered_fields = {}
 
         for field, stats in self.idx.indexed_field_summary.items():
-
             row = stats.copy()
             handler = self.idx.field_handlers[field][0]
 
@@ -189,7 +187,6 @@ class IndexedFieldOverview(HyperrealRequestHandler):
 
 
 def render_facets(idx, query, base_url, current_query_encode, select_form_id):
-
     rendered_facets = []
 
     for i, (title, features, table_filter) in enumerate(idx.facets):
@@ -227,11 +224,9 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
 
 
 def dnf_query_to_query_string(idx, dnf_query):
-
     components = []
 
     for clause in dnf_query:
-
         n_clauses = len(clause)
 
         for component in clause:
@@ -250,14 +245,12 @@ def dnf_query_to_query_string(idx, dnf_query):
 
 
 def query_string_to_dnf_query(idx, query_string):
-
     components = parse_qsl(query_string)
 
     clauses = []
     current_clause = []
 
     for component_type, component in components:
-
         if component_type == "c":
             current_clause.append(int(component))
 
@@ -280,7 +273,6 @@ def query_string_to_dnf_query(idx, query_string):
 
 
 def evaluate_dnf_query(clustering, dnf_query):
-
     def evaluate_or_clause(clause):
         result = BitMap()
 
@@ -302,7 +294,6 @@ def evaluate_dnf_query(clustering, dnf_query):
 
 
 def render_dnf_query(clustering, dnf_query):
-
     def render_clause(clause):
         items = []
 
@@ -342,7 +333,6 @@ def render_dnf_query(clustering, dnf_query):
 
 class BrowseClusters(HyperrealRequestHandler):
     async def get(self):
-
         top_k_features = int(self.get_argument("top_k_features", "15"))
         top_k_clusters = int(self.get_argument("top_k_clusters", "30"))
 
@@ -412,7 +402,6 @@ class BrowseClusters(HyperrealRequestHandler):
 
         # Special case when nothing is selected to pivot by
         if not current_query:
-
             matching_docs = self.idx.all_doc_ids()
             matching_doc_count = len(matching_docs)
 
@@ -521,7 +510,6 @@ class BrowseClusters(HyperrealRequestHandler):
                 cluster_id not in expand_clusters
                 and cluster_stats[cluster_id]["matching_feature_count"] > top_k_features
             ):
-
                 this_return = [*return_query_items, ("expand", cluster_id)]
 
                 return_url = "".join(
@@ -575,16 +563,8 @@ class BrowseClusters(HyperrealRequestHandler):
             ),
         )
 
-        form_link = self.reverse_url("create-cluster")
-        merge_cluster_link = self.reverse_url("merge-clusters")
-        delete_cluster_link = self.reverse_url("delete-clusters")
-        new_query_link = self.reverse_url("browse-new-query")
         edit_form = web_rendering.render_feature_edit_forms(
-            self.reverse_url("browse"),
-            form_link,
-            merge_cluster_link,
-            delete_cluster_link,
-            new_query_link,
+            self.reverse_url,
             dnf_query_to_query_string(self.idx, current_query),
         )
 
@@ -625,7 +605,6 @@ class BrowseClusters(HyperrealRequestHandler):
 
 
 class NewQueryBrowseClusters(HyperrealRequestHandler):
-
     def get(self):
         """
         Redirect back to browse to start a new one without the current query.
@@ -645,7 +624,6 @@ class NewQueryBrowseClusters(HyperrealRequestHandler):
 
 
 class Search(HyperrealRequestHandler):
-
     def get(self):
         search_features = []
 
@@ -666,7 +644,6 @@ class Search(HyperrealRequestHandler):
 
 
 class CreateCluster(HyperrealRequestHandler):
-
     def post(self):
         """
         Create a new cluster from the given features.
@@ -680,7 +657,6 @@ class CreateCluster(HyperrealRequestHandler):
         ]
 
         if features:
-
             new_cluster_id = self.feature_clusters.create_cluster_from_features(
                 features
             )
@@ -697,7 +673,6 @@ class CreateCluster(HyperrealRequestHandler):
 
 
 class MergeClusters(HyperrealRequestHandler):
-
     def post(self):
         """
         Create a new cluster from the given features.
@@ -709,7 +684,6 @@ class MergeClusters(HyperrealRequestHandler):
         clusters = [int(c) for c in self.get_arguments("c")]
 
         if clusters:
-
             merge_cluster_id = self.feature_clusters.merge_clusters(clusters)
 
             self.redirect(
@@ -723,8 +697,29 @@ class MergeClusters(HyperrealRequestHandler):
     get = post
 
 
-class DeleteCluster(HyperrealRequestHandler):
+class SplitClusters(HyperrealRequestHandler):
+    def post(self):
+        """
+        Split each of the given clusters into two new clusters.
 
+        Clusters that don't exist will be ignored.
+
+        """
+        cluster_ids = [int(value) for value in self.get_arguments("c")]
+
+        with self.idx:
+            for cluster_id in sorted(cluster_ids):
+                self.feature_clusters.split_cluster_into(cluster_id, 2)
+
+        self.redirect(
+            self.reverse_url("browse")
+            + f"?c={cluster_ids[0]}#cluster-{cluster_ids[0]}",
+        )
+
+    get = post
+
+
+class DeleteClusters(HyperrealRequestHandler):
     def post(self):
         """
         Delete the given cluster/s from the clustering.
@@ -775,8 +770,13 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 name="merge-clusters",
             ),
             tornado.web.url(
+                rf"{base_path}/cluster/split/",
+                SplitClusters,
+                name="split-clusters",
+            ),
+            tornado.web.url(
                 rf"{base_path}/cluster/delete/",
-                DeleteCluster,
+                DeleteClusters,
                 name="delete-clusters",
             ),
         ],
@@ -792,11 +792,9 @@ async def serve_index(hyperreal_index, port=9999, base_path=""):
 
 
 def _render_html_worker(args):
-
     idx, retrieve_docs, highlight_features = args
 
     with idx:
-
         search_results = idx.html_search_results(retrieve_docs, highlight_features)
 
     return raw(search_results.render())
