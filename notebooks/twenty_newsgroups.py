@@ -145,7 +145,6 @@ def display_tokenise(text):
     token_starts = []
 
     for match in matches:
-
         start, end = match.span()
 
         # If we've skipped over some content to get to the next split, it's time to
@@ -169,7 +168,6 @@ print("Tokenised for display: ", display_tokenise(example_string))
 
 
 class TwentyNewsgroups(corpus.HyperrealCorpus):
-
     # Link to the documentation for this!
     def __init__(self):
         self.data_loc = data_loc
@@ -179,11 +177,9 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
     para_splitter = re.compile(r"\n\n|^-+\s*$", re.MULTILINE)
 
     def identify_repeated_blocks(self):
-
         para_counter = collections.Counter()
 
         for key, doc in self.docs(self.all_doc_keys()):
-
             for para in self.para_splitter.split(doc["body"]):
                 if stripped := para.strip():
                     para_counter[stripped] += 1
@@ -206,7 +202,6 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
                 yield name
 
     def _parse_post(self, raw_post):
-
         full_post = raw_post.decode("latin1")
 
         header, _, body = full_post.partition("\n\n")
@@ -279,7 +274,6 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         return self._QUOTE_RE.search(line)
 
     def mark_lines_ignore(self, body):
-
         lines = []
 
         for block in self.para_splitter.split(body):
@@ -298,13 +292,12 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         return lines
 
     def doc_to_features(self, doc):
-
         indexed = {
             "subject": tokenise(doc["Subject"]),
             "newsgroup": set(
                 ng.strip() for ng in doc["Newsgroups"].split(",") if ng.strip()
             ),
-            "from": doc["From"],
+            "from": doc["From"].strip(),
             "date": doc["Date"],
             # For validating that quoting behaviours are correctly handled.
             "line_start_character": {
@@ -325,9 +318,9 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         ]
 
         if doc.get("Distribution", None):
-            indexed["distribution"] = doc["Distribution"]
+            indexed["distribution"] = doc["Distribution"].strip()
         if doc.get("Organization", None):
-            indexed["organization"] = doc["Organization"]
+            indexed["organization"] = doc["Organization"].strip()
 
         return indexed
 
@@ -371,7 +364,6 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
     """
 
     def doc_to_html(self, doc, highlight_features=None):
-
         mark_lines = self.mark_lines_ignore(doc["body"])
         # render quoted text distinctly from other text.
         doc_body = [h("em")(line) if ignore else line for ignore, line in mark_lines]
@@ -561,7 +553,6 @@ clustering = newsgroups_idx.plugins["feature_clusters"]
 # clustering.delete_clusters(clustering.cluster_ids)
 
 if not clustering.cluster_ids:
-
     # Set the state of the RNG to a consistent point.
     newsgroups_idx.random_state = random.Random(42)
 
@@ -581,16 +572,122 @@ if not clustering.cluster_ids:
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")
 
 # +
+# Visualisation: a table of closest clusters and features for each newsgroup.
+#
+# -
+
+from tinyhtml import h
+from hyperreal.index_core import TableFilter
+
+result_path = Path("results")
+result_path.mkdir(exist_ok=True)
+
+newsgroup_categories = newsgroups_idx.field_features("newsgroup", top_k_features=20)
+top_clusters = TableFilter(order_by="jaccard_similarity", first_k=3)
+top_features = TableFilter(order_by="jaccard_similarity", first_k=15)
+
+header = h("thead")(
+    h("tr")(
+        h("th")("Newsgroup"),
+        h("th")("Cluster ID"),
+        h("th")("Cluster Rank"),
+        h("th")("Most Similar Features"),
+    )
+)
+table_rows = []
+for newsgroup in sorted(newsgroup_categories):
+    newsgroup_docs = newsgroups_idx[newsgroup][0]
+
+    newsgroup_similarity = top_clusters(
+        clustering.facet_clusters_by_query(newsgroup_docs)
+    )
+
+    similar_features = clustering.facet_clustering_by_query(
+        newsgroup_docs, cluster_ids=newsgroup_similarity
+    )
+
+    for rank, cluster_id in enumerate(newsgroup_similarity):
+        row = []
+
+        feature_stats = top_features(similar_features[cluster_id])
+
+        display_features = " ".join(f[1] for f in feature_stats)
+
+        row.append(h("th")(newsgroup[1]))
+        row.append(h("th")(cluster_id))
+        row.append(h("td")(rank))
+        row.append(h("td")(display_features))
+
+        table_rows.append(h("tr")(row))
+
+visualisation_table = h("table")(header, h("tbody")(table_rows)).render()
+
+with open(result_path / "twenty_newsgroups_top_clusters.html", "w") as table_out:
+    table_out.write(visualisation_table)
+
+
+# +
+# Comparison table: keywords for each newsgroups.
+#
+# -
+
+import heapq
+import math
+
+keywords = collections.defaultdict(lambda: [(-1, ("", ""))] * 45)
+
+N = newsgroups_idx.total_doc_count
+
+for feature in newsgroups_idx.field_features("body", min_docs=10):
+    feature_docs, doc_count, _ = newsgroups_idx[feature]
+
+    for newsgroup in sorted(newsgroup_categories):
+        news_docs, news_count, _ = newsgroups_idx[newsgroup]
+
+        # chi-squared comparison, for now
+        A = feature_docs.intersection_cardinality(news_docs)
+        B = doc_count - A
+        C = news_count - A
+        D = N - (A + B + C)
+
+        numer = (A * D - B * C) ** 2 * (A + B + C + D)
+        denom = (A + B) * (C + D) * (B + D) * (A + C)
+        chi_sq = numer / denom
+
+        heapq.heappushpop(keywords[newsgroup], (chi_sq, feature))
+
+header = h("thead")(
+    h("tr")(
+        h("th")("Newsgroup"),
+        h("th")("Top Ranked Keywords (Chi-Squared)"),
+    )
+)
+table_rows = []
+
+for newsgroup, words in keywords.items():
+    display_features = " ".join(f[1][1] for f in sorted(words, reverse=True))
+
+    row = h("tr")(h("th")(newsgroup[1]), h("td")(display_features))
+
+    table_rows.append(row)
+
+visualisation_table = h("table")(header, h("tbody")(table_rows)).render()
+
+with open(result_path / "twenty_newsgroups_top_keywords.html", "w") as table_out:
+    table_out.write(visualisation_table)
+
+
+# +
 import asyncio
 from hyperreal.web_server import serve_index
-from hyperreal.index_core import TableFilter
+
 
 print("launching web server")
 
 newsgroups_idx.facets = [
     (
         "The Twenty Newsgroups",
-        newsgroups_idx.field_features("newsgroup", top_k_features=20),
+        newsgroup_categories,
         TableFilter(order_by="hits", first_k=20, keep_above=0),
     ),
     (
