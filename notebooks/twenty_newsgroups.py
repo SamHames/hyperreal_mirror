@@ -105,8 +105,9 @@ else:
 # together [signpost version control].
 
 # +
-import re
 import collections
+import functools
+import re
 from datetime import date
 from email.utils import parsedate
 from time import mktime
@@ -171,20 +172,7 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
     # Link to the documentation for this!
     def __init__(self):
         self.data_loc = data_loc
-
-        self.repeated_blocks = self.identify_repeated_blocks()
-
-    para_splitter = re.compile(r"\n\n|^-+\s*$", re.MULTILINE)
-
-    def identify_repeated_blocks(self):
-        para_counter = collections.Counter()
-
-        for key, doc in self.docs(self.all_doc_keys()):
-            for para in self.para_splitter.split(doc["body"]):
-                if stripped := para.strip():
-                    para_counter[stripped] += 1
-
-        return {para for para, count in para_counter.items() if count > 1}
+        self.signatures = self.get_signatures()
 
     def open_zip(self):
         return zipfile.ZipFile(self.data_loc, "r")
@@ -270,24 +258,64 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         )
     )
 
-    def is_quoted_line(self, line):
+    _PARA_DELIM = re.compile(r"\n\n|^-+\s*$", re.MULTILINE)
+    """
+    Delimit paragraphs, or common signature block element starts (two or more hyphens as the whole line)
+    """
+    _STRIP_SIG_WHITESPACE = re.compile(r"\s+")
+
+    def is_ignored_line(self, line):
         return self._QUOTE_RE.search(line)
+
+    def get_signatures(self):
+        """
+        Find repeated signature blocks for removing from tokenisation.
+
+        The last paragraph or block of text starting with --\\n will be
+        treated as a potential signature, but it will only be removed if
+        it's a duplicate of another signature block.
+
+        This rule is intended to not remove blocks of text that are unique,
+        as might happen if there's no clear demarcation between the end of
+        the post and their signature/signoff (such as no paragraph break).
+
+        """
+
+        signature_counts = collections.Counter()
+
+        for key, doc in self.docs(self.all_doc_keys()):
+            paras = self._PARA_DELIM.split(doc["body"].strip())
+
+            if len(paras) > 1:
+                signature_counts[self._STRIP_SIG_WHITESPACE.sub("", paras[-1])] += 1
+
+        return set(sig for sig, count in signature_counts.items() if count > 1)
 
     def mark_lines_ignore(self, body):
         lines = []
 
-        for block in self.para_splitter.split(body):
-            block_lines = block.splitlines(keepends=True)
-            if block_lines:
-                block_lines[-1] += "\n\n"
+        paras = self._PARA_DELIM.split(body.strip())
+        n_paras = len(paras)
 
-            if block.strip() in self.repeated_blocks:
-                for line in block_lines:
-                    lines.append((True, line))
+        start = 0
+        signature = ""
+        end = n_paras
 
-            else:
-                for line in block_lines:
-                    lines.append((self.is_quoted_line(line), line))
+        # If there's no paragraph break, treat this as a message with no signature.
+        if n_paras > 1:
+            # Otherwise check if the last paragraph is in our signature blocks.
+            if self._STRIP_SIG_WHITESPACE.sub("", paras[-1]) in self.signatures:
+                signature = paras[-1]
+                end -= 1
+
+        for para in paras[start:end]:
+            para += "\n\n"
+            for line in para.splitlines(keepends=True):
+                lines.append((self.is_ignored_line(line), line))
+
+        if signature:
+            for line in signature.splitlines(keepends=True):
+                lines.append((True, line))
 
         return lines
 
@@ -574,7 +602,7 @@ if not clustering.cluster_ids:
 # +
 # Visualisation: a table of closest clusters and features for each newsgroup.
 #
-# -
+#
 
 from tinyhtml import h
 from hyperreal.index_core import TableFilter
@@ -629,7 +657,7 @@ with open(result_path / "twenty_newsgroups_top_clusters.html", "w") as table_out
 # +
 # Comparison table: keywords for each newsgroups.
 #
-# -
+#
 
 import heapq
 import math
@@ -723,9 +751,13 @@ except RuntimeError:
 # Having seen the basic building blocks of what an index can do, let's explore this
 # collection through the web interface.
 
-# +
-# query = newsgroups_idx.match_any(FieldValues("body", values=["gay"]))
-# body_fields = newsgroups_idx.field_values("body", min_docs=10)
-# faceted = newsgroups_idx.facet_count(body_fields, query)
-
-# print(faceted.order_by("jaccard_similarity", keep_n_values=20))
+# for cluster_id in range(100):
+included_features = {
+    f for cluster_id in clustering.cluster_ids for f in clustering.cluster_features(c)
+}
+to_add = {
+    f for f in newsgroups_idx.field_features("body", min_docs=10)
+} - included_features
+for c, features in clustering._propose_split_using_current_clusters(to_add).items():
+    print(c, " ".join(f[1] for f in features))
+    print()
