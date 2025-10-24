@@ -37,7 +37,10 @@ def render_feature_group(
     display_hits=True,
     select_form_id=None,
     select_form_prefix="",
+    highlight_features=None,
 ):
+    highlight_features = highlight_features or set()
+
     header_rows = [
         h("th", klass="sr-only", scope="col")("Field"),
         h("th", scope="col")("Value"),
@@ -87,7 +90,7 @@ def render_feature_group(
         if "feature_url" in stats:
             display_value = h("a", href=stats["feature_url"])(html_value)
 
-        row.append(h("th", scope="row", klass="group-value")(display_value))
+        row.append(h("th", scope="row")(display_value))
 
         if display_docs:
             row.append(h("td")(format_si_magnitude(stats["doc_count"])))
@@ -124,8 +127,12 @@ def render_feature_group(
                     )
                 )
             )
+        row_class = "has-bar"
 
-        rows.append(h("tr", klass="has-bar")(row))
+        if feature in highlight_features:
+            row_class += " query-selected"
+
+        rows.append(h("tr", klass=row_class)(row))
 
     if footer:
         rows.append(h("tfoot")(h("tr")(h("td", colspan=2)(footer))))
@@ -140,8 +147,13 @@ def render_feature_clustering(
     display_hits=True,
     select_form_id=None,
     footer=None,
+    highlight_features=None,
+    highlight_clusters=None,
 ):
     clusters = []
+
+    highlight_features = highlight_features or set()
+    highlight_clusters = highlight_clusters or set()
 
     for cluster_id, stats in cluster_stats.items():
         cluster_html_id = f"cluster-{cluster_id}"
@@ -201,6 +213,9 @@ def render_feature_clustering(
                 )
             )
 
+        if cluster_id in highlight_clusters:
+            header_class += " query-selected"
+
         header = h("div", klass=header_class, style=style)(
             heading, h("dl", klass="cluster")(cluster_data)
         )
@@ -222,6 +237,7 @@ def render_feature_clustering(
             select_form_id=select_form_id,
             select_form_prefix=cluster_id,
             footer=group_footer,
+            highlight_features=highlight_features,
         )
 
         clusters.append(h("li", klass="stack")(header, feature_group))
@@ -487,7 +503,8 @@ body {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    overflow: clip;
+    height: 100dvh;
+    overflow: hidden;
 }
 
 main {
@@ -698,6 +715,10 @@ h2, h3 {
     h2 {
         flex: 1;
     }
+}
+
+.query-selected {
+    border: var(--s-3) solid red;
 }
 
 .group-header:has(input:checked) {

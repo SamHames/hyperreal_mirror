@@ -186,7 +186,9 @@ class IndexedFieldOverview(HyperrealRequestHandler):
         )
 
 
-def render_facets(idx, query, base_url, current_query_encode, select_form_id):
+def render_facets(
+    idx, query, base_url, current_query_encode, select_form_id, highlight_features
+):
     rendered_facets = []
 
     for i, (title, features, table_filter) in enumerate(idx.facets):
@@ -211,6 +213,7 @@ def render_facets(idx, query, base_url, current_query_encode, select_form_id):
                     faceted,
                     select_form_id=select_form_id,
                     select_form_prefix=f"facet-{i}",
+                    highlight_features=highlight_features,
                 ),
             )
         )
@@ -249,13 +252,19 @@ def query_string_to_dnf_query(idx, query_string):
 
     clauses = []
     current_clause = []
+    highlight_features = set()
+    highlight_clusters = set()
 
     for component_type, component in components:
         if component_type == "c":
-            current_clause.append(int(component))
+            c = int(component)
+            current_clause.append(c)
+            highlight_clusters.add(c)
 
         elif component_type == "f":
-            current_clause.append(idx.feature_from_querystring(component))
+            feature = idx.feature_from_querystring(component)
+            current_clause.append(feature)
+            highlight_features.add(feature)
 
         elif component_type == "g":
             assert len(current_clause) == int(component)
@@ -269,7 +278,7 @@ def query_string_to_dnf_query(idx, query_string):
     if current_clause:
         clauses.append(current_clause)
 
-    return clauses
+    return clauses, highlight_features, highlight_clusters
 
 
 def evaluate_dnf_query(clustering, dnf_query):
@@ -341,8 +350,18 @@ class BrowseClusters(HyperrealRequestHandler):
 
         # All c's and f's passed in become part of a new or clause in the overall DNF
         # query.
-        current_query = query_string_to_dnf_query(self.idx, query)
-        new_clause = query_string_to_dnf_query(self.idx, self.request.query)
+        (
+            current_query,
+            highlight_features,
+            highlight_clusters,
+        ) = query_string_to_dnf_query(self.idx, query)
+
+        new_clause, new_features, new_clusters = query_string_to_dnf_query(
+            self.idx, self.request.query
+        )
+
+        highlight_features |= new_features
+        highlight_clusters |= new_clusters
 
         if new_clause:
             # Pull out duplicates of features currently included into the new clause.
@@ -390,10 +409,13 @@ class BrowseClusters(HyperrealRequestHandler):
             if isinstance(item, tuple)
         }
 
-        for cluster_id in highlight_clusters:
-            highlight_features |= set(
-                self.feature_clusters.cluster_features(cluster_id)
-            )
+        # We want to highlight the features in each cluster for the query results, but
+        # not in the cluster display.
+        concordance_highlight_features = {
+            f
+            for cluster_id in highlight_clusters
+            for f in self.feature_clusters.cluster_features(cluster_id)
+        } | highlight_features
 
         skip_feature_pivoting = False
 
@@ -419,7 +441,9 @@ class BrowseClusters(HyperrealRequestHandler):
         base_url = self.reverse_url("browse")
 
         search_results, sample_doc_count = self.render_html_sample_docs(
-            matching_docs, sample_doc_count, highlight_features=highlight_features
+            matching_docs,
+            sample_doc_count,
+            highlight_features=concordance_highlight_features,
         )
 
         order_by_stat = "jaccard_similarity"
@@ -489,7 +513,12 @@ class BrowseClusters(HyperrealRequestHandler):
         }
 
         facets = render_facets(
-            self.idx, matching_docs, base_url, current_query_encode, "edit-model-form"
+            self.idx,
+            matching_docs,
+            base_url,
+            current_query_encode,
+            "edit-model-form",
+            highlight_features=highlight_features,
         )
 
         # Update the clusters and features to include a url link
@@ -513,12 +542,7 @@ class BrowseClusters(HyperrealRequestHandler):
                 this_return = [*return_query_items, ("expand", cluster_id)]
 
                 return_url = "".join(
-                    (
-                        self.reverse_url("browse"),
-                        "?",
-                        urlencode(this_return),
-                        f"#cluster-{cluster_id}",
-                    )
+                    (self.reverse_url("browse"), "?", urlencode(this_return))
                 )
                 cluster_stats[cluster_id]["expand_url"] = return_url
 
@@ -526,21 +550,9 @@ class BrowseClusters(HyperrealRequestHandler):
                 feature = self.idx.feature_to_querystring(f)
                 feature_encode = ("f", feature)
                 encoded = urlencode([feature_encode])
-                stats["feature_url"] = "".join(
-                    (
-                        base_url,
-                        "?",
-                        encoded,
-                        f"#cluster-{cluster_id}",
-                    )
-                )
+                stats["feature_url"] = "".join((base_url, "?", encoded))
                 stats["hit_count_url"] = "".join(
-                    (
-                        base_url,
-                        "?",
-                        urlencode([current_query_encode, feature_encode]),
-                        f"#cluster-{cluster_id}",
-                    )
+                    (base_url, "?", urlencode([current_query_encode, feature_encode]))
                 )
                 stats["select_form_value"] = feature
 
@@ -560,6 +572,8 @@ class BrowseClusters(HyperrealRequestHandler):
                 cluster_stats,
                 select_form_id="edit-model-form",
                 footer=see_all_clusters_link,
+                highlight_clusters=highlight_clusters,
+                highlight_features=highlight_features,
             ),
         )
 
@@ -662,8 +676,7 @@ class CreateCluster(HyperrealRequestHandler):
             )
 
             self.redirect(
-                self.reverse_url("browse")
-                + f"?c={new_cluster_id}#cluster-{new_cluster_id}",
+                self.reverse_url("browse") + f"?c={new_cluster_id}",
             )
 
         else:
@@ -687,8 +700,7 @@ class MergeClusters(HyperrealRequestHandler):
             merge_cluster_id = self.feature_clusters.merge_clusters(clusters)
 
             self.redirect(
-                self.reverse_url("browse")
-                + f"?c={merge_cluster_id}#cluster-{merge_cluster_id}",
+                self.reverse_url("browse") + f"?c={merge_cluster_id}",
             )
 
         else:
@@ -712,8 +724,7 @@ class SplitClusters(HyperrealRequestHandler):
                 self.feature_clusters.split_cluster_into(cluster_id, 2)
 
         self.redirect(
-            self.reverse_url("browse")
-            + f"?c={cluster_ids[0]}#cluster-{cluster_ids[0]}",
+            self.reverse_url("browse") + f"?c={cluster_ids[0]}",
         )
 
     get = post
