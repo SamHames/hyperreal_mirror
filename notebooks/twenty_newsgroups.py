@@ -258,7 +258,7 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         )
     )
 
-    _PARA_DELIM = re.compile(r"\n\n|^-+\s*$", re.MULTILINE)
+    _PARA_DELIM = re.compile(r"\n\n|^\s*--\s*$", re.MULTILINE)
     """
     Delimit paragraphs, or common signature block element starts (two or more hyphens as the whole line)
     """
@@ -587,7 +587,7 @@ if not clustering.cluster_ids:
     start_time = time.monotonic()
 
     random_clustering = clustering.initialise_random_clustering(
-        100, min_docs=10, include_fields=["body"]
+        256, min_docs=10, include_fields=["body"]
     )
 
     clustering.replace_clusters(random_clustering)
@@ -714,17 +714,17 @@ print("launching web server")
 
 newsgroups_idx.facets = [
     (
-        "The Twenty Newsgroups",
-        newsgroup_categories,
+        "Newsgroups",
+        newsgroups_idx.field_features("newsgroup", min_docs=1),
         TableFilter(order_by="hits", first_k=20, keep_above=0),
     ),
     (
-        "Top Organisations",
+        "Organisations",
         newsgroups_idx.field_features("organization"),
         TableFilter(order_by="hits", first_k=20, keep_above=0),
     ),
     (
-        "Top Posters",
+        "Posters",
         newsgroups_idx.field_features("from"),
         TableFilter(order_by="hits", first_k=20, keep_above=0),
     ),
