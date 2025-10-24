@@ -719,9 +719,8 @@ class SplitClusters(HyperrealRequestHandler):
         """
         cluster_ids = [int(value) for value in self.get_arguments("c")]
 
-        with self.idx:
-            for cluster_id in sorted(cluster_ids):
-                self.feature_clusters.split_cluster_into(cluster_id, 2)
+        for cluster_id in sorted(cluster_ids):
+            self.feature_clusters.split_cluster_into(cluster_id, 2)
 
         self.redirect(
             self.reverse_url("browse") + f"?c={cluster_ids[0]}",
@@ -741,6 +740,35 @@ class DeleteClusters(HyperrealRequestHandler):
         cluster_ids = [int(value) for value in self.get_arguments("c")]
 
         self.feature_clusters.delete_clusters(cluster_ids)
+
+        self.redirect(
+            self.reverse_url("browse"),
+        )
+
+    get = post
+
+
+class RefineClusters(HyperrealRequestHandler):
+    def post(self):
+        """
+        Refine the selected clusters for a certain number of iterations.
+
+        If no clusters are provided, the whole clustering will be refined.
+
+        Clusters that don't exist will be ignored.
+
+        """
+        cluster_ids = [int(value) for value in self.get_arguments("c")]
+
+        if cluster_ids:
+            sampling_rate = 0
+        else:
+            cluster_ids = self.feature_clusters.cluster_ids
+            sampling_rate = None
+
+        self.feature_clusters.refine_clustering(
+            cluster_ids, iterations=10, sampling_rate=sampling_rate
+        )
 
         self.redirect(
             self.reverse_url("browse"),
@@ -784,6 +812,11 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 rf"{base_path}/cluster/split/",
                 SplitClusters,
                 name="split-clusters",
+            ),
+            tornado.web.url(
+                rf"{base_path}/cluster/refine/",
+                RefineClusters,
+                name="refine-clusters",
             ),
             tornado.web.url(
                 rf"{base_path}/cluster/delete/",

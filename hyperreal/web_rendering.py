@@ -274,6 +274,9 @@ def render_feature_edit_forms(
         h("button", type="submit", formaction=reverse_url("split-clusters"))(
             "Split selected clusters"
         ),
+        h("button", type="submit", formaction=reverse_url("refine-clusters"))(
+            "Refine selected clusters"
+        ),
         h("button", type="submit", formmethod="get", formaction=reverse_url("browse"))(
             "Create query clause from selected"
         ),

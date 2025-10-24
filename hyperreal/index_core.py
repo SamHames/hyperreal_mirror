@@ -120,7 +120,6 @@ FeatureStatistics = dict[Feature, dict[str, int | float]]
 
 
 class HyperrealIndex:
-
     def __init__(
         self,
         index_path,
@@ -196,7 +195,6 @@ class HyperrealIndex:
         """Initialise plugins, ensuring all migrations have been run."""
 
         for plugin_init in self._provided_plugins:
-
             # Initialise the plugin class with this index.
             plugin = plugin_init(self)
 
@@ -208,11 +206,9 @@ class HyperrealIndex:
             self.plugins[plugin.plugin_name] = plugin
 
     def _ensure_migrated(self, plugin: index_plugin.IndexPlugin):
-
         index_version = self.get_plugin_version(plugin.plugin_name)
 
         while index_version != plugin.current_version:
-
             migration = plugin.version_migration_map[index_version]
             index_version = migration.to_version
             # TODO: log migrations being applied
@@ -223,7 +219,6 @@ class HyperrealIndex:
         self._set_plugin_version(plugin.plugin_name, index_version)
 
     def _apply_migration(self, migration: index_plugin.Migration):
-
         for i, step in enumerate(migration.steps):
             # TODO: log and raise meaningful error
             if isinstance(step, str):
@@ -284,7 +279,6 @@ class HyperrealIndex:
         """
 
         if self._field_handlers is None:
-
             field_details = self.db.execute(
                 """
                 SELECT field, value_handler_name, max_doc_cardinality, position_count
@@ -295,7 +289,6 @@ class HyperrealIndex:
             _field_handlers = {}
 
             for field, name, cardinality, position_count in field_details:
-
                 handler = self.corpus.name_handlers[name]
 
                 range_encoded = (
@@ -395,7 +388,6 @@ class HyperrealIndex:
                 raise ValueError("Invalid feature")
 
         elif len(possible_values) == 1:
-
             value_type, value = possible_values[0]
 
             return_value = handler.from_url(value)
@@ -582,7 +574,6 @@ class HyperrealIndex:
         }
 
         for field, stats in indexed_fields.items():
-
             handler = self.field_handlers[field][0]
 
             stats["Mininum Value"] = handler.from_index(stats["Mininum Value"])
@@ -634,7 +625,6 @@ class HyperrealIndex:
         # Walk through the corpus docs, potentially allowing the corpus to swallow
         # keys for any reason (such as for a missing doc).
         for doc_key1, doc in corpus_docs:
-
             # Advance through the other iterator until we get the same doc_key. It is
             # assumed that this will almost always just be the very next one/ that
             # missing keys are rare.
@@ -712,7 +702,6 @@ class HyperrealIndex:
         total_doc_count = self.total_doc_count
 
         if range_encoded:
-
             rows = self.db.execute(
                 """
                 SELECT value, doc_count
@@ -786,7 +775,6 @@ class HyperrealIndex:
         total_docs = self.total_doc_count
 
         for feature in features:
-
             stats = {}
 
             docs, doc_count, position_count = self[feature]
@@ -878,7 +866,6 @@ class HyperrealIndex:
         return result
 
     def _match_literal_feature(self, field, index_value) -> tuple[BitMap, int, int]:
-
         matching = list(
             self.db.execute(
                 """
@@ -897,7 +884,6 @@ class HyperrealIndex:
             return BitMap(), 0, 0
 
     def _match_literal_feature_pos(self, field, index_value):
-
         matching_rows = self.db.execute(
             """
             SELECT
@@ -914,7 +900,6 @@ class HyperrealIndex:
     def _match_range_encoded_literal_feature(
         self, field, index_value
     ) -> tuple[BitMap, int, int]:
-
         # Pick the literal value - if this isn't present then we can return immediately
         include_row = list(
             self.db.execute(
@@ -951,7 +936,6 @@ class HyperrealIndex:
     def _match_range_feature(
         self, field, index_value_start, index_value_end
     ) -> tuple[BitMap, int, int]:
-
         if index_value_start is None and index_value_end is None:
             raise ValueError(
                 "One of index_value_start and index_value_end needs to be not None."
@@ -984,7 +968,6 @@ class HyperrealIndex:
             return BitMap(), 0, 0
 
     def _match_range_feature_pos(self, field, index_value_start, index_value_end):
-
         if index_value_start is None and index_value_end is None:
             raise ValueError(
                 "One of index_value_start and index_value_end needs to be not None."
@@ -1017,7 +1000,6 @@ class HyperrealIndex:
     def _match_range_encoded_range_feature(
         self, field, index_value_start, index_value_end
     ) -> tuple[BitMap, int, int]:
-
         if index_value_start is None and index_value_end is None:
             raise ValueError(
                 "One of index_value_start and index_value_end needs to be not None."
@@ -1079,7 +1061,6 @@ class HyperrealIndex:
         return matching_docs, len(matching_docs), 0
 
     def _iter_pos_for_features(self, features):
-
         # Validate features have a single field
         fields = {f[0] for f in features}
 
@@ -1096,7 +1077,6 @@ class HyperrealIndex:
         handler, _, _ = self.field_handlers[field]
 
         for feature in features:
-
             if len(feature) == 3:
                 field, value_start, value_end = feature
 
@@ -1125,7 +1105,6 @@ class HyperrealIndex:
         passages = BitMap()
 
         for matching in matching_positions.values():
-
             passages |= matching
 
         return passages | passages.shift(1)
@@ -1156,9 +1135,7 @@ class HyperrealIndex:
         current_shift = 1
 
         for _, next_positions in feature_positions:
-
             for already_matched in list(matches):
-
                 test_match = already_matched + current_shift
 
                 # TODO: index needs to keep track of the group_size when indexing...
@@ -1227,7 +1204,6 @@ class TableFilter:
 
     def filter_keys(self, table):
         if self.order_by is not None:
-
             if self.keep_above is not None:
                 keys = (
                     k for k in table.keys() if table[k][self.order_by] > self.keep_above
