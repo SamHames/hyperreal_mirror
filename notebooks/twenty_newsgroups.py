@@ -578,7 +578,7 @@ import time
 
 clustering = newsgroups_idx.plugins["feature_clusters"]
 
-# clustering.delete_clusters(clustering.cluster_ids)
+clustering.delete_clusters(clustering.cluster_ids)
 
 if not clustering.cluster_ids:
     # Set the state of the RNG to a consistent point.

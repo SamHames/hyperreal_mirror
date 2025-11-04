@@ -759,6 +759,17 @@ class FeatureClustering(IndexPlugin):
                 if possible_moves == 0:
                     break
 
+                # Dissolve the smallest cluster every 10 iterations, split the largest
+                # cluster in two.
+                if iteration and iteration % 10 == 0:
+                    cluster_sizes = sorted(
+                        (len(features), cluster_id)
+                        for cluster_id, features in surrogate_clusters.items()
+                    )
+                    to_dissolve = cluster_sizes[0]
+                    to_split = cluster_sizes[-1]
+                    print(to_dissolve, to_split)
+
             # Shut down the workers
             for _ in range(len(workers)):
                 work_queue.put(None)
