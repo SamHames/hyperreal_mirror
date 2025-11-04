@@ -217,6 +217,11 @@ class FeatureClustering(IndexPlugin):
             "DELETE from feature_cluster where cluster_id = ?", [cluster_id]
         )
 
+        self._move_features_into_cluster(cluster_id, features)
+
+    def _move_features_into_cluster(self, cluster_id, features):
+        """Move features into cluster_id."""
+
         # Delete existing features that might be assigned to another cluster.
         self._delete_features(features)
 
@@ -329,6 +334,27 @@ class FeatureClustering(IndexPlugin):
             subclusters[next_best].add(feature)
 
         return subclusters
+
+    @atomic
+    def dissolve_clusters(self, cluster_ids):
+        """
+        Dissolve the given clusters.
+
+        All features from each cluster will be moved to their next best location from
+        the remaining clusters.
+
+        """
+
+        dissolve_features = {
+            f for cluster_id in cluster_ids for f in self.cluster_features(cluster_id)
+        }
+
+        dissolve_to = self._propose_split_using_current_clusters(
+            dissolve_features, exclude_clusters=set(cluster_ids)
+        )
+
+        for cluster_id, features in dissolve_to.items():
+            self._move_features_into_cluster(cluster_id, features)
 
     @atomic
     def split_cluster_into(self, cluster_id, split_into):

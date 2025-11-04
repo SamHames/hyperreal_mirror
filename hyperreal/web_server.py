@@ -709,6 +709,28 @@ class MergeClusters(HyperrealRequestHandler):
     get = post
 
 
+class DissolveClusters(HyperrealRequestHandler):
+    def post(self):
+        """
+        Create a new cluster from the given features.
+
+        """
+
+        # Each feature is a bundled url string (double layered, to let us address
+        # arbitrary queries as features
+        clusters = [int(c) for c in self.get_arguments("c")]
+
+        if clusters:
+            self.feature_clusters.dissolve_clusters(clusters)
+
+            self.redirect(self.reverse_url("browse"))
+
+        else:
+            raise ValueError("no clusters provided")
+
+    get = post
+
+
 class SplitClusters(HyperrealRequestHandler):
     def post(self):
         """
@@ -807,6 +829,11 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 rf"{base_path}/cluster/merge/",
                 MergeClusters,
                 name="merge-clusters",
+            ),
+            tornado.web.url(
+                rf"{base_path}/cluster/dissolve/",
+                DissolveClusters,
+                name="dissolve-clusters",
             ),
             tornado.web.url(
                 rf"{base_path}/cluster/split/",

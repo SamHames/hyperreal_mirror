@@ -77,6 +77,23 @@ def test_plaintext_feature_cluster(example_idx):
 
     assert len(clustering.cluster_ids) == 16
 
+    # Dissolve a cluster
+    total_features = sum(
+        len(clustering.cluster_features(cluster_id))
+        for cluster_id in clustering.cluster_ids
+    )
+
+    clustering.dissolve_clusters(list(clustering.cluster_ids)[:3])
+
+    assert len(clustering.cluster_ids) == 13
+    assert (
+        sum(
+            len(clustering.cluster_features(cluster_id))
+            for cluster_id in clustering.cluster_ids
+        )
+        == total_features
+    )
+
 
 def test_dense_sparse_clustering(example_idx):
     """

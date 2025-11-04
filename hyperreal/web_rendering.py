@@ -268,6 +268,9 @@ def render_feature_edit_forms(
         h("button", type="submit", formaction=reverse_url("merge-clusters"))(
             "Merge selected clusters"
         ),
+        h("button", type="submit", formaction=reverse_url("dissolve-clusters"))(
+            "Dissolve selected clusters"
+        ),
         h("button", type="submit", formaction=reverse_url("delete-clusters"))(
             "Delete selected clusters"
         ),
