@@ -1037,7 +1037,7 @@ def _measure_feature_contribution_to_cluster_worker(
 
                     # check whether there is any intersection from the union results
                     # using the inclusion-exclusion principle.
-                    if old_c + feature_hits - new_c > 0:
+                    if c + feature_hits - new_c > 0:
                         new_objective = new_hits / (new_c + (n_features + 1))
                         delta = new_objective - objective
 
