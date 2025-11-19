@@ -575,7 +575,6 @@ class FeatureClustering(IndexPlugin):
         clustering: Clustering,
         iterations: int = 10,
         sampling_rate: typing.Optional[float] = None,
-        use_passages=False,
     ) -> Clustering:
         # Part 1, as preparation we'll convert all the features into integer surrogate
         # keys for memory mapping.
@@ -619,19 +618,12 @@ class FeatureClustering(IndexPlugin):
         with tempfile.TemporaryDirectory() as tmpdir, mp.Manager() as manager:
             working_file = os.path.join(tmpdir, "mmap.temp")
 
-            # Construct the mmap in the background - this might take a little bit.
-            future = self.idx.pool.submit(
-                _construct_mmap,
-                self.idx,
-                features,
-                working_file,
-                use_passages=use_passages,
-            )
+            # Construct the mmapped file for this clustering run.
+            feature_bitmaps = ((f, self.idx[f][0]) for f in features)
+            features, starts, ends = _mmap_bitmaps(feature_bitmaps, working_file)
 
             work_queue = manager.Queue()
             results_queue = manager.Queue()
-
-            offsets = future.result()
 
             # Start the background workers.
             workers = set()
@@ -643,7 +635,7 @@ class FeatureClustering(IndexPlugin):
                         working_file,
                         work_queue,
                         results_queue,
-                        offsets,
+                        (starts, ends),
                     )
                 )
 
@@ -778,7 +770,6 @@ class FeatureClustering(IndexPlugin):
         cluster_ids: typing.Optional[typing.Iterable[int]] = None,
         iterations: int = 10,
         sampling_rate: typing.Optional[float] = None,
-        use_passages=False,
     ):
         """
         Refine the current clustering defined on the index.
@@ -799,7 +790,6 @@ class FeatureClustering(IndexPlugin):
             clustering,
             iterations=iterations,
             sampling_rate=sampling_rate,
-            use_passages=use_passages,
         )
 
         self.replace_clusters(refined_clustering)
@@ -807,73 +797,42 @@ class FeatureClustering(IndexPlugin):
         return refined_clustering
 
 
-def _construct_mmap(
-    idx,
-    features_or_queries: typing.Iterable[Feature | Query],
-    mmap_path,
-    use_passages=False,
-):
+def _mmap_bitmaps(feature_bitmaps, mmap_path):
     """
-    Materialise features or queries into a file suitable for memory mapping.
+    Materialise the given iterator of features and bitmaps into a file to open via mmap.
 
-    This enables performance optimisation in three ways:
-
-    - by skipping the SQLite overhead of retrieving features through the blob
-      interface: this is not normally an issue for even complex features, but for
-      clustering we access every provided feature on every iteration.
-    - by materialising arbitrary features once at the beginning of the clustering
-      process.
-    - by representing the provided features as a compact integer offset, enabling
-      intermediate parts of the clustering process to be represented by memory
-      efficient arrays.
-    - the resulting array is used as a memory map, meaning we don't need to hold the
-      whole set in memory at once, and we only need to keep the page cache for the
-      specific sections we need out of the full index.
+    Returns: list of features in index order, and the start and end offsets of each
+        feature.
 
     """
 
     current_start = 0
-    starts = array.array("q", (0 for _ in features_or_queries))
-    ends = array.array("q", (0 for _ in features_or_queries))
+    features = []
+    starts = []
+    ends = []
 
-    if use_passages:
-        if any(
-            isinstance(feature_or_query, Query)
-            for feature_or_query in features_or_queries
-        ):
-            raise ValueError(
-                "use_passages=True is only supported for features, not queries"
-            )
+    with open(mmap_path, "wb") as mm:
 
-        if len({f[0] for f in features_or_queries}) > 1:
-            raise ValueError(
-                "use_passages=True is only supported for features on a single field."
-            )
+        for feature, bitmap in feature_bitmaps:
 
-    with idx, open(mmap_path, "wb") as mm:
-        for i, feature_or_query in enumerate(features_or_queries):
-            if isinstance(feature_or_query, Query):
-                docs = feature_or_query.evaluate(idx)
-            elif use_passages:
-                docs = idx.feature_passages(feature_or_query)
-            else:
-                docs = idx[feature_or_query][0]
+            features.append(feature)
 
-            docs.run_optimize()
-            docs.shrink_to_fit()
-            docs = docs.serialize()
+            bitmap.run_optimize()
+            bitmap.shrink_to_fit()
+            bitmap = bitmap.serialize()
 
-            size = len(docs)
+            size = len(bitmap)
 
-            mm.write(docs)
+            mm.write(bitmap)
 
-            starts[i] = current_start
+            starts.append(current_start)
             current_start += size
-            ends[i] = current_start
+            ends.append(current_start)
 
-    idx.close()
+    starts = array.array("q", starts)
+    ends = array.array("q", ends)
 
-    return starts, ends
+    return features, starts, ends
 
 
 def _apply_moves(
