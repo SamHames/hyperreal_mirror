@@ -570,198 +570,56 @@ class FeatureClustering(IndexPlugin):
 
         return clusters
 
-    def _refine_clustering(
-        self,
-        clustering: Clustering,
-        iterations: int = 10,
-        sampling_rate: typing.Optional[float] = None,
-    ) -> Clustering:
-        # Part 1, as preparation we'll convert all the features into integer surrogate
-        # keys for memory mapping.
-        surrogate_clusters = {}
-        features = []
-        current_feature_id = 0
+    def _generate_mmap_from_clustering(self, clustering, mmap_working_file):
 
-        # Generate surrogate identifiers for each feature, and reconstruct the
-        # clustering with respect to these surrogates.
-        for cluster, cluster_features in clustering.items():
-            feature_ids = set()
+        # Materialise all the features in this cluster in the mmap file
+        feature_bitmaps = (
+            (f, self.idx[f][0])
+            for cluster_features in clustering.values()
+            for f in cluster_features
+        )
 
-            for f in cluster_features:
-                features.append(f)
-                feature_ids.add(current_feature_id)
-                current_feature_id += 1
+        feature_order, starts, ends = _mmap_bitmaps(feature_bitmaps, mmap_working_file)
 
-            surrogate_clusters[cluster] = feature_ids
-
-        # Inverse mapping from surrogate id to cluster.
-        surrogate_feature_cluster = {
-            f_id: cluster_id
-            for cluster_id, surrogates in surrogate_clusters.items()
-            for f_id in surrogates
+        # generate the surrogate version of the clustering where feature_ids are
+        # replaced with just integers and references into the mmap file
+        feature_map = {f: i for i, f in enumerate(feature_order)}
+        surrogate_clustering = {
+            cluster_id: {feature_map[f] for f in cluster_features}
+            for cluster_id, cluster_features in clustering.items()
         }
 
-        n_features = len(features)
-        n_clusters = len(surrogate_clusters)
+        return feature_order, (starts, ends), surrogate_clustering
 
-        # Set a default sampling rate if not specified
-        if sampling_rate is None:
-            sampling_rate = 1 / (n_clusters**0.5)
-
-        # will be used to randomise the order of feature checks for moving between
-        # clusters.
-        feature_check_order = array.array("q", surrogate_feature_cluster)
-
-        leaf_ids = list(surrogate_clusters.keys())
+    def _refine_clustering(
+        self,
+        clustering,
+        iterations,
+        sampling_rate,
+    ):
 
         # Construct the mmap of index features for faster loading/saving
         with tempfile.TemporaryDirectory() as tmpdir, mp.Manager() as manager:
             working_file = os.path.join(tmpdir, "mmap.temp")
 
-            # Construct the mmapped file for this clustering run.
-            feature_bitmaps = ((f, self.idx[f][0]) for f in features)
-            features, starts, ends = _mmap_bitmaps(feature_bitmaps, working_file)
+            feature_order, offsets, surrogate_clustering = (
+                self._generate_mmap_from_clustering(clustering, working_file)
+            )
 
-            work_queue = manager.Queue()
-            results_queue = manager.Queue()
+            surrogate_clustering = _refine_clustering(
+                working_file,
+                self.idx.pool,
+                self.idx.max_workers,
+                offsets,
+                surrogate_clustering,
+                iterations,
+                self.idx.random_state,
+                sampling_rate,
+            )
 
-            # Start the background workers.
-            workers = set()
-
-            for _ in range(self.idx.max_workers):
-                workers.add(
-                    self.idx.pool.submit(
-                        _measure_feature_contribution_to_cluster_worker,
-                        working_file,
-                        work_queue,
-                        results_queue,
-                        (starts, ends),
-                    )
-                )
-
-            best_clusters = []
-
-            # Convert the provided sampling_rate into the number of features to select.
-            random_feature_checks = math.ceil(sampling_rate * n_features)
-
-            for iteration in range(iterations):
-                if random_feature_checks:
-                    best_check_features = collections.defaultdict(set)
-
-                    # We'll use a random permutation of features for sampling, instead
-                    # of multiple calls to sampel or choices.
-                    self.idx.random_state.shuffle(feature_check_order)
-
-                    # Always check against the best cluster from the last iteration -
-                    # not all moves happen and if we found something better but didn't
-                    # move we should check it again.
-                    for feature_id, leaf_id in enumerate(best_clusters):
-                        best_check_features[leaf_id].add(feature_id)
-
-                    for leaf_id in leaf_ids:
-                        # Permutation based sampling of features from the shuffled array
-                        start = self.idx.random_state.randint(0, n_features)
-
-                        # The sampled index does not wrap around
-                        if start + random_feature_checks <= n_features:
-                            end = start + random_feature_checks
-                            sample_check_features = set(feature_check_order[start:end])
-                        # The sampled index does require a wraparound.
-                        else:
-                            wraparound = (start + random_feature_checks) % n_features
-
-                            sample_check_features = set(
-                                feature_check_order[start:]
-                            ) | set(feature_check_order[:wraparound])
-
-                        leaf_features = surrogate_clusters[leaf_id]
-
-                        all_check_features = (
-                            sample_check_features | best_check_features[leaf_id]
-                        ) - leaf_features
-
-                        # Dispatch work as soon as it's ready!
-                        work_queue.put(
-                            (
-                                leaf_id,
-                                array.array("q", leaf_features),
-                                array.array("q", all_check_features),
-                            )
-                        )
-
-                else:
-                    # Dense case - check against everything.
-                    for leaf_id in leaf_ids:
-                        work_queue.put(
-                            (
-                                leaf_id,
-                                array.array("q", surrogate_clusters[leaf_id]),
-                                array.array("q", range(n_features)),
-                            )
-                        )
-
-                # Accumulate the results from the background worker
-                objective_estimate = 0
-                waiting_for = len(leaf_ids) * 3
-
-                best_clusters = array.array("q", (-1 for _ in range(n_features)))
-                best_scores = array.array("d", (-math.inf for _ in range(n_features)))
-
-                while waiting_for:
-                    result = results_queue.get()
-
-                    # Error case - we need to exit this and try to terminate the
-                    # workers to raise the correct error
-                    if result == "exception":
-                        break
-
-                    cluster_id = result[0]
-
-                    if len(result) == 2:
-                        objective_estimate += result[1]
-
-                    elif len(result) == 3:
-                        for feature, delta in zip(result[1], result[2]):
-                            # Break ties deterministically towards the highest
-                            # cluster_id.
-                            if (delta, cluster_id) > (
-                                best_scores[feature],
-                                best_clusters[feature],
-                            ):
-                                best_scores[feature] = delta
-                                best_clusters[feature] = cluster_id
-
-                    waiting_for -= 1
-
-                # Break out of iterations as well so we can observe the worker error.
-                if result == "exception":
-                    break
-
-                self.idx.random_state.shuffle(feature_check_order)
-                possible_moves, applied_moves = _apply_moves(
-                    best_clusters,
-                    feature_check_order,
-                    surrogate_clusters,
-                    surrogate_feature_cluster,
-                    self.idx.random_state,
-                )
-
-                print(iteration, objective_estimate, possible_moves, applied_moves)
-
-                if possible_moves == 0:
-                    break
-
-            # Shut down the workers
-            for _ in range(len(workers)):
-                work_queue.put(None)
-
-            for future in cf.as_completed(workers):
-                future.result()
-
-        # Convert the feature_ids back to features for the return
         return {
-            cluster_id: {features[feature_id] for feature_id in cluster_features}
-            for cluster_id, cluster_features in surrogate_clusters.items()
+            cluster_id: {feature_order[i] for i in surrogate_features}
+            for cluster_id, surrogate_features in surrogate_clustering.items()
         }
 
     @atomic
@@ -795,6 +653,175 @@ class FeatureClustering(IndexPlugin):
         self.replace_clusters(refined_clustering)
 
         return refined_clustering
+
+
+def _refine_clustering(
+    mmap_working_file,
+    pool,
+    max_workers,
+    offsets,
+    clustering,
+    iterations,
+    random_state=None,
+    sampling_rate=None,
+):
+    """
+    Refine the given clustering of bitsets given in an mmapped file.
+
+    """
+    random_state = random_state or random.Random()
+
+    # Backward mapping of features to clusters to make updates easier.
+    f_id_to_cluster = {
+        f_id: cluster_id for cluster_id, f_ids in clustering.items() for f_id in f_ids
+    }
+
+    n_features = len(f_id_to_cluster)
+    n_clusters = len(clustering)
+
+    # will be used to randomise the order of feature checks for moving between
+    # clusters.
+    feature_check_order = array.array("q", range(n_features))
+
+    with mp.Manager() as manager:
+
+        work_queue = manager.Queue()
+        results_queue = manager.Queue()
+
+        # Start the background workers.
+        workers = set()
+
+        for _ in range(max_workers):
+            workers.add(
+                pool.submit(
+                    _measure_feature_contribution_to_cluster_worker,
+                    mmap_working_file,
+                    work_queue,
+                    results_queue,
+                    offsets,
+                )
+            )
+
+        best_clusters = []
+
+        # Set a default sampling rate if not specified
+        if sampling_rate is None:
+            sampling_rate = 1 / (n_clusters**0.5)
+        elif sampling_rate <= 0 or sampling_rate > 1:
+            raise ValueError(
+                f"{sampling_rate=} must be None, or 0 < sampling_rate <= 1"
+            )
+
+        # Convert the provided sampling_rate into the number of features to select.
+        random_feature_checks = math.ceil(sampling_rate * n_features)
+
+        for iteration in range(iterations):
+
+            best_checked_f_ids = collections.defaultdict(set)
+
+            # Always check against the best cluster from the last iteration -
+            # not all moves happen and if we found something better but didn't
+            # move we should check it again.
+            for f_id, cluster_id in enumerate(best_clusters):
+                best_checked_f_ids[cluster_id].add(f_id)
+
+            # Create a permutation to sample features from by indexing.
+            # This is an optimisation as otherwise sampling features can be a bottleneck
+            # for small collections. Compared to the earlier approach to permutation
+            # sampling, this ensures we cover more features on every iteration.
+            # This permutation is also the order we check feature moves later.
+            random_state.shuffle(feature_check_order)
+            sample_start = 0
+
+            # Extend the array to simplify wraparound sampling logic - this way we can
+            # always safely just sample from sample_start: sample_start +
+            # random_feature_checks
+            sample_order = (
+                feature_check_order + feature_check_order[:random_feature_checks]
+            )
+
+            for cluster_id, f_ids in clustering.items():
+
+                sample_end = sample_start + random_feature_checks
+
+                sample_check_feature_ids = set(
+                    feature_check_order[sample_start:sample_end]
+                )
+
+                sample_start = sample_end % n_features
+
+                check_feature_ids = (
+                    sample_check_feature_ids | best_checked_f_ids[cluster_id]
+                ) - f_ids
+
+                # Dispatch work as soon as it's ready!
+                work_queue.put(
+                    (
+                        cluster_id,
+                        array.array("q", f_ids),
+                        array.array("q", check_feature_ids),
+                    )
+                )
+
+            # Accumulate the results from the background worker
+            objective_estimate = 0
+            waiting_for = n_clusters * 3
+
+            best_clusters = array.array("q", (-1 for _ in range(n_features)))
+            best_scores = array.array("d", (-math.inf for _ in range(n_features)))
+
+            while waiting_for:
+                result = results_queue.get()
+
+                # Error case - we need to exit this and try to terminate the
+                # workers to raise the correct error
+                if result == "exception":
+                    break
+
+                cluster_id = result[0]
+
+                if len(result) == 2:
+                    objective_estimate += result[1]
+
+                elif len(result) == 3:
+                    for f_id, delta in zip(result[1], result[2]):
+                        # Break ties deterministically towards the highest
+                        # cluster_id.
+                        if (delta, cluster_id) > (
+                            best_scores[f_id],
+                            best_clusters[f_id],
+                        ):
+                            best_scores[f_id] = delta
+                            best_clusters[f_id] = cluster_id
+
+                waiting_for -= 1
+
+            # Break out of iterations as well so we can observe the worker error.
+            if result == "exception":
+                break
+
+            possible_moves, applied_moves = _apply_moves(
+                best_clusters,
+                feature_check_order,
+                clustering,
+                f_id_to_cluster,
+                random_state,
+            )
+
+            print(iteration, objective_estimate, possible_moves, applied_moves)
+
+            if possible_moves == 0:
+                break
+
+        # Shut down the workers
+        for _ in range(len(workers)):
+            work_queue.put(None)
+
+        for future in cf.as_completed(workers):
+            future.result()
+
+    # Convert the feature_ids back to features for the return
+    return clustering
 
 
 def _mmap_bitmaps(feature_bitmaps, mmap_path):

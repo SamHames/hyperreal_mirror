@@ -98,7 +98,7 @@ def test_dense_sparse_clustering(example_idx):
 
     clustering = example_idx.plugins["feature_clusters"]
 
-    for sampling_rate in (0, 1 / 16, 1 / 2):
+    for sampling_rate in (None, 1, 1 / 16, 1 / 2):
 
         # Initialise a clustering with 32 clusters
         random_clustering = clustering.initialise_random_clustering(
