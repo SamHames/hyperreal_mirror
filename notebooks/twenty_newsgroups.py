@@ -586,18 +586,20 @@ if not clustering.cluster_ids:
 
     start_time = time.monotonic()
 
+    # Initialise with a random clustering
     random_clustering = clustering.initialise_random_clustering(
         256, min_docs=10, include_fields=["body"]
     )
 
     clustering.replace_clusters(random_clustering)
 
-    clustering.refine_clustering(
-        iterations=200,
-        sampling_rate=None,
-    )
+    # Refine the clustering for a small number of iterations - we could go for longer,
+    # but it usually doesn't matter as you'll spend the same amount of time examining
+    # the output either way.
+    clustering.refine_clustering(iterations=50)
 
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")
+
 
 # +
 # Visualisation: a table of closest clusters and features for each newsgroup.

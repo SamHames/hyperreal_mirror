@@ -9,6 +9,7 @@ import array
 import collections
 import concurrent.futures as cf
 import contextlib
+import heapq
 import itertools
 import math
 import mmap
@@ -579,7 +580,7 @@ class FeatureClustering(IndexPlugin):
             for f in cluster_features
         )
 
-        feature_order, starts, ends = _mmap_bitmaps(feature_bitmaps, mmap_working_file)
+        feature_order, offsets = _mmap_bitmaps(feature_bitmaps, mmap_working_file)
 
         # generate the surrogate version of the clustering where feature_ids are
         # replaced with just integers and references into the mmap file
@@ -589,13 +590,93 @@ class FeatureClustering(IndexPlugin):
             for cluster_id, cluster_features in clustering.items()
         }
 
-        return feature_order, (starts, ends), surrogate_clustering
+        return feature_order, offsets, surrogate_clustering
+
+    def _split_refine_clustering(
+        self,
+        clustering,
+        n_split_clusters,
+        iterations,
+        sampling_rate=None,
+    ):
+
+        n_clusters = len(clustering)
+
+        # Recursively subdivide the largest clusters until we reach the target.
+        cluster_order = []
+        for c_id, features in clustering.items():
+            heapq.heappush(cluster_order, (-len(features), c_id, features))
+
+        next_cluster_id = max(clustering) + 1
+
+        while len(cluster_order) < n_split_clusters:
+
+            _, c_id, features = heapq.heappop(cluster_order)
+
+            new_features = {f for f in features if self.idx.random_state.random() > 0.5}
+            old_features = set(features) - new_features
+
+            heapq.heappush(
+                cluster_order, (-len(new_features), next_cluster_id, new_features)
+            )
+            heapq.heappush(cluster_order, (-len(old_features), c_id, old_features))
+
+            next_cluster_id += 1
+
+        split_clustering = {c_id: features for _, c_id, features in cluster_order}
+
+        # Refine the subdivided clustering
+        split_clustering = self._refine_clustering(
+            split_clustering, iterations=iterations
+        )
+
+        # Then cluster the subdivided clusters
+        cluster_order, cluster_clustering = self._cluster_clustering(
+            n_clusters, split_clustering, iterations
+        )
+
+        return split_clustering, cluster_order, cluster_clustering
+
+    def _cluster_clustering(
+        self, n_clusters, clustering, iterations, sampling_rate=None
+    ):
+
+        # Construct the mmap of index features for faster loading/saving
+        with tempfile.TemporaryDirectory() as tmpdir:
+            working_file = os.path.join(tmpdir, "mmap.temp")
+
+            # Materialise all the features in this cluster in the mmap file
+            cluster_bitmaps = (
+                (c_id, self.idx.match_any(fs)) for c_id, fs in clustering.items()
+            )
+
+            cluster_order, offsets = _mmap_bitmaps(cluster_bitmaps, working_file)
+
+            randomised_order = list(range(len(clustering)))
+            self.idx.random_state.shuffle(randomised_order)
+            surrogate_clustering = {
+                c_id: set(randomised_order[c_id::n_clusters])
+                for c_id in range(n_clusters)
+            }
+
+            surrogate_clustering = _refine_clustering(
+                working_file,
+                self.idx.pool,
+                self.idx.max_workers,
+                offsets,
+                surrogate_clustering,
+                iterations,
+                self.idx.random_state,
+                sampling_rate,
+            )
+
+        return cluster_order, surrogate_clustering
 
     def _refine_clustering(
         self,
         clustering,
         iterations,
-        sampling_rate,
+        sampling_rate=None,
     ):
 
         # Construct the mmap of index features for faster loading/saving
@@ -676,12 +757,13 @@ def _refine_clustering(
         f_id: cluster_id for cluster_id, f_ids in clustering.items() for f_id in f_ids
     }
 
+    total_features = len(offsets[0])
     n_features = len(f_id_to_cluster)
     n_clusters = len(clustering)
 
     # will be used to randomise the order of feature checks for moving between
     # clusters.
-    feature_check_order = array.array("q", range(n_features))
+    feature_check_order = array.array("q", f_id_to_cluster)
 
     with mp.Manager() as manager:
 
@@ -767,8 +849,8 @@ def _refine_clustering(
             objective_estimate = 0
             waiting_for = n_clusters * 3
 
-            best_clusters = array.array("q", (-1 for _ in range(n_features)))
-            best_scores = array.array("d", (-math.inf for _ in range(n_features)))
+            best_clusters = array.array("q", (-1 for _ in range(total_features)))
+            best_scores = array.array("d", (-math.inf for _ in range(total_features)))
 
             while waiting_for:
                 result = results_queue.get()
@@ -785,6 +867,8 @@ def _refine_clustering(
 
                 elif len(result) == 3:
                     for f_id, delta in zip(result[1], result[2]):
+                        if f_id not in f_id_to_cluster:
+                            continue
                         # Break ties deterministically towards the highest
                         # cluster_id.
                         if (delta, cluster_id) > (
@@ -859,7 +943,7 @@ def _mmap_bitmaps(feature_bitmaps, mmap_path):
     starts = array.array("q", starts)
     ends = array.array("q", ends)
 
-    return features, starts, ends
+    return features, (starts, ends)
 
 
 def _apply_moves(
