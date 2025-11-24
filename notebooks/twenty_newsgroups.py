@@ -615,15 +615,19 @@ result_path.mkdir(exist_ok=True)
 
 newsgroup_categories = newsgroups_idx.field_features("newsgroup", top_k_features=20)
 top_clusters = TableFilter(order_by="jaccard_similarity", first_k=3)
-top_features = TableFilter(order_by="jaccard_similarity", first_k=15)
+top_features = TableFilter(order_by="jaccard_similarity", first_k=10)
 
 header = h("thead")(
     h("tr")(
+        h("th")(""),
+        h("th", colspan=4)("Most similar clusters and features"),
+    ),
+    h("tr")(
         h("th")("Newsgroup"),
-        h("th")("Cluster ID"),
-        h("th")("Cluster Rank"),
-        h("th")("Most Similar Features"),
-    )
+        h("th")("Rank 1"),
+        h("th")("Rank 2"),
+        h("th")("Rank 3"),
+    ),
 )
 table_rows = []
 for newsgroup in sorted(newsgroup_categories):
@@ -637,19 +641,16 @@ for newsgroup in sorted(newsgroup_categories):
         newsgroup_docs, cluster_ids=newsgroup_similarity
     )
 
+    row = []
+    row.append(h("th")(newsgroup[1]))
+
     for rank, cluster_id in enumerate(newsgroup_similarity):
-        row = []
 
         feature_stats = top_features(similar_features[cluster_id])
-
-        display_features = " ".join(f[1] for f in feature_stats)
-
-        row.append(h("th")(newsgroup[1]))
-        row.append(h("th")(cluster_id))
-        row.append(h("td")(rank))
+        display_features = " ".join(f[1] for f in feature_stats) + " ..."
         row.append(h("td")(display_features))
 
-        table_rows.append(h("tr")(row))
+    table_rows.append(h("tr")(row))
 
 visualisation_table = h("table")(header, h("tbody")(table_rows)).render()
 
