@@ -258,10 +258,11 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
         )
     )
 
-    _PARA_DELIM = re.compile(r"\n\n|^\s*--\s*$", re.MULTILINE)
+    _PARA_DELIM = re.compile(r"\n\s*\n|^\s*--\s*$", re.MULTILINE)
     """
     Delimit paragraphs, or common signature block element starts (two or more hyphens as the whole line)
     """
+
     _STRIP_SIG_WHITESPACE = re.compile(r"\s+")
 
     def is_ignored_line(self, line):
