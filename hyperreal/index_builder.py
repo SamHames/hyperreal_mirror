@@ -6,7 +6,7 @@ else comes from the provided corpus.
 Citation: the flat index position format.
 Citation: roaring bitmaps.
 
-TODO: document indexable_docs format 
+TODO: document indexable_docs format
 
 TODO: Pointer to a description of the index layout on disk - possibly in the docs
 folder?
@@ -134,6 +134,16 @@ def _init_segment(db_path):
             primary key (field, value, first_doc_id)
         );
 
+        CREATE table if not exists inverted_index_segment_weight(
+            field text references field_summary,
+            value not null,
+            log_tf integer not null,
+            first_doc_id integer not null,
+            doc_count,
+            doc_ids roaring_bitmap,
+            primary key (field, value, log_tf, first_doc_id)
+        );
+
         CREATE table if not exists position_index_segment(
             field text references field_summary,
             value not null,
@@ -243,8 +253,10 @@ def _make_segment(
 
 @dc.dataclass
 class _DocsPositions:
-    docs: BitMap = dc.field(default_factory=BitMap)
-    group_positions: dict[BitMap] = dc.field(
+    docs: dict[int, BitMap] = dc.field(
+        default_factory=lambda: collections.defaultdict(BitMap)
+    )
+    group_positions: dict[int, BitMap] = dc.field(
         default_factory=lambda: collections.defaultdict(BitMap)
     )
 
@@ -300,18 +312,18 @@ def _prepare_doc_batch(
 
             if isinstance(values, list):
                 # Prepare the values for indexing at the doc level
-                doc_values = set(values)
+                doc_values = collections.Counter(values)
                 position_count = value_count = len(values)
                 container_type = "list"
 
             elif isinstance(values, set):
-                doc_values = values
+                doc_values = collections.Counter(values)
                 value_count = len(values)
                 position_count = 0
                 container_type = "set"
 
             else:
-                doc_values = [values]
+                doc_values = collections.Counter([values])
                 value_count = 1
                 position_count = 0
                 container_type = "none"
@@ -322,8 +334,16 @@ def _prepare_doc_batch(
             )
 
             # Actually index the values at the document level.
-            for value in doc_values:
-                batch_field[value].docs.add(doc_id)
+            for value, count in doc_values.items():
+
+                # Truncated logarithmic weights.
+                if count <= 2:
+                    steps = count
+                else:
+                    steps = math.floor(math.log2(count))
+
+                for step in range(1, steps + 1):
+                    batch_field[value].docs[step].add(doc_id)
 
             # Record the presence of this field in the document, regardless of
             # whatever funky thing is happening with indexing.
@@ -451,14 +471,24 @@ def _stage_doc_batch(
                     field,
                     index_value,
                     first_doc_id,
-                    len(field_batch[value].docs),
-                    field_batch[value].docs,
+                    len(field_batch[value].docs[1]),
+                    field_batch[value].docs[1],
                     sum(
                         len(group)
                         for group in field_batch[value].group_positions.values()
                     ),
                 )
                 for index_value, value in value_order
+            ),
+        )
+
+        db.executemany(
+            "INSERT into inverted_index_segment_weight values(?, ?, ?, ?, ?, ?)",
+            (
+                (field, index_value, log_tf, first_doc_id, len(docs), docs)
+                for index_value, value in value_order
+                for log_tf, docs in field_batch[value].docs.items()
+                if log_tf > 1
             ),
         )
 
@@ -539,6 +569,22 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                         sum(position_count)
                     from inverted_index_segment
                     group by field, value
+                    """,
+                [first_doc_id],
+            )
+
+            db.execute(
+                """
+                INSERT into merge_segment.inverted_index_segment_weight
+                    select
+                        field,
+                        value,
+                        log_tf,
+                        ?,
+                        sum(doc_count),
+                        roaring_union(doc_ids)
+                    from inverted_index_segment_weight
+                    group by field, value, log_tf
                     """,
                 [first_doc_id],
             )
@@ -688,6 +734,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
             # all others can be inserted normally.
 
             db.execute("DELETE from final.inverted_index")
+            db.execute("DELETE from final.inverted_index_weight")
             db.execute("DELETE from final.position_index")
             field_processing = db.execute(
                 """
@@ -760,6 +807,24 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                             where field = ?
                             group by value
                             order by value
+                        """,
+                        [field],
+                    )
+
+                    db.execute(
+                        """
+                        INSERT into final.inverted_index_weight 
+                            select
+                                field, 
+                                value,
+                                log_tf,
+                                sum(doc_count),
+                                roaring_union(doc_ids)
+                            from inverted_index_segment_weight
+                            inner join field_shift using(field, first_doc_id)
+                            where field = ?
+                            group by value, log_tf
+                            order by value, log_tf
                         """,
                         [field],
                     )
