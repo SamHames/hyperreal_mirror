@@ -973,7 +973,7 @@ def _apply_moves(
         to_cluster_size = len(clustering[best_cluster])
         total_features = from_cluster_size + to_cluster_size
 
-        # probabilistically control cluster size by adjusting chance of movement
+        # Probabilistically control cluster size by adjusting chance of movement
         # based on relative cluster sizes: make moves from clusters with many more
         # features to few features almost certain, and very difficult from clusters
         # with few features to many features. Clusters with similar numbers of
@@ -1026,7 +1026,10 @@ def _measure_feature_contribution_to_cluster_worker(
                 n_features = len(clustering)
 
                 if n_features == 0:
-                    return (cluster_key, 0, [], [])
+                    results_queue.put((cluster_key, 0))
+                    results_queue.put((cluster_key, [], []))
+                    results_queue.put((cluster_key, [], []))
+                    continue
 
                 # Construct the union of all cluster tokens, and also the set of
                 # documents only covered by a single feature.

@@ -614,8 +614,10 @@ result_path = Path("results")
 result_path.mkdir(exist_ok=True)
 
 newsgroup_categories = newsgroups_idx.field_features("newsgroup", top_k_features=20)
+all_newsgroups = newsgroups_idx.field_features("newsgroup")
 top_clusters = TableFilter(order_by="jaccard_similarity", first_k=3)
 top_features = TableFilter(order_by="jaccard_similarity", first_k=10)
+top_cross_posted = TableFilter(order_by="hits", first_k=4)
 
 header = h("thead")(
     h("tr")(
@@ -627,6 +629,7 @@ header = h("thead")(
         h("th")("Rank 1"),
         h("th")("Rank 2"),
         h("th")("Rank 3"),
+        h("th")("Top Cross-Posted Groups"),
     ),
 )
 table_rows = []
@@ -649,6 +652,13 @@ for newsgroup in sorted(newsgroup_categories):
         feature_stats = top_features(similar_features[cluster_id])
         display_features = " ".join(f[1] for f in feature_stats) + " ..."
         row.append(h("td")(display_features))
+
+    cross_posted = top_cross_posted(
+        newsgroups_idx.facet_features(newsgroup_docs, all_newsgroups)
+    )
+
+    display_cross_posts = " ".join(f[1] for f in list(cross_posted)[1:]) + " ..."
+    row.append(h("td")(display_cross_posts))
 
     table_rows.append(h("tr")(row))
 
