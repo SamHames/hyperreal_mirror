@@ -626,10 +626,10 @@ header = h("thead")(
     ),
     h("tr")(
         h("th")("Newsgroup"),
+        h("th")("Top Cross-Posted Groups"),
         h("th")("Rank 1"),
         h("th")("Rank 2"),
         h("th")("Rank 3"),
-        h("th")("Top Cross-Posted Groups"),
     ),
 )
 table_rows = []
@@ -647,18 +647,18 @@ for newsgroup in sorted(newsgroup_categories):
     row = []
     row.append(h("th")(newsgroup[1]))
 
-    for rank, cluster_id in enumerate(newsgroup_similarity):
-
-        feature_stats = top_features(similar_features[cluster_id])
-        display_features = " ".join(f[1] for f in feature_stats) + " ..."
-        row.append(h("td")(display_features))
-
     cross_posted = top_cross_posted(
         newsgroups_idx.facet_features(newsgroup_docs, all_newsgroups)
     )
 
     display_cross_posts = " ".join(f[1] for f in list(cross_posted)[1:]) + " ..."
     row.append(h("td")(display_cross_posts))
+
+    for rank, cluster_id in enumerate(newsgroup_similarity):
+
+        feature_stats = top_features(similar_features[cluster_id])
+        display_features = " ".join(f[1] for f in feature_stats) + " ..."
+        row.append(h("td")(display_features))
 
     table_rows.append(h("tr")(row))
 
