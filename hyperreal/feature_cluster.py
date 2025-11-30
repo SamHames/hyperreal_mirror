@@ -637,8 +637,69 @@ class FeatureClustering(IndexPlugin):
 
         return split_clustering, cluster_order, cluster_clustering
 
+    def _subdivide_clustering(self, clustering, n_splits, iterations):
+
+        # Construct the mmap of index features for faster loading/saving
+        with tempfile.TemporaryDirectory() as tmpdir, mp.Manager() as manager:
+            working_file = os.path.join(tmpdir, "mmap.temp")
+
+            feature_order, offsets, surrogate_clustering = (
+                self._generate_mmap_from_clustering(clustering, working_file)
+            )
+
+            split_clusterings = []
+
+            for features in surrogate_clustering.values():
+
+                splits = list(features)
+                self.idx.random_state.shuffle(splits)
+
+                split = {c_id: set(splits[c_id::n_splits]) for c_id in range(n_splits)}
+                split_clusterings.append(split)
+
+            split_clusters = _refine_clustering(
+                working_file,
+                self.idx.pool,
+                self.idx.max_workers,
+                offsets,
+                split_clusterings,
+                iterations,
+                self.idx.random_state,
+                sampling_rate=None,
+            )
+
+            split_features = (
+                set(feature_order[i] for i in feature_ids)
+                for split_clustering in split_clusters
+                for feature_ids in split_clustering.values()
+            )
+
+            return dict(enumerate(split_features))
+
+    def _consensus_cluster(
+        self, clusterings, n_clusters, iterations, sampling_rate=None
+    ):
+        """
+        Create a consensus clustering by clustering the provided clusterings.
+
+        """
+
+        individual_clusters = (
+            set(features)
+            for clustering in clusterings
+            for features in clustering.values()
+        )
+
+        to_cluster = dict(enumerate(individual_clusters))
+
+        _, surrogate_clustering = self._cluster_clustering(
+            to_cluster, n_clusters, iterations, sampling_rate=sampling_rate
+        )
+
+        return surrogate_clustering, to_cluster
+
     def _cluster_clustering(
-        self, n_clusters, clustering, iterations, sampling_rate=None
+        self, clustering, n_clusters, iterations, sampling_rate=None
     ):
 
         # Construct the mmap of index features for faster loading/saving
@@ -659,18 +720,29 @@ class FeatureClustering(IndexPlugin):
                 for c_id in range(n_clusters)
             }
 
-            surrogate_clustering = _refine_clustering(
+            refined_surrogate = _refine_clustering(
                 working_file,
                 self.idx.pool,
                 self.idx.max_workers,
                 offsets,
-                surrogate_clustering,
+                [surrogate_clustering],
                 iterations,
                 self.idx.random_state,
                 sampling_rate,
-            )
+            )[0]
 
-        return cluster_order, surrogate_clustering
+        clustered = {}
+
+        for c_id, subclusters in refined_surrogate.items():
+
+            features = set()
+
+            for sub_id in subclusters:
+                features |= set(clustering[sub_id])
+
+            clustered[c_id] = features
+
+        return clustered, refined_surrogate
 
     def _refine_clustering(
         self,
@@ -692,11 +764,11 @@ class FeatureClustering(IndexPlugin):
                 self.idx.pool,
                 self.idx.max_workers,
                 offsets,
-                surrogate_clustering,
+                [surrogate_clustering],
                 iterations,
                 self.idx.random_state,
                 sampling_rate,
-            )
+            )[0]
 
         return {
             cluster_id: {feature_order[i] for i in surrogate_features}
@@ -736,34 +808,69 @@ class FeatureClustering(IndexPlugin):
         return refined_clustering
 
 
+class _ClusteringWorkingDetails:
+    """
+    Working information for a particular clustering.
+
+    This tracks information for a clustering so that a whole batch of clusterings of
+    separate or overlapping features can be conducted in parallel.
+
+    """
+
+    def __init__(self, clustering, sampling_rate=None):
+        # Backward mapping of features to clusters to make updates easier.
+        self.clustering = clustering
+        self.f_id_to_cluster = {
+            f_id: cluster_id
+            for cluster_id, f_ids in clustering.items()
+            for f_id in f_ids
+        }
+
+        self.n_features = len(self.f_id_to_cluster)
+        self.n_clusters = len(clustering)
+
+        # will be used to randomise the order of feature checks for moving between
+        # clusters.
+        self.feature_check_order = array.array("q", self.f_id_to_cluster)
+
+        # Set a default sampling rate if not specified
+        if sampling_rate is None:
+            sampling_rate = 1 / (self.n_clusters**0.5)
+        elif sampling_rate <= 0 or sampling_rate > 1:
+            raise ValueError(
+                f"{sampling_rate=} must be None, or 0 < sampling_rate <= 1"
+            )
+
+        # Convert the provided sampling_rate into the number of features to select.
+        self.random_feature_checks = math.ceil(sampling_rate * self.n_features)
+
+        self.objective_estimate = 0
+        self.best_clusters = []
+        self.best_scores = []
+
+
 def _refine_clustering(
     mmap_working_file,
     pool,
     max_workers,
     offsets,
-    clustering,
+    clusterings,
     iterations,
     random_state=None,
     sampling_rate=None,
 ):
     """
-    Refine the given clustering of bitsets given in an mmapped file.
+    Refine the given list of clusterings of bitsets given in an mmapped file.
 
     """
     random_state = random_state or random.Random()
 
-    # Backward mapping of features to clusters to make updates easier.
-    f_id_to_cluster = {
-        f_id: cluster_id for cluster_id, f_ids in clustering.items() for f_id in f_ids
-    }
+    cluster_details = []
 
     total_features = len(offsets[0])
-    n_features = len(f_id_to_cluster)
-    n_clusters = len(clustering)
 
-    # will be used to randomise the order of feature checks for moving between
-    # clusters.
-    feature_check_order = array.array("q", f_id_to_cluster)
+    for clustering in clusterings:
+        cluster_details.append(_ClusteringWorkingDetails(clustering))
 
     with mp.Manager() as manager:
 
@@ -784,73 +891,74 @@ def _refine_clustering(
                 )
             )
 
-        best_clusters = []
-
-        # Set a default sampling rate if not specified
-        if sampling_rate is None:
-            sampling_rate = 1 / (n_clusters**0.5)
-        elif sampling_rate <= 0 or sampling_rate > 1:
-            raise ValueError(
-                f"{sampling_rate=} must be None, or 0 < sampling_rate <= 1"
-            )
-
-        # Convert the provided sampling_rate into the number of features to select.
-        random_feature_checks = math.ceil(sampling_rate * n_features)
+        terminated = set()
 
         for iteration in range(iterations):
 
-            best_checked_f_ids = collections.defaultdict(set)
+            waiting_for = 0
 
-            # Always check against the best cluster from the last iteration -
-            # not all moves happen and if we found something better but didn't
-            # move we should check it again.
-            for f_id, cluster_id in enumerate(best_clusters):
-                best_checked_f_ids[cluster_id].add(f_id)
+            for clustering_i, c in enumerate(cluster_details):
 
-            # Create a permutation to sample features from by indexing.
-            # This is an optimisation as otherwise sampling features can be a bottleneck
-            # for small collections. Compared to the earlier approach to permutation
-            # sampling, this ensures we cover more features on every iteration.
-            # This permutation is also the order we check feature moves later.
-            random_state.shuffle(feature_check_order)
-            sample_start = 0
+                # Don't perform further iterations with a clustering that has
+                # terminated.
+                if clustering_i in terminated:
+                    continue
 
-            # Extend the array to simplify wraparound sampling logic - this way we can
-            # always safely just sample from sample_start: sample_start +
-            # random_feature_checks
-            sample_order = (
-                feature_check_order + feature_check_order[:random_feature_checks]
-            )
+                best_checked_f_ids = collections.defaultdict(set)
 
-            for cluster_id, f_ids in clustering.items():
+                # Always check against the best cluster from the last iteration -
+                # not all moves happen and if we found something better but didn't
+                # move we should check it again.
+                for f_id, cluster_id in enumerate(c.best_clusters):
+                    best_checked_f_ids[cluster_id].add(f_id)
 
-                sample_end = sample_start + random_feature_checks
+                # Create a permutation to sample features from by indexing.
+                # This is an optimisation as otherwise sampling features can be a bottleneck
+                # for small collections. Compared to the earlier approach to permutation
+                # sampling, this ensures we cover more features on every iteration.
+                # This permutation is also the order we check feature moves later.
+                random_state.shuffle(c.feature_check_order)
+                sample_start = 0
 
-                sample_check_feature_ids = set(
-                    feature_check_order[sample_start:sample_end]
+                # Extend the array to simplify wraparound sampling logic - this way we can
+                # always safely just sample from sample_start: sample_start +
+                # random_feature_checks
+                sample_order = (
+                    c.feature_check_order
+                    + c.feature_check_order[: c.random_feature_checks]
                 )
 
-                sample_start = sample_end % n_features
+                for cluster_id, f_ids in c.clustering.items():
 
-                check_feature_ids = (
-                    sample_check_feature_ids | best_checked_f_ids[cluster_id]
-                ) - f_ids
+                    sample_end = sample_start + c.random_feature_checks
 
-                # Dispatch work as soon as it's ready!
-                work_queue.put(
-                    (
-                        cluster_id,
-                        array.array("q", f_ids),
-                        array.array("q", check_feature_ids),
+                    sample_check_feature_ids = set(
+                        c.feature_check_order[sample_start:sample_end]
                     )
+
+                    sample_start = sample_end % c.n_features
+
+                    check_feature_ids = (
+                        sample_check_feature_ids | best_checked_f_ids[cluster_id]
+                    ) - f_ids
+
+                    # Dispatch work as soon as it's ready!
+                    work_queue.put(
+                        (
+                            (clustering_i, cluster_id),
+                            array.array("q", f_ids),
+                            array.array("q", check_feature_ids),
+                        )
+                    )
+                    waiting_for += 3
+
+                c.objective_estimate = 0
+                c.best_clusters = array.array("q", (-1 for _ in range(total_features)))
+                c.best_scores = array.array(
+                    "d", (-math.inf for _ in range(total_features))
                 )
 
             # Accumulate the results from the background worker
-            objective_estimate = 0
-            waiting_for = n_clusters * 3
-
-            best_clusters = array.array("q", (-1 for _ in range(total_features)))
-            best_scores = array.array("d", (-math.inf for _ in range(total_features)))
 
             while waiting_for:
                 result = results_queue.get()
@@ -860,23 +968,25 @@ def _refine_clustering(
                 if result == "exception":
                     break
 
-                cluster_id = result[0]
+                (clustering_i, cluster_id) = result[0]
+
+                c = cluster_details[clustering_i]
 
                 if len(result) == 2:
-                    objective_estimate += result[1]
+                    c.objective_estimate += result[1]
 
                 elif len(result) == 3:
                     for f_id, delta in zip(result[1], result[2]):
-                        if f_id not in f_id_to_cluster:
+                        if f_id not in c.f_id_to_cluster:
                             continue
                         # Break ties deterministically towards the highest
                         # cluster_id.
                         if (delta, cluster_id) > (
-                            best_scores[f_id],
-                            best_clusters[f_id],
+                            c.best_scores[f_id],
+                            c.best_clusters[f_id],
                         ):
-                            best_scores[f_id] = delta
-                            best_clusters[f_id] = cluster_id
+                            c.best_scores[f_id] = delta
+                            c.best_clusters[f_id] = cluster_id
 
                 waiting_for -= 1
 
@@ -884,18 +994,30 @@ def _refine_clustering(
             if result == "exception":
                 break
 
-            possible_moves, applied_moves = _apply_moves(
-                best_clusters,
-                feature_check_order,
-                clustering,
-                f_id_to_cluster,
-                random_state,
+            combined_objective = 0
+            total_possible_moves = 0
+            total_applied_moves = 0
+
+            for i, c in enumerate(cluster_details):
+
+                possible_moves, applied_moves = _apply_moves(
+                    c.best_clusters,
+                    c.feature_check_order,
+                    c.clustering,
+                    c.f_id_to_cluster,
+                    random_state,
+                )
+
+                if possible_moves == 0:
+                    terminated.add(i)
+
+                combined_objective += c.objective_estimate
+                total_possible_moves += possible_moves
+                total_applied_moves += applied_moves
+
+            print(
+                iteration, combined_objective, total_possible_moves, total_applied_moves
             )
-
-            print(iteration, objective_estimate, possible_moves, applied_moves)
-
-            if possible_moves == 0:
-                break
 
         # Shut down the workers
         for _ in range(len(workers)):
@@ -904,8 +1026,7 @@ def _refine_clustering(
         for future in cf.as_completed(workers):
             future.result()
 
-    # Convert the feature_ids back to features for the return
-    return clustering
+    return [c.clustering for c in cluster_details]
 
 
 def _mmap_bitmaps(feature_bitmaps, mmap_path):
