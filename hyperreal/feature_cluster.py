@@ -751,29 +751,57 @@ class FeatureClustering(IndexPlugin):
         sampling_rate=None,
     ):
 
-        # Construct the mmap of index features for faster loading/saving
-        with tempfile.TemporaryDirectory() as tmpdir, mp.Manager() as manager:
-            working_file = os.path.join(tmpdir, "mmap.temp")
+        return self._refine_clusterings(
+            [clustering], iterations, sampling_rate=sampling_rate
+        )[0]
 
-            feature_order, offsets, surrogate_clustering = (
-                self._generate_mmap_from_clustering(clustering, working_file)
+    def _refine_clusterings(
+        self,
+        clusterings,
+        iterations,
+        sampling_rate=None,
+    ):
+
+        # Construct the mmap of index features for faster loading/saving
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mmap_working_file = os.path.join(tmpdir, "mmap.temp")
+
+            feature_bitmaps = (
+                (f, self.idx[f][0])
+                for clustering in clusterings
+                for features in clustering.values()
+                for f in features
             )
 
-            surrogate_clustering = _refine_clustering(
-                working_file,
+            feature_order, offsets = _mmap_bitmaps(feature_bitmaps, mmap_working_file)
+            feature_map = {f: i for i, f in enumerate(feature_order)}
+
+            surrogate_clusterings = [
+                {
+                    c_id: {feature_map[f] for f in features}
+                    for c_id, features in clustering.items()
+                }
+                for clustering in clusterings
+            ]
+
+            surrogate_clusterings = _refine_clustering(
+                mmap_working_file,
                 self.idx.pool,
                 self.idx.max_workers,
                 offsets,
-                [surrogate_clustering],
+                surrogate_clusterings,
                 iterations,
                 self.idx.random_state,
                 sampling_rate,
-            )[0]
+            )
 
-        return {
-            cluster_id: {feature_order[i] for i in surrogate_features}
-            for cluster_id, surrogate_features in surrogate_clustering.items()
-        }
+        return [
+            {
+                cluster_id: {feature_order[i] for i in surrogate_features}
+                for cluster_id, surrogate_features in clustering.items()
+            }
+            for clustering in surrogate_clusterings
+        ]
 
     @atomic
     def refine_clustering(
@@ -1016,7 +1044,11 @@ def _refine_clustering(
                 total_applied_moves += applied_moves
 
             print(
-                iteration, combined_objective, total_possible_moves, total_applied_moves
+                iteration,
+                combined_objective,
+                total_possible_moves,
+                total_applied_moves,
+                len(terminated),
             )
 
         # Shut down the workers
