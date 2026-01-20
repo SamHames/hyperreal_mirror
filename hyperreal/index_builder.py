@@ -137,11 +137,11 @@ def _init_segment(db_path):
         CREATE table if not exists inverted_index_segment_weight(
             field text references field_summary,
             value not null,
-            log_tf integer not null,
+            weight integer not null,
             first_doc_id integer not null,
             doc_count,
             doc_ids roaring_bitmap,
-            primary key (field, value, log_tf, first_doc_id)
+            primary key (field, value, weight, first_doc_id)
         );
 
         CREATE table if not exists position_index_segment(
@@ -253,7 +253,7 @@ def _make_segment(
 
 @dc.dataclass
 class _DocsPositions:
-    docs: dict[int, BitMap] = dc.field(
+    score_docs: dict[int, BitMap] = dc.field(
         default_factory=lambda: collections.defaultdict(BitMap)
     )
     group_positions: dict[int, BitMap] = dc.field(
@@ -334,16 +334,13 @@ def _prepare_doc_batch(
             )
 
             # Actually index the values at the document level.
-            for value, count in doc_values.items():
+            for value in doc_values:
+                batch_field[value].score_docs[-1].add(doc_id)
 
-                # Truncated logarithmic weights.
-                if count <= 2:
-                    steps = count
-                else:
-                    steps = math.floor(math.log2(count))
-
-                for step in range(1, steps + 1):
-                    batch_field[value].docs[step].add(doc_id)
+            # If this is a sequential field, also index the term frequencies
+            if position_count:
+                for value, count in doc_values.items():
+                    batch_field[value].score_docs[count].add(doc_id)
 
             # Record the presence of this field in the document, regardless of
             # whatever funky thing is happening with indexing.
@@ -471,8 +468,8 @@ def _stage_doc_batch(
                     field,
                     index_value,
                     first_doc_id,
-                    len(field_batch[value].docs[1]),
-                    field_batch[value].docs[1],
+                    len(field_batch[value].score_docs[-1]),
+                    field_batch[value].score_docs[-1],
                     sum(
                         len(group)
                         for group in field_batch[value].group_positions.values()
@@ -485,10 +482,10 @@ def _stage_doc_batch(
         db.executemany(
             "INSERT into inverted_index_segment_weight values(?, ?, ?, ?, ?, ?)",
             (
-                (field, index_value, log_tf, first_doc_id, len(docs), docs)
+                (field, index_value, weight, first_doc_id, len(docs), docs)
                 for index_value, value in value_order
-                for log_tf, docs in field_batch[value].docs.items()
-                if log_tf > 1
+                for weight, docs in field_batch[value].score_docs.items()
+                if weight > 0
             ),
         )
 
@@ -579,12 +576,12 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                     select
                         field,
                         value,
-                        log_tf,
+                        weight,
                         ?,
                         sum(doc_count),
                         roaring_union(doc_ids)
                     from inverted_index_segment_weight
-                    group by field, value, log_tf
+                    group by field, value, weight
                     """,
                 [first_doc_id],
             )
@@ -817,14 +814,14 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                             select
                                 field, 
                                 value,
-                                log_tf,
+                                weight,
                                 sum(doc_count),
                                 roaring_union(doc_ids)
                             from inverted_index_segment_weight
                             inner join field_shift using(field, first_doc_id)
                             where field = ?
-                            group by value, log_tf
-                            order by value, log_tf
+                            group by value, weight
+                            order by value, weight
                         """,
                         [field],
                     )

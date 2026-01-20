@@ -89,10 +89,10 @@ core_migration = index_plugin.Migration(
         CREATE table inverted_index_weight(
             field text references field_summary,
             value not null,
-            log_tf integer not null,
+            weight integer not null,
             doc_count,
             doc_ids roaring_bitmap,
-            primary key (field, value, log_tf),
+            primary key (field, value, weight),
             foreign key (field, value) references inverted_index
         )
         """,
@@ -850,32 +850,6 @@ class HyperrealIndex:
                 "A feature can be at most three elements long "
                 f"(field, range_start, range_end) - got {feature}"
             )
-
-    def _get_log_tf_feature_weight(self, feature):
-        """
-        Get the sum of the log term frequency weights across all documents for feature.
-
-        """
-
-        field, value = self.feature_to_index(feature)
-
-        weight = list(
-            self.db.execute(
-                """
-            SELECT 
-                coalesce(sum(doc_count), 0) + (
-                    select doc_count 
-                    from inverted_index ii 
-                    where (field, value) = (?1, ?2)
-                ) as log_tf_sum
-            from inverted_index_weight
-            where (field, value) = (?1, ?2)
-            """,
-                (field, value),
-            )
-        )
-
-        return weight[0][0]
 
     @db_utilities.atomic
     def match_any(self, features):
