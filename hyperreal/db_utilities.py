@@ -8,6 +8,7 @@ working with SQLite and roaring bitmaps easier.
 """
 
 import sqlite3
+from functools import wraps
 
 import pyroaring
 
@@ -41,6 +42,7 @@ def connect_sqlite(db_path, row_factory=None):
     )
 
     conn.create_aggregate("roaring_union", 1, RoaringUnion)
+    conn.create_aggregate("roaring_shift_union", 2, RoaringShiftUnion)
 
     if row_factory:
         conn.row_factory = row_factory
@@ -56,7 +58,8 @@ def save_bitmap(bm):
     the saved object is as compact as possible.
 
     """
-    bm.shrink_to_fit()
+    if isinstance(bm, pyroaring.AbstractBitMap):
+        bm.shrink_to_fit()
     bm.run_optimize()
     return bm.serialize()
 
@@ -64,6 +67,11 @@ def save_bitmap(bm):
 def load_bitmap(bm_bytes):
     """Load a bitmap object from the database as a Python object."""
     return pyroaring.BitMap.deserialize(bm_bytes)
+
+
+def load_bitmap64(bm_bytes):
+    """Load a bitmap object from the database as a Python object."""
+    return pyroaring.BitMap64.deserialize(bm_bytes)
 
 
 sqlite3.register_adapter(pyroaring.BitMap, save_bitmap)
@@ -87,3 +95,86 @@ class RoaringUnion:
 
     def finalize(self):
         return save_bitmap(self.bitmap)
+
+
+class RoaringShiftUnion:
+    """
+    Shift bitset by an offset, then accumulate through union.
+
+    """
+
+    # pylint: disable=missing-function-docstring
+
+    def __init__(self):
+        self.bitmap = pyroaring.BitMap()
+
+    def step(self, bitmap_bytes, shift):
+        bitmap = pyroaring.BitMap.deserialize(bitmap_bytes)
+        self.bitmap |= bitmap.shift(shift)
+
+    def finalize(self):
+        return save_bitmap(self.bitmap)
+
+
+def atomic(func):
+    """
+    A decorator that ensures an atomic sqlite transaction for a group of operations.
+
+    This assumes that self has a .db and a .idx attribute, as initialised using a normal
+    IndexPlugin class.
+
+    This decorator will also call the post_transaction method on self when succesfully
+    completing a full set of nested transactions.
+
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        self = args[0]
+
+        # This could be used on the core, or a plugin.
+        if hasattr(self, "idx"):
+            idx = self.idx
+        else:
+            idx = self
+
+        try:
+
+            # Only start a transaction on the first level
+            # Note that we're using savepoints here to work within the context of an
+            # explicit index transaction defined by the with idx: construct.
+            if not idx._transaction_level:
+                idx.db.execute(f"savepoint start")
+
+            idx._transaction_level += 1
+            results = func(*args, **kwargs)
+
+            return results
+
+        except Exception as e:
+            idx._transaction_error = True
+            raise
+
+        finally:
+
+            # Work out how to end the transaction once we've unrolled everything.
+            # Note that we don't decrement the transaction level until after we've
+            # done the finalisation, so any calls to post_transaction know we're in
+            # a transaction.
+            if idx._transaction_level == 1:
+
+                if idx._transaction_error:
+                    idx.db.execute("rollback to start")
+                else:
+                    for plugin in idx.plugins.values():
+                        plugin.post_transaction()
+
+                    idx.db.execute(f"release start")
+
+                idx._transaction_level = 0
+                idx._transaction_error = False
+
+            else:
+                idx._transaction_level -= 1
+
+    return wrapper

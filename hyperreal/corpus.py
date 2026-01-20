@@ -1,863 +1,437 @@
 """
-A Hyperreal corpus describes how to access and display documents and features.
+A HyperrealCorpus models accessing and transforming a collection of documents.
 
-The corpus is the main site of customisation for the particulars of your
-dataset/collection of documents. The interface is designed so that you never
-need to hold large collections of data in memory at once by only handling
-documents one at a time through generators.
+The corpus is the core point to customise hyperreal to work with the specifics of your
+data.
+
+This corpus interface is designed to enable:
+
+- working with large collections of documents without loading everything into memory
+- leaving your documents where they are
+- fine-grained control over how your documents are transformed for display and indexing.
+
+Corpus requirements
+
+- picklable (link to an example place where this is done with an sqlite database)
+- streamable, don't hold documents in memory, encourage only holding the one document
+- efficiently retrieve arbitrary sets of documents
+
+TODO: Indexable docs format -> link to the index_builder documentation.
+
+Links to a corpus design guide in the docs?
+Links to the examples gallery.
 
 """
 
 import abc
-import logging
-import os
+import collections
+import dataclasses as dc
+import mmap
 import re
-import tempfile
-from collections import defaultdict
-from collections.abc import Hashable, Iterable, Mapping
-from html import escape
-from typing import Any, Protocol, Union
-from xml.etree import ElementTree
+from typing import Any, Hashable, Iterable, Optional, TypeVar
 
-from dateutil.parser import isoparse
-from jinja2 import Template
-from lxml.html import fragment_fromstring
-from markupsafe import Markup
+from tinyhtml import frag, h, raw
 
-from hyperreal import utilities, value_handlers
-from hyperreal.db_utilities import connect_sqlite, dict_factory
-
-logger = logging.getLogger(__name__)
-
-Feature = tuple[str, Hashable]
-"""
-A feature in a document is a field and a paired value.
-
-Values must be Hashable, can't be None, and need to be storable in a single
-SQLite column.
-
-Examples of features could be:
-
-- The datetime a document was created:
-    `('created_at', datetime(2024, 1, 1))`
-- A single word extracted from a text field:
-    `('text', 'cat')`
-- A numerical quantity, like the number of likes on a social media post:
-    `('likes', 100)
-
-"""
-
-FieldValues = Union[list[Hashable], set[Hashable], Hashable]
-DocFeatures = Mapping[str, FieldValues]
-"""
-An DocFeatures is the structured format that the Hyperreal index uses.
-
-This indexable format of the document is a mapping of fields to values with
-the following requirements:
-
-- Field names must always be strings.
-- Field values must be hashable, and not None.
-- The contents of a field can be either a single value or a group of values.
-- A single value by itself is just treated as a singular value in a document.
-- A list of values indicates that this field has multiple values in a document
-  and the values are order dependent - for example the words in a text field.
-- A set of values indicates that this field has multiple values and order is
-  *not* important - for example tags applied to a photograph.
-
-An example DocFeatures could be:
-
-```
-{
-    # A singular value field.
-    'creation_date': date(2024, 03, 01)',
-
-    # The tokens extracted from the text.
-    'text': ['the', 'cat', 'sat', 'on', 'the', 'mat'],
-
-    # The authors of the document.
-    'authors': {'Jane', 'Arjun', 'Sally'}
-}
-```
-
-"""
-
-# pylint: disable=too-few-public-methods
+from . import value_handlers, doc_feature_tools as dft
+from .field_types import RangeEncodableValue, ValueSequence
 
 
-class Corpus(Protocol):
-    """
-    A corpus describes how to identify and retrieve and display documents.
+DocKey = TypeVar("DocKey")
+Doc = TypeVar("Doc")
+Value = Hashable
+IndexableDoc = dict[str, list[Value] | set[Value] | Value]
 
-    Note that corpus objects must also be picklable.
+default_handlers = set(
+    (
+        value_handlers.StringHandler,
+        value_handlers.IntegerHandler,
+        value_handlers.FloatHandler,
+        value_handlers.DateHandler,
+        value_handlers.DatetimeHandler,
+    )
+)
 
-    """
 
-    field_values: Mapping[str, value_handlers.ValueHandler]
-    """
-    Maps fields to their ValueHandler that describes how to transform them.
+class SchemaValidationError(Exception):
+    """Used for problems with creating a schema of value_handlers."""
 
-    There must be an entry in field_values for every field output by the
-    `doc_to_features` method.
 
-    """
+class HyperrealCorpus:
 
-    CORPUS_TYPE: str
-    """
-    A name for this type of corpus.
+    handler_registry: set[value_handlers.ValueHandler] = default_handlers
+    extra_css = ""
 
-    This will be used to make sure that the index and the corpus are consistent.
+    def _create_type_maps(self) -> None:
+        """Create a more usable mapping between types/value names and their handlers."""
 
-    """
+        type_schema = {}
+        named_handlers = {}
+
+        for handler_class in self.handler_registry:
+
+            handler = handler_class(self)
+            name = handler.value_name
+
+            if name in named_handlers:
+                raise SchemaValidationError(
+                    f"Handler {handler} has the same `value_name` {name} as "
+                    f"handler {named_handlers[name]}. Names must be unique for all "
+                    "handlers defined on a corpus."
+                )
+            else:
+                # Initialise and inject the current corpus into the handler.
+                named_handlers[name] = handler
+
+            for supported_type in handler.supported_types:
+
+                if supported_type in type_schema:
+                    raise SchemaValidationError(
+                        f"Type {supported_type} can be handled by both {handler} "
+                        f"and {type_schema[supported_type]}. A valid mapping requires "
+                        "that there is only one handler for a given type."
+                    )
+
+                else:
+                    type_schema[supported_type] = handler
+
+        self._type_map = type_schema
+        self._name_map = named_handlers
+
+    @property
+    def type_handlers(self) -> dict[Any, value_handlers.ValueHandler]:
+        """
+        Map of types of values emitted by `doc_to_features` to a handler.
+
+        """
+        if not hasattr(self, "_type_map"):
+            self._create_type_maps()
+
+        return self._type_map
+
+    @property
+    def name_handlers(self) -> dict[Any, value_handlers.ValueHandler]:
+        """
+        Map of value_names to handlers.
+
+        """
+        if not hasattr(self, "_name_map"):
+            self._create_type_maps()
+
+        return self._name_map
 
     @abc.abstractmethod
-    def docs(self, keys: Iterable) -> Iterable[tuple[Hashable, Any]]:
+    def all_doc_keys(self) -> Iterable[DocKey]:
         """
-        Retrieve documents identified by the given keys.
-
-        The return must be an iterator (preferably a generator) of document
-        keys and objects representing the document. There are no constraints
-        on what the document *is* in Python.
+        Iterates through all of the doc_keys, enumerating all of the docs that exist.
 
         """
 
+        pass
+
+    def __len__(self) -> int:
+        """The number of documents in the collection."""
+        return sum(1 for _ in self.all_doc_keys())
+
     @abc.abstractmethod
-    def keys(self) -> Iterable:
+    def docs(self, doc_keys: Iterable[DocKey]) -> Iterable[tuple[DocKey, Doc]]:
         """
-        Iterate through all keys in the corpus.
+        Return an iterator of (doc_key, doc) pairs.
 
-        This enables enumeration of the entire collection of documents and
-        their identifiers.
+        Note that nothing is assumed about:
 
-        Keys may be any single value other than None that can be inserted into
-        an SQLite table.
+        1. What a document is, it can be any Python object.
+        2. What to do if a doc_key is provided for a document that doesn't exist.
+
+        """
+        pass
+
+    @abc.abstractmethod
+    def doc_to_features(self, doc) -> IndexableDoc:
+        """
+        Transform a document into a set of features for indexing.
+
+        This interface is likely to change in the future.
+
+        """
+        pass
+
+    def doc_to_display_features(self, doc) -> IndexableDoc:
+        """
+        Transform a document to a version of features that are suitable for display.
+
+        Only fields that need alternative handling for appropriate display need to be
+        included in the output - but there does need to be a display value for every
+        value on that field returned by a call to the doc_to_features method.
+
+        This allows customised control of rendering of values - for example constructing
+        concordance lines that include white space and punctuation, indexing types with
+        parts-of-speech tag but not displaying them in concordances and so on.
+
+        This default implementation only adjusts fields of string values in positional
+        order - the adjustment is to add a trailing space. For non-whitespace delimited
+        languages or more sophisticated tokenisation schemes you should override this.
+
+        The display form of values must still work with the ValueHandler for that type.
 
         """
 
-    @abc.abstractmethod
-    def doc_to_features(self, doc) -> DocFeatures:
-        """Extract the features from the given document."""
+        doc_features = self.doc_to_features(doc)
 
-    @abc.abstractmethod
-    def doc_to_html(self, doc):
-        """Return HTML representing the document."""
+        display_features = {}
 
-    def doc_to_str(self, doc) -> str:
-        """Return a string representation of the document."""
+        for field, values in doc_features.items():
+
+            if isinstance(values, list):
+
+                new_values = []
+
+                for v in values:
+                    if isinstance(v, str):
+                        # index form = original, display form has a whitespace appended.
+                        new_values.append(v + " ")
+                    else:
+                        new_values.append(v)
+
+            display_features[field] = new_values
+
+        return display_features
+
+    def doc_to_html(self, doc, highlight_features=None) -> frag:
+        """
+        Transform a document into its HTML representation.
+
+        If this is not overridden, the str representation of a document will be used
+        (and escaped) as HTML.
+
+        Takes an optional highlight_features argument - this can be used if you want to
+        highlight search results within the context of the document.
+
+        """
         return str(doc)
+
+    def features_to_html_concordance(
+        self, doc_features, display_features, highlight_features
+    ) -> frag:
+        """
+        Convert doc features to concordance lines.
+
+        """
+        concordances = dft.to_matching_neighbourhood(
+            doc_features, highlight_features, display_features=display_features
+        )
+
+        output = []
+
+        for field, values in concordances.items():
+
+            output.append(h("dt")(h("em")(field)))
+
+            for match_value, match_lines in values.items():
+                display_lines = []
+
+                value_handler = self.type_handlers[type(match_value)]
+
+                for match_position, pre, display_match, post in match_lines:
+
+                    # This will be wrong for rtl languages - we want this ltr expected
+                    # text to clip/ellipsis on what is usually the wrong side for
+                    pre_html = [
+                        value_handler.to_html(v.replace("\n", " ")) for v in pre
+                    ]
+                    match_html = value_handler.to_html(display_match.replace("\n", " "))
+                    post_html = [
+                        value_handler.to_html(v.replace("\n", " ")) for v in post
+                    ]
+
+                    display_lines.append(
+                        h("li", klass="concordance-line")(
+                            h("span", klass="concordance-pre", dir="rtl")(
+                                h("span", dir="auto")(pre_html)
+                            ),
+                            h("mark", klass="concordance-match")(match_html),
+                            h("span", klass="concordance-post")(post_html),
+                        ),
+                    )
+
+                output.append(h("ol", klass="concordance")(display_lines))
+
+        return h("dl", klass="matches stack", style="--space: var(--s-3);")(output)
+
+    def html_search_results(self, doc_keys, highlight_features=None) -> frag:
+        """
+        Create HTML fragment for search results for a specified set of documents.
+
+        This method can be used to control everything about how documents retrieved by
+        a search can be displayed, including the document itself, the elements of the
+        document that matched, and concordances for matches in positional fields.
+
+        This default implementation uses the doc_to_html converter on single documents
+        and extracts concordances against matching features for each.
+
+        You can override this method to completely customise search results. The
+        interface is designed so that you can take into account as much or as little
+        information as you want about the set of keys to be rendered.
+
+        """
+
+        results = []
+
+        for doc_key, doc in self.docs(doc_keys):
+
+            # Render the doc
+            doc_html = self.doc_to_html(doc, highlight_features=highlight_features)
+
+            # Extract features for concordances
+            doc_features = self.doc_to_features(doc)
+            display_features = self.doc_to_display_features(doc)
+
+            highlight_features = highlight_features or []
+
+            doc_concordances = None
+            if highlight_features:
+                doc_concordances = self.features_to_html_concordance(
+                    doc_features, display_features, highlight_features
+                )
+
+            results.append(
+                h("li", klass="search-hit")(
+                    h("div", klass="stack")(
+                        h("h3")(doc_key), doc_html, doc_concordances
+                    )
+                )
+            )
+
+        return h("ul", klass="stack search-results")(results)
 
     def close(self) -> None:
         """
-        Close this corpus, cleaning up all open objects.
-
-        There may be no cleanup necessary, in which case this is a no-op.
+        Close the corpus object, closing any and all associated resources.
 
         """
+        pass
 
 
-class EmptyCorpus(Corpus):
+boundary_regex = re.compile(r"\b")
+
+
+def boundary_tokeniser(text: str) -> list[str]:
     """
-    A specialised corpus object that will not access or retrieve documents.
+    A simplistic regular expression based tokeniser.
 
-    This is useful only in places where you don't need to know anything about the
-    documents or the extracted values, such as for running feature clustering
-    algorithms over an index, which does not require access to the underlying
-    documents.
+    This tokeniser:
 
-    """
-
-    field_values = defaultdict(value_handlers.NoopHandler)
-
-    def docs(self, keys):
-        return []
-
-    def keys(self):
-        return []
-
-    def close(self):
-        return
-
-    def doc_to_features(self, doc):
-        return {}
-
-    def doc_to_html(self, doc):
-        return ""
-
-    def doc_to_str(self, doc):
-        return ""
-
-
-class SqliteBackedCorpus(Corpus):
-    """A helper class for creating corpuses backed by SQLite databases."""
-
-    # pylint: disable=abstract-method
-
-    def __init__(self, db_path):
-        """
-        At a minimum you will need to pass in a path to a database.
-
-        If you are implementing something based on this, you will need to
-        either ensure that the db_path attribute is set in your `__init__`,
-        or you can call `super().__init__(db_path)` inside your custom class
-        definition.
-
-        This handles some basic things like saving the database path and ensuring
-        that the corpus object is picklable for multiprocessing.
-
-        You will still need to define the docs and keys methods.
-
-        """
-
-        self.db_path = db_path
-        self._db = None
-
-    @property
-    def db(self):
-        """
-        The connection to the SQLite database.
-
-        This is initialised the first time it is needed.
-        """
-
-        if self._db is None:
-            self._db = connect_sqlite(self.db_path, row_factory=dict_factory)
-
-        return self._db
-
-    def __getstate__(self):
-        return self.db_path
-
-    def __setstate__(self, db_path):
-        self.__init__(db_path)
-
-    def close(self):
-        if self._db is not None:
-            self._db.close()
-
-
-class PlainTextSqliteCorpus(SqliteBackedCorpus):
-    """
-    A corpus for handling lines in a plaintext file as individual documents.
-
-    This corpus identifies lines in the file according the processing order.
+    - lowercases the text
+    - splits on re module "word" boundaries (matches the regular expression "\b")
+    - filters any token that is only whitespace (using str.strip)
 
     """
+    return [
+        stripped
+        for token in boundary_regex.split(text.lower())
+        if (stripped := token.strip())
+    ]
 
-    CORPUS_TYPE = "PlainTextSqliteCorpus"
 
-    field_values = {"text": value_handlers.StringHandler()}
+def display_boundary_tokeniser(text: str) -> list[str]:
+    """The same tokens as boundary_tokeniser, but preserving case and whitespace."""
 
-    def __init__(self, db_path, tokeniser=utilities.tokens):
-        super().__init__(db_path)
+
+# TODO: Add a corpus for the standard folder full of text files. Possibly using the
+# folder as some kind of metadata?
+class TextfileParagraphsCorpus(HyperrealCorpus):
+
+    def __init__(
+        self,
+        text_file_path,
+        tokeniser=boundary_tokeniser,
+        encoding="utf8",
+        paragraph_positions=None,
+    ):
+        """
+        A corpus that treats the paragraphs of a text file as a sequence of documents.
+
+        Paragraph boundaries are identified as lines with only whitespace characters.
+
+        This corpus memory maps and reads the file once from beginning to end to
+        identify paragraph boundaries for efficient enumeration and random access
+        later.
+
+        """
+
+        self.text_file_path = text_file_path
+        self.encoding = encoding
         self.tokeniser = tokeniser
 
+        self.f = open(self.text_file_path, "r+b")
+        self.mm = mmap.mmap(self.f.fileno(), 0, access=mmap.ACCESS_READ)
+
+        self._paragraph_positions = None
+
     def __getstate__(self):
-        return self.db_path, self.tokeniser
-
-    def __setstate__(self, state):
-        self.__init__(state[0], tokeniser=state[1])
-
-    def replace_docs(self, texts):
-        """Replace the existing documents with texts."""
-        self.db.execute("pragma journal_mode=WAL")
-        self.db.execute("savepoint add_texts")
-
-        try:
-            self.db.execute("drop table if exists doc")
-            self.db.execute(
-                """
-                create table doc(
-                    doc_id integer primary key,
-                    text not null
-                )
-                """
-            )
-
-            self.db.execute("delete from doc")
-            self.db.executemany(
-                "insert or ignore into doc(text) values(?)", ([t] for t in texts)
-            )
-
-        except Exception:
-            self.db.execute("rollback to add_texts")
-            raise
-
-        finally:
-            self.db.execute("release add_texts")
-
-    def keys(self):
-        return (r["doc_id"] for r in self.db.execute("select doc_id from doc"))
-
-    def docs(self, keys):
-        self.db.execute("savepoint docs")
-        try:
-            for key in keys:
-                doc = list(
-                    self.db.execute(
-                        "select doc_id, text from doc where doc_id = ?", [key]
-                    )
-                )[0]
-                yield key, doc
-
-        finally:
-            self.db.execute("release docs")
-
-    def doc_to_features(self, doc):
-        return {"text": self.tokeniser(doc["text"])}
-
-    def doc_to_html(self, doc):
-        return Markup(f'<p>{escape(doc["text"])}</p>)')
-
-    def doc_to_str(self, doc):
-        return doc["text"]
-
-
-STACKEXCHANGE_HTML = """
-<details>
-    <summary>
-        <em>{{ base_fields["QuestionTitle"] | e }}</em> -
-        {{ base_fields["PostType"] }} from {{ base_fields["site_url"] }}
-    </summary>
-
-    <p>
-        <small>
-            <a href="{{ base_fields["LiveLink"] }}">Live Link</a>
-            Copyright {{ base_fields["ContentLicense"]}} by
-            {% if base_fields["OwnerUserId"] %}
-            <a href="{{ '{}/users/{}'.format(base_fields["site_url"], base_fields["OwnerUserId"]) }}">
-                {{ base_fields["DisplayName"] }}
-            </a>
-            {% else %}
-            <Deleted User>
-            {% endif %}
-        </small>
-    </p>
-
-    {{ base_fields["Body"] }}
-
-    <details>
-        <summary>Tags:</summary>
-        <ul>
-            {% for tag in tags %}
-            <li>{{ tag }}
-            {% endfor %}
-        </ul>
-    </details>
-
-    <details>
-        <summary>Comments:</summary>
-        <ul>
-            {% for comment in user_comments %}
-                <li>{{ comment["Text"] | e}}
-                    <small>
-                        Copyright {{ comment["ContentLicense"]}} by
-                        {% if comment["UserId"] %}
-                        <a href="{{ '{}/users/{}'.format(comment["site_url"], comment["UserId"]) }}">
-                            {{ comment["DisplayName"] }}
-                        </a>
-                        {% else %}
-                        <Deleted User>
-                        {% endif %}
-                    </small>
-                </li>
-            {% endfor %}
-        </ul>
-    </details>
-</details>
-"""
-
-
-class StackExchangeCorpus(SqliteBackedCorpus):
-    """
-    A corpus for data dumped from StackExchange.
-
-    All data from Stackexchange sites is available in a standard format at:
-
-    https://archive.org/download/stackexchange/
-
-    """
-
-    CORPUS_TYPE = "StackExchangeCorpus"
-
-    field_values = {
-        "UserPosting": value_handlers.StringHandler(),
-        "Post": value_handlers.StringHandler(),
-        "CodeBlock": value_handlers.StringHandler(),
-        "Tag": value_handlers.StringHandler(),
-        "UserCommenting": value_handlers.StringHandler(),
-        "Comment": value_handlers.StringHandler(),
-        "Site": value_handlers.StringHandler(),
-        "PostType": value_handlers.StringHandler(),
-        "CreationDate": value_handlers.DateHandler(),
-        "CreationMonth": value_handlers.DateHandler(),
-        "CreationYear": value_handlers.DateHandler(),
-    }
-
-    def replace_sites_data(self, *archive_files):
-        """
-        Add the data from the given stackexchange archive files to this corpus.
-
-        The input files are the .7z files directly downloaded from
-        https://archive.org/download/stackexchange/, no additional processing
-        is needed.
-
-        To handle StackOverflow, you will need to pass the following
-        files:
-
-        - stackoverflow.com-Posts.7z
-        - stackoverflow.com-Comments.7z
-        - stackoverflow.com-Users.7z
-
-        Note that you will also need ~200GiB of free disk space to handle
-        stackoverflow itself - all other sites will be significantly
-        smaller.
-
-        If the site has already been added, all existing posts will be deleted
-        and replaced with the content of the provided files.
-
-        """
-
-        self.db.execute("pragma journal_mode=WAL")
-        self.db.executescript(
-            """
-            create table if not exists Site(
-                site_id integer primary key,
-                site_url unique
-            );
-
-            create table if not exists User(
-                AboutMe text,
-                CreationDate datetime,
-                Location text,
-                ProfileImageUrl text,
-                WebsiteUrl text,
-                AccountId integer,
-                Reputation integer,
-                Id integer,
-                Views integer,
-                UpVotes integer,
-                DownVotes integer,
-                DisplayName text,
-                LastAccessDate datetime,
-                site_id integer references Site,
-                primary key (site_id, Id)
-            );
-
-            create table if not exists Post(
-                -- doc_id is a surrogate key consisting of "site_id/Id"
-                -- this is necessary so that we can track document keys
-                -- consistently on rebuilding the index after updating site
-                -- data
-                doc_id primary key,
-                site_id integer references Site,
-                Id integer,
-                OwnerUserId integer,
-                AcceptedAnswerId integer references Post,
-                ContentLicense text,
-                ParentId integer references Post,
-                Title text default '',
-                FavoriteCount integer,
-                Score integer,
-                CreationDate datetime,
-                ViewCount integer,
-                Body text,
-                LastActivityDate datetime,
-                CommentCount integer,
-                PostType text,
-                unique(site_id, Id),
-                foreign key (site_id, OwnerUserId) references User(site_id, Id)
-            );
-
-            create table if not exists comment(
-                CreationDate datetime,
-                ContentLicense text,
-                Score integer,
-                Text text,
-                UserId integer,
-                PostId integer,
-                Id integer,
-                site_id integer references Site,
-                primary key (site_id, Id),
-                foreign key (site_id, UserId) references User(site_id, Id),
-                foreign key (site_id, PostId) references Post(site_id, Id)
-            );
-
-            create index if not exists post_comment on comment(site_id, PostId);
-            create index if not exists site_post on Post(site_id, Id);
-            create index if not exists site_user on User(site_id, Id);
-
-            create table if not exists PostTag(
-                site_id integer references Site,
-                PostId integer,
-                Tag text,
-                primary key (site_id, PostId, Tag),
-                foreign key (site_id, PostId) references Post
-            );
-
-            """
+        return (
+            self.text_file_path,
+            self.tokeniser,
+            self.encoding,
+            self._paragraph_positions,
         )
 
-        try:
-            self.db.execute("begin")
+    def __setstate__(self, args):
+        self.__init__(*args)
 
-            to_process = []
+    def all_doc_keys(self):
+        return range(len(self.paragraph_positions) - 1)
 
-            # stackoverflow and only stackoverflow is split into multiple
-            # files, so we need to handle it specially.
-            stackoverflow_filenames = {
-                "stackoverflow.com-Posts.7z": "Posts",
-                "stackoverflow.com-Comments.7z": "Comments",
-                "stackoverflow.com-Users.7z": "Users",
+    def docs(self, doc_keys):
+        for key in doc_keys:
+
+            start = self.paragraph_positions[key]
+            end = self.paragraph_positions[key + 1]
+
+            yield key, {
+                "para_no": key,
+                "text": self.mm[start:end].decode(self.encoding),
             }
 
-            seen_stackoverflow = {}
-
-            for file in set(archive_files):
-                file_locations = {
-                    "Posts": file,
-                    "Comments": file,
-                    "Users": file,
-                }
-
-                filename = os.path.basename(file)
-                # Special case stackoverflow by checking all the files are present at
-                # the end. Don't process this particular file if it is stackoverflow
-                # data.
-                if filename in stackoverflow_filenames:
-                    seen_stackoverflow[stackoverflow_filenames[filename]] = file
-                    continue
-
-                url_candidate, extension = os.path.splitext(filename)
-                if extension != ".7z":
-                    raise ValueError(
-                        f"{file} does not seem like a valid stackexchange archive file"
-                    )
-
-                to_process.append(("https://" + url_candidate, file_locations))
-
-            if len(seen_stackoverflow) == 3:
-                to_process.append(("https://stackoverflow.com", seen_stackoverflow))
-
-            elif len(seen_stackoverflow) > 0:
-                missing_files = [
-                    file
-                    for file in stackoverflow_filenames
-                    if file not in seen_stackoverflow
-                ]
-                raise ValueError(
-                    "Missing stackoverflow files - please add "
-                    f"{missing_files} to process the full stackoverflow dataset."
-                )
-
-            for site_url, file_locations in to_process:
-                logger.info("Processing data for %s", site_url)
-                self._add_single_site(site_url, file_locations)
-
-            self.db.execute("commit")
-
-        except Exception:
-            self.db.execute("rollback")
-            raise
-
-    def _add_single_site(self, site_url, file_locations):
-
-        # pylint: disable=import-outside-toplevel
-        try:
-            from py7zr import SevenZipFile
-        except ImportError as exc:
-            raise ImportError(
-                "The py7zr package needs to be installed for this functionality."
-            ) from exc
-
-        with tempfile.TemporaryDirectory() as temp_directory:
-            # Process Posts, which includes both questions and answers.
-            tag_splitter = re.compile(r"<|>|<>|\|")
-
-            self.db.execute(
-                "insert or ignore into Site(site_url) values(?)", [site_url]
-            )
-            site_id = list(
-                self.db.execute(
-                    "select site_id from Site where site_url = ?", [site_url]
-                )
-            )[0]["site_id"]
-
-            self.db.execute("delete from Post where site_id = ?", [site_id])
-            self.db.execute("delete from Comment where site_id = ?", [site_id])
-            self.db.execute("delete from User where site_id = ?", [site_id])
-
-            # Extract the posts file
-            with SevenZipFile(file_locations["Posts"], "r") as archive_file:
-                archive_file.extract(path=temp_directory, targets=["Posts.xml"])
-                posts_file = os.path.join(temp_directory, "Posts.xml")
-
-            tree = ElementTree.iterparse(posts_file, events=("end",))
-            post_types = {"1": "Question", "2": "Answer"}
-
-            for _, elem in tree:
-                # We only consider questions and answers - SX uses other post types
-                # to describe wiki's, tags, moderator nominations and more.
-                if elem.attrib.get("PostTypeId") not in ("1", "2"):
-                    elem.clear()
-                    continue
-
-                doc = defaultdict(lambda: None)
-                doc.update(elem.attrib)
-                doc["PostType"] = post_types[elem.attrib["PostTypeId"]]
-                doc["site_id"] = site_id
-                doc["doc_id"] = f"{site_id}/{doc['Id']}"
-
-                self.db.execute(
-                    """
-                    replace into post values (
-                        :doc_id,
-                        :site_id,
-                        :Id,
-                        :OwnerUserId,
-                        :AcceptedAnswerId,
-                        :ContentLicense,
-                        :ParentId,
-                        :Title,
-                        :FavoriteCount,
-                        :Score,
-                        :CreationDate,
-                        :ViewCount,
-                        :Body,
-                        :LastActivityDate,
-                        :CommentCount,
-                        :PostType
-                    )
-                    """,
-                    doc,
-                )
-
-                tag_insert = (
-                    (site_id, elem.attrib["Id"], t)
-                    for t in tag_splitter.split(elem.attrib.get("Tags", ""))
-                    if t
-                )
-
-                self.db.executemany("replace into PostTag values(?, ?, ?)", tag_insert)
-
-                # This is important when using iterparse to free memory from
-                # processed nodes in the tree.
-                elem.clear()
-
-            os.remove(posts_file)
-
-            with SevenZipFile(file_locations["Comments"], "r") as archive_file:
-                archive_file.extract(path=temp_directory, targets=["Comments.xml"])
-                comments_file = os.path.join(temp_directory, "Comments.xml")
-
-            tree = ElementTree.iterparse(comments_file, events=("end",))
-
-            for _, elem in tree:
-                doc = defaultdict(lambda: None)
-                doc.update(elem.attrib)
-                doc["site_id"] = site_id
-
-                self.db.execute(
-                    """
-                    replace into comment values (
-                        :CreationDate,
-                        :ContentLicense,
-                        :Score,
-                        :Text,
-                        :UserId,
-                        :PostId,
-                        :Id,
-                        :site_id
-                    )
-                    """,
-                    doc,
-                )
-                elem.clear()
-
-            os.remove(comments_file)
-
-            with SevenZipFile(file_locations["Users"], "r") as archive_file:
-                archive_file.extract(path=temp_directory, targets=["Users.xml"])
-                users_file = os.path.join(temp_directory, "Users.xml")
-
-            tree = ElementTree.iterparse(users_file, events=("end",))
-
-            for _, elem in tree:
-                doc = defaultdict(lambda: None)
-                doc.update(elem.attrib)
-                doc["site_id"] = site_id
-
-                self.db.execute(
-                    """
-                    replace into user values (
-                        :AboutMe,
-                        :CreationDate,
-                        :Location,
-                        :ProfileImageUrl,
-                        :WebsiteUrl,
-                        :AccountId,
-                        :Reputation,
-                        :Id,
-                        :Views,
-                        :UpVotes,
-                        :DownVotes,
-                        :DisplayName,
-                        :LastAccessDate,
-                        :site_id
-                    )
-                    """,
-                    doc,
-                )
-                elem.clear()
-
-            os.remove(users_file)
-
-    def docs(self, keys):
-        self.db.execute("savepoint docs")
-
-        try:
-            for key in keys:
-                doc = list(
-                    self.db.execute(
-                        """
-                        SELECT
-                            site_url,
-                            site_id,
-                            Id,
-                            Title,
-                            Body,
-                            -- Used to retrieve both tags for the root
-                            -- question, and the Question asked for answers -
-                            -- as the these aren't present on answers, only
-                            -- the root question.
-                            coalesce(ParentId, Id) as TagPostId,
-                            coalesce(
-                                (
-                                    select DisplayName
-                                    from User
-                                    where
-                                        (User.site_id, User.Id) =
-                                        (Post.site_id, Post.OwnerUserId)
-                                ),
-                                '<Deleted User>'
-                            ) as DisplayName,
-                            CreationDate,
-                            PostType
-                        from Post
-                        inner join Site using(site_id)
-                        where Post.doc_id = ?
-                        """,
-                        [key],
-                    )
-                )[0]
-
-                doc["QuestionTitle"] = list(
-                    self.db.execute(
-                        """
-                        select Title
-                        from Post
-                        where (site_id, Id) = (:site_id, :TagPostId)
-                        """,
-                        doc,
-                    )
-                )[0]["Title"]
-
-                # Use the tags on the question, not the (absent) tags on the answer.
-                doc["Tags"] = {
-                    r["Tag"]
-                    for r in self.db.execute(
-                        """
-                        select Tag
-                        from PostTag
-                        where (site_id, PostId) = (:site_id, :TagPostId)
-                        """,
-                        doc,
-                    )
-                }
-
-                # Note we're indexing by AccountId, which is stable across all SX sites,
-                # not the local user ID.
-                doc["UserComments"] = list(
-                    self.db.execute(
-                        """
-                        SELECT
-                            coalesce(
-                                (
-                                    select DisplayName
-                                    from User
-                                    where
-                                        (User.site_id, User.Id) =
-                                        (comment.site_id, comment.UserId)
-                                ),
-                                '<Deleted User>'
-                            ) as DisplayName,
-                            Text
-                        from comment
-                        where (comment.site_id, comment.PostId) = (:site_id, :Id)
-                        """,
-                        doc,
-                    )
-                )
-
-                yield key, doc
-
-        finally:
-            self.db.execute("release docs")
-
-    def keys(self):
-        return (r["doc_id"] for r in self.db.execute("select doc_id from Post"))
-
-    TEMPLATE = Template(STACKEXCHANGE_HTML)
-
-    def doc_to_html(self, doc):
-        return Markup(
-            self.TEMPLATE.render(
-                base_fields=doc,
-                tags=doc["Tags"],
-                user_comments=doc["UserComments"],
-            )
-        )
-
     def doc_to_features(self, doc):
-        """Prepare a document for indexing."""
-        code_blocks = []
-
-        if doc["Body"]:
-            body_html = fragment_fromstring(doc["Body"], create_parent="div")
-
-            for node in body_html.xpath("//pre/code"):
-                # Extract text of code blocks
-                code_blocks.append(" ".join(node.itertext()))
-                # Then remove them, treat everything else as post text
-                node.getparent().remove(node)
-
-            # This is a little wrong, ideally we'd handle the cases where
-            # the code blocks are removed with a sentinel...
-            post_text = " ".join(body_html.itertext())
-
-        else:
-            post_text = ""
-
-        creation_date = isoparse(doc["CreationDate"]).date()
-
-        doc_features = {
-            "UserPosting": doc["DisplayName"],
-            "Post": utilities.tokens((doc["Title"] or ""))
-            + utilities.tokens(post_text),
-            "CodeBlock": [
-                t for line in code_blocks for t in utilities.tokens(line) if line
-            ],
-            "Tag": doc["Tags"],
-            # Comments from deleted users remain, but have no UserId associated.
-            "UserCommenting": {u["DisplayName"] for u in doc["UserComments"]},
-            # Note that all comments are treated as a single field - this is not ideal.
-            "Comment": [
-                t for c in doc["UserComments"] for t in utilities.tokens(c["Text"])
-            ],
-            "Site": doc["site_url"],
-            "PostType": doc["PostType"],
-            # Note rounded to the nearest UTC date to avoid too many values.
-            "CreationDate": creation_date,
-            "CreationMonth": creation_date.replace(day=1),
-            "CreationYear": creation_date.replace(month=1, day=1),
+        return {
+            "para_no": RangeEncodableValue(doc["para_no"]),
+            "text": ValueSequence(self.tokeniser(doc["text"])),
         }
 
-        return doc_features
+    def doc_to_html(self, doc, highlight_features=None):
+        return h("span")(doc["para_no"], doc["text"][:20]), h("p")(doc["text"])
+
+    def close(self):
+        self.mm.close()
+        self.f.close()
+
+    @property
+    def paragraph_positions(self) -> list[int]:
+        """
+        A list of the start position of each paragraph as bytes in the text file.
+
+        """
+
+        if self._paragraph_positions is None:
+
+            self.mm.seek(0)
+
+            last_line_not_empty = False
+            para_positions = [0]
+            pos = 0
+
+            for line in iter(self.mm.readline, b""):
+
+                line_not_empty = bool(line.decode(self.encoding).strip())
+
+                if line_not_empty and not last_line_not_empty:
+                    para_positions.append(pos)
+
+                pos = self.mm.tell()
+                last_line_not_empty = line_not_empty
+
+            para_positions.append(self.mm.tell())
+
+            self._paragraph_positions = para_positions
+
+        return self._paragraph_positions

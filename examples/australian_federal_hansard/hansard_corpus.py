@@ -19,7 +19,7 @@ import zipfile
 from lxml import html
 from markupsafe import Markup
 
-from hyperreal import value_handlers
+from hyperreal import value_handlers, cluster_features
 from hyperreal.index import Index
 from hyperreal.corpus import SqliteBackedCorpus
 from hyperreal.utilities import tokens
@@ -154,19 +154,23 @@ if __name__ == "__main__":
     args = sys.argv[1:]
 
     mp_context = mp.get_context("spawn")
-    with cf.ProcessPoolExecutor(mp_context=mp_context) as pool:
+    with cf.ProcessPoolExecutor(16, mp_context=mp_context) as pool:
         idx = Index(db_index, corpus=corpus, pool=pool)
 
         if "index" in args:
             idx.rebuild(doc_batch_size=50000, index_positions=True)
 
         if "cluster" in args:
-            idx.initialise_clusters(
-                n_clusters=256, min_docs=100, include_fields=["page"]
+            idx.delete_clusters(idx.cluster_ids)
+            include_features = [
+                f[0] for f in idx.field_features("text", min_docs_count=20)
+            ]
+            clustering = hyperreal.cluster_features(
+                idx, include_features, 1024, iterations=50, random_seed=12345678
             )
-            idx.refine_clusters(
-                iterations=50, group_test_batches=32, group_test_top_k=2
-            )
+
+            for cluster in clustering.values():
+                last_cluster_id = idx.create_cluster_from_features(cluster)
 
         index_server = hyperreal.server.SingleIndexServer(
             db_index,

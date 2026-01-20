@@ -1,5 +1,6 @@
 """
-Value handlers describe how to work with the values extracted from each field in a doc.
+Value handlers describe how to work with values extracted from a document in different
+contexts.
 
 These allow conversion to/from:
 
@@ -7,20 +8,28 @@ These allow conversion to/from:
 - HTML for display through the web interface
 - strings for textual formats like CSV and for use in URLs
 
+Shouldn't need to think too much when using builtin types: these default handlers are
+already present on anything subclassed from corpus.
+
 This is also the place for customising the rich display of fields and parts of fields,
 for example for concordances, passages, or snippets. 
 
+Note that the protocol assumes that the specific corpus is available on the
+ValueHandler: this enables per corpus control of display and evaluation of types.
+
 """
+
+from __future__ import annotations
 
 from collections.abc import Hashable, Sequence
 from datetime import date, datetime
-from html import escape
 from typing import Optional, Protocol
+from urllib.parse import quote_plus, unquote
 
-from markupsafe import Markup
+from tinyhtml import frag, h
 
 
-class ValueHandler(Protocol):
+class ValueHandler:
     """
     A ValueHandler describes how to transform values for use in different contexts.
 
@@ -29,96 +38,90 @@ class ValueHandler(Protocol):
 
     - For storage as a value in the SQLite database representing the `index`.
     - For rendering as HTML through the web interface.
+    - For rendering as a URL query parameter
     - For transforming to and from a string for CSV and when generating URLs.
 
     """
+
+    value_name: str
+    supported_types: set
+
+    def __init__(self, corpus):
+        self.corpus = corpus
 
     def from_index(self, value):
         """Create a Python object from the value stored as a single field in SQLite."""
         return value
 
-    def to_index(self, value) -> Hashable:
-        """Transform to an SQLite compatible datatype such as text, blog or numeric."""
+    def to_index(self, value):
+        """Transform to an SQLite compatible datatype such as text, blob or numeric."""
         return value
 
-    def to_html(self, value):
-        """Transform for rich display in the web interface."""
+    def to_html(self, value) -> frag | int | float | str:
+        """
+        Transform for rich display in the web interface.
+
+        Standard types like str's and numbers will be encoded and escaped by default.
+        If you want the output to be rendered as HTML without escaping, the return
+        value needs to be a type supported by tinyhtml for rendering:
+
+        - a tinyhtml frag OR
+        - an object supporting _repr_html_ as used in Jupyter notebooks OR
+        - an object supporting __html__, as used in Jinja, MarkupSafe and some other
+          templating systems.
+
+        If you have a str you want to include as is without escaping, use
+        `tinyhtml.raw`:
+
+        > raw('should <not>be escaped</not>')
+
+        """
         return self.to_str(value)
+
+    def to_url(self, value) -> str:
+        """
+        Return a URL safe version of a string.
+
+        """
+        return quote_plus(self.to_str(value))
+
+    def from_url(self, value):
+        """
+        Create a Python representation of the value from a URL string.
+
+        """
+        return self.from_str(unquote(value))
 
     def from_str(self, value: str):
         """Create a Python object from the string representation."""
         return value
 
     def to_str(self, value) -> str:
-        """Create a string version of the object for CSV and URLs."""
+        """Create a string version of the object for terminal and other uses."""
         return str(value)
 
 
-class SupportsSegment(Protocol):
-    """
-    A ValueHandler can implement these fields to display parts of documents.
+class StringHandler(ValueHandler):
+    """Handles strings, by not doing anything to them anywhere."""
 
-    This is optional and intended for usecases like displaying parts of document through
-    concordances or retrieval of passages.
-    """
+    value_name = "str"
+    supported_types = set([str])
 
-    def segment_to_str(
-        self, values, start, end, highlight: Optional[Sequence] = None
-    ) -> str:
-        """
-        Take a segment of a sequence of values and render it to a single string.
-
-        This is used to create passages and concordances from the output of
-        `corpus.doc_to_features`.
-
-        """
-        selected_values = values[start:end]
-
-        if highlight is not None:
-            highlight = set(highlight)
-            selected_values = [
-                f"**{value}**" if value in highlight else value
-                for value in selected_values
-            ]
-
-        return " ".join(selected_values)
-
-    def segment_to_html(self, values, start, end, highlight: Optional[Sequence] = None):
-        """
-        Take a segment of a sequence of values and render it to a single HTML string.
-
-        This is used to create passages and concordances from the output of
-        `corpus.doc_to_features`.
-
-        """
-        selected_values = values[start:end]
-
-        if highlight is not None:
-            highlight = set(highlight)
-            selected_values = [
-                f"<mark>{escape(value)}</mark>" if value in highlight else value
-                for value in selected_values
-            ]
-
-        return Markup(" ".join(selected_values))
-
-
-class NoopHandler(ValueHandler):
-    """A simple handler that does nothing but pass values through."""
-
-
-class StringHandler(SupportsSegment, ValueHandler):
-    """Everything is saved as a string, and otherwise kept unchanged."""
-
-    def to_index(self, value):
-        return str(value)
-
-    def to_str(self, value):
-        return str(value)
+    def to_str(self, value: str) -> str:
+        return value
 
 
 class IntegerHandler(ValueHandler):
-    """Handles integers and only things convertible to integers via `int`"""
+    """
+    Handles integers and things convertible to integers.
+
+    Values between -2**63 and 2**63 - 1 are supported - larger values cannot be inserted
+    into an SQLite database as an integer.
+
+    """
+
+    value_name = "int"
+    supported_types = set([int])
 
     def to_html(self, value):
         return str(value)
@@ -135,9 +138,13 @@ class FloatHandler(IntegerHandler):
     Handles floats.
 
     It's likely that you will want to round these values in some way though, as
-    values with only a single document are not very useful.
+    values with only a single document are not very useful. Note also that this may not
+    be completely round-trippable.
 
     """
+
+    value_name = "float"
+    supported_types = set([float])
 
     def from_str(self, value):
         return float(value)
@@ -151,6 +158,9 @@ class DateHandler(ValueHandler):
 
     """
 
+    value_name = "date"
+    supported_types = set([date])
+
     def from_index(self, value):
         return date.fromisoformat(value)
 
@@ -158,7 +168,7 @@ class DateHandler(ValueHandler):
         return value.isoformat()
 
     def to_html(self, value):
-        return Markup(f"<time>{value.isoformat()}</time>")
+        return h("time")(value.isoformat())
 
     def from_str(self, value):
         return date.fromisoformat(value)
@@ -175,6 +185,9 @@ class DatetimeHandler(DateHandler):
     to UTC offsets for storage: some loss may occur.
 
     """
+
+    value_name = "datetime"
+    supported_types = set([datetime])
 
     def from_index(self, value):
         return datetime.fromisoformat(value)
