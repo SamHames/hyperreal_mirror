@@ -33,6 +33,8 @@ from typing import Any, Hashable, Iterable, Optional, TypeVar
 from tinyhtml import frag, h, raw
 
 from . import value_handlers, doc_feature_tools as dft
+from .field_types import RangeEncodableValue, ValueSequence
+
 
 DocKey = TypeVar("DocKey")
 Doc = TypeVar("Doc")
@@ -330,8 +332,8 @@ def boundary_tokeniser(text: str) -> list[str]:
     ]
 
 
-def display_tokens(text: str) -> list[str]:
-    """The same tokens as boundary tokeniser, but preserving case and whitespace."""
+def display_boundary_tokeniser(text: str) -> list[str]:
+    """The same tokens as boundary_tokeniser, but preserving case and whitespace."""
 
 
 # TODO: Add a corpus for the standard folder full of text files. Possibly using the
@@ -391,7 +393,10 @@ class TextfileParagraphsCorpus(HyperrealCorpus):
             }
 
     def doc_to_features(self, doc):
-        return {"para_no": doc["para_no"], "text": self.tokeniser(doc["text"])}
+        return {
+            "para_no": RangeEncodableValue(doc["para_no"]),
+            "text": ValueSequence(self.tokeniser(doc["text"])),
+        }
 
     def doc_to_html(self, doc, highlight_features=None):
         return h("span")(doc["para_no"], doc["text"][:20]), h("p")(doc["text"])

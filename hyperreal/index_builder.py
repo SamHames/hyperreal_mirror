@@ -18,13 +18,14 @@ import concurrent.futures as cf
 import contextlib
 import dataclasses as dc
 import math
+import numbers
 import os
 import tempfile
 from typing import Iterable, Optional
 
 from pyroaring import BitMap
 
-from . import corpus, db_utilities
+from . import corpus, db_utilities, field_types
 
 __all__ = ["build_index"]
 
@@ -35,7 +36,7 @@ def build_index(
     pool: cf.Executor,
     doc_batch_size: int = 1000,
     max_workers: Optional[int] = None,
-    passage_group_size=16,
+    passage_size=16,
 ):
     """
     (Re)Build the index of the given corpus at the given database.
@@ -80,7 +81,7 @@ def build_index(
                     current_doc_id,
                     doc_key_batch,
                     doc_batch_size,
-                    passage_group_size,
+                    passage_size,
                 )
             )
 
@@ -91,7 +92,7 @@ def build_index(
             start_doc_id, merge_from = segment.result()
             _merge_into(start_doc_id, merge_from, merge_segments)
 
-        _finalise_into(merge_segments, db_path, passage_group_size)
+        _finalise_into(merge_segments, db_path, passage_size)
 
 
 def _batch(sequence, batch_size):
@@ -130,45 +131,46 @@ def _init_segment(db_path):
             first_doc_id,
             doc_count,
             doc_ids roaring_bitmap,
-            position_count,
+            location_count,
             primary key (field, value, first_doc_id)
         );
 
-        CREATE table if not exists inverted_index_segment_weight(
+        CREATE table if not exists inverted_index_segment_score(
             field text references field_summary,
             value not null,
-            weight integer not null,
+            score integer not null,
             first_doc_id integer not null,
             doc_count,
             doc_ids roaring_bitmap,
-            primary key (field, value, weight, first_doc_id)
+            primary key (field, value, score, first_doc_id)
         );
 
-        CREATE table if not exists position_index_segment(
+        CREATE table if not exists location_index_segment(
             field text references field_summary,
             value not null,
-            mod_position integer not null,
+            mod_location integer not null,
             first_doc_id,
-            position_count,
-            group_ids roaring_bitmap,
-            primary key (field, value, mod_position, first_doc_id)
+            location_count,
+            passage_ids roaring_bitmap,
+            primary key (field, value, mod_location, first_doc_id)
         );
 
         CREATE table if not exists segment_header(
             field,
             first_doc_id,
-            max_doc_cardinality,
             value_handler_name,
-            stored_sorted,
+            max_value_count,
+            max_scored_value_count,
+            max_location_count,
+            range_encodable,
             doc_count,
             doc_ids roaring_bitmap,
-            position_count,
-            group_count,
-            group_doc_ids roaring_bitmap,
-            doc_group_starts roaring_bitmap,
+            total_location_count,
+            passage_count,
+            passage_doc_ids roaring_bitmap,
+            doc_passage_starts roaring_bitmap,
             primary key (field, first_doc_id)
         );
-
         """
     )
 
@@ -181,15 +183,15 @@ def _make_segment(
     start_doc_id: int,
     doc_keys: Iterable[corpus.DocKey],
     doc_batch_size: int,
-    passage_group_size: int,
+    passage_size: int,
 ):
     """Make an on-disk segment representing the index for this group of documents."""
 
     db = _init_segment(segment_path)
 
-    # indicator for where the field is up to in terms of position count. All docs
-    # in this segment will have non-overlapping position ranges.
-    field_positions = collections.Counter()
+    # indicator for where the field is up to in terms of location count. All docs
+    # in this segment will have non-overlapping location ranges.
+    field_locations = collections.Counter()
 
     # Observed handlers for each field - in conjunction with the cardinalities this
     # will be used both as the descriptive schema of what was indexed, but also
@@ -211,9 +213,9 @@ def _make_segment(
                 batch_segment,
                 batch_segment_header,
                 insert_order,
-                field_positions,
+                field_locations,
             ) = _prepare_doc_batch(
-                corp, next_doc_id, field_positions, batch_docs, passage_group_size
+                corp, next_doc_id, field_locations, batch_docs, passage_size
             )
 
             # Write this batch to the staging segment.
@@ -252,11 +254,11 @@ def _make_segment(
 
 
 @dc.dataclass
-class _DocsPositions:
+class _DocsPassages:
     score_docs: dict[int, BitMap] = dc.field(
         default_factory=lambda: collections.defaultdict(BitMap)
     )
-    group_positions: dict[int, BitMap] = dc.field(
+    passages: dict[int, BitMap] = dc.field(
         default_factory=lambda: collections.defaultdict(BitMap)
     )
 
@@ -266,17 +268,17 @@ class _FieldBatchHeader:
     """Records all the information about this field in the batch."""
 
     docs: BitMap = dc.field(default_factory=BitMap)
-    docs_w_positions: BitMap = dc.field(default_factory=BitMap)
-    doc_group_ranges: BitMap = dc.field(default_factory=BitMap)
-    positions_indexed: int = 0
-    max_doc_cardinality: int = 0
+    docs_w_passages: BitMap = dc.field(default_factory=BitMap)
+    doc_passage_ranges: BitMap = dc.field(default_factory=BitMap)
+    total_location_count: int = 0
+    max_value_count: int = 0
+    max_scored_value_count: int = 0
+    max_location_count: int = 0
     value_handler_name: str = ""
-    stored_sorted: bool = False
+    range_encodable = True
 
 
-def _prepare_doc_batch(
-    corpus, start_doc_id, field_positions, doc_keys, passage_group_size
-):
+def _prepare_doc_batch(corpus, start_doc_id, field_locations, doc_keys, passage_size):
     """
     Process this group of docs into a Python structure suitable for serialising.
 
@@ -285,14 +287,14 @@ def _prepare_doc_batch(
     """
 
     # One bitmap for document occurrence, the other other for recording
-    # positional information.
+    # location information.
     batch_segment = collections.defaultdict(
-        lambda: collections.defaultdict(_DocsPositions)
+        lambda: collections.defaultdict(_DocsPassages)
     )
-    # Mapping of fields -> doc_ids, doc_ids w position starts, position starts for
+    # Mapping of fields -> doc_ids, doc_ids w location starts, location starts for
     # each document. Note this requires recording three pieces of information:
     # Whether the field was present on the doc, regardless of content, and whether
-    # the doc has any positional information. The latter two will be empty for most
+    # the doc has any location information. The latter two will be empty for most
     # fields that are simple attributes or sets.
     batch_segment_header = collections.defaultdict(_FieldBatchHeader)
 
@@ -309,87 +311,101 @@ def _prepare_doc_batch(
         for field, values in doc_features.items():
 
             batch_field = batch_segment[field]
+            batch_header = batch_segment_header[field]
 
-            if isinstance(values, list):
-                # Prepare the values for indexing at the doc level
-                doc_values = collections.Counter(values)
-                position_count = value_count = len(values)
-                container_type = "list"
+            vals = values.values
+            scores = values.value_scores
+            locs = values.value_locations
 
-            elif isinstance(values, set):
-                doc_values = collections.Counter(values)
-                value_count = len(values)
-                position_count = 0
-                container_type = "set"
+            value_count = len(vals)
+            scored_value_count = len(scores)
+            loc_count = len(locs)
 
-            else:
-                doc_values = collections.Counter([values])
-                value_count = 1
-                position_count = 0
-                container_type = "none"
+            ## Record properties of the current field
+            stored_locations = stored_scores = range_encodable = False
 
-            # Accumulate the cardinalities observed (as-indexed).
-            batch_segment_header[field].max_doc_cardinality = max(
-                batch_segment_header[field].max_doc_cardinality, value_count
-            )
+            if isinstance(values, field_types.RangeEncodableValue):
+                range_encodable = True
 
-            # Actually index the values at the document level.
-            for value in doc_values:
-                batch_field[value].score_docs[-1].add(doc_id)
+            if scores:
+                stored_scores = True
 
-            # If this is a sequential field, also index the term frequencies
-            if position_count:
-                for value, count in doc_values.items():
-                    batch_field[value].score_docs[count].add(doc_id)
+            if locs:
+                stored_locations = True
 
-            # Record the presence of this field in the document, regardless of
-            # whatever funky thing is happening with indexing.
-            batch_segment_header
-            batch_segment_header[field].docs.add(doc_id)
+            ## Now index the various information for this field
 
-            # If there are no positions to record, we don't record anything for this
-            # doc here. This means there are some docs that will appear in the first
-            # part of the header, because the field was present, but will not appear
-            # here because there were no positions to record.
-            if position_count:
+            # (required) values
+            for value in vals:
+                batch_field[value].score_docs[None].add(doc_id)
 
-                next_position = start_position = field_positions[field]
+            # (optional) scores
+            for value, score in scores:
+                # Score must be a real number...
+                if isinstance(score, numbers.Real):
+                    batch_field[value].score_docs[score].add(doc_id)
+                else:
+                    raise ValueError(f"Score {score} needs to be a numeric type")
 
-                for value in values:
-                    group, offset = divmod(next_position, passage_group_size)
-                    batch_field[value].group_positions[offset].add(group)
-                    next_position += 1
+            # (optional locations)
+            # Starting offset for the next location in this field
+            start_location = field_locations[field]
+            next_location = None
+
+            # Index locations if present into passages of fixed size and offset within
+            # those passages.
+            for value, location in locs:
+                next_location = start_location + location
+                passage_id, offset = divmod(next_location, passage_size)
+                batch_field[value].passages[offset].add(passage_id)
+
+            if next_location is not None:
 
                 # After a field in a document finishes, move the position counter so as
                 # to consume the remainder of the current group, and consume the next
                 # group, leaving a blank group between. The blank group simplifies all
                 # handling of edge cases for both passage and positional queries, as we
                 # don't need to worry about overlapping documents unless the checked
-                # offset is large.
+                # offset is larger than one passage.
 
-                # Note: subtract 1 as we just added a value before, which might have
-                # pushed us into a new group already.
-                group, offset = divmod(next_position - 1, passage_group_size)
-                remaining_in_group = passage_group_size - offset
-                next_position += passage_group_size + remaining_in_group - 1
+                group, offset = divmod(next_location, passage_size)
+                remaining_in_group = passage_size - offset
+                next_location += passage_size + remaining_in_group
 
-                assert next_position % passage_group_size == 0
+                assert next_location % passage_size == 0
 
                 # Keep track of the doc-positional mapping
-                batch_segment_header[field].docs_w_positions.add(doc_id)
+                batch_header.docs_w_passages.add(doc_id)
                 # Annotate the group ranges for this field in the doc. Always add
                 # the [start, end) range - this will be redundant for all of the
                 # instances except the first and last.
-                batch_segment_header[field].doc_group_ranges.add(
-                    start_position // passage_group_size
-                )
-                batch_segment_header[field].doc_group_ranges.add(
-                    next_position // passage_group_size
-                )
+                batch_header.doc_passage_ranges.add(start_location // passage_size)
+                batch_header.doc_passage_ranges.add(next_location // passage_size)
 
-                batch_segment_header[field].positions_indexed += position_count
+                batch_header.total_location_count += loc_count
 
-                field_positions[field] = next_position
+                field_locations[field] = next_location
+
+            # Accumulate header information about what has been indexed, such as the
+            # cardinalities observed.
+            batch_header.max_value_count = max(
+                batch_header.max_value_count, value_count
+            )
+            batch_header.max_location_count = max(
+                batch_header.max_location_count, loc_count
+            )
+
+            batch_header.max_scored_value_count = max(
+                batch_header.max_scored_value_count, scored_value_count
+            )
+
+            batch_header.range_encodable = (
+                batch_header.range_encodable & range_encodable
+            )
+
+            # Record the presence of this field in the document, regardless of
+            # whatever funky thing is happening with indexing.
+            batch_header.docs.add(doc_id)
 
         doc_id += 1
 
@@ -423,7 +439,6 @@ def _prepare_doc_batch(
         transform = handler.to_index
 
         batch_segment_header[field].value_handler_name = handler.value_name
-        batch_segment_header[field].stored_sorted = handler.stored_sorted
 
         value_order = sorted((transform(value), value) for value in field_values)
 
@@ -438,7 +453,7 @@ def _prepare_doc_batch(
         batch_segment,
         batch_segment_header,
         insert_order,
-        field_positions,
+        field_locations,
     )
 
 
@@ -468,11 +483,11 @@ def _stage_doc_batch(
                     field,
                     index_value,
                     first_doc_id,
-                    len(field_batch[value].score_docs[-1]),
-                    field_batch[value].score_docs[-1],
+                    len(field_batch[value].score_docs[None]),
+                    field_batch[value].score_docs[None],
                     sum(
-                        len(group)
-                        for group in field_batch[value].group_positions.values()
+                        len(passages)
+                        for passages in field_batch[value].passages.values()
                     ),
                 )
                 for index_value, value in value_order
@@ -480,46 +495,55 @@ def _stage_doc_batch(
         )
 
         db.executemany(
-            "INSERT into inverted_index_segment_weight values(?, ?, ?, ?, ?, ?)",
+            "INSERT into inverted_index_segment_score values(?, ?, ?, ?, ?, ?)",
             (
-                (field, index_value, weight, first_doc_id, len(docs), docs)
+                (field, index_value, score, first_doc_id, len(docs), docs)
                 for index_value, value in value_order
-                for weight, docs in field_batch[value].score_docs.items()
-                if weight > 0
+                for score, docs in field_batch[value].score_docs.items()
+                if score is not None
             ),
         )
 
         db.executemany(
-            "INSERT into position_index_segment values(?, ?, ?, ?, ?, ?)",
+            "INSERT into location_index_segment values(?, ?, ?, ?, ?, ?)",
             (
-                (field, index_value, mod_position, first_doc_id, len(groups), groups)
+                (
+                    field,
+                    index_value,
+                    mod_location,
+                    first_doc_id,
+                    len(passages),
+                    passages,
+                )
                 for index_value, value in value_order
-                for mod_position, groups in field_batch[value].group_positions.items()
+                for mod_location, passages in field_batch[value].passages.items()
             ),
         )
 
         # Don't forget to write the header row describing the position-doc mapping
         header_row = batch_segment_header[field]
 
-        group_count = 0
+        passage_count = 0
 
-        if header_row.doc_group_ranges:
-            group_count = header_row.doc_group_ranges[-1]
+        if header_row.doc_passage_ranges:
+            passge_count = header_row.doc_passage_ranges[-1]
 
         db.execute(
-            "INSERT into segment_header values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT into segment_header values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 field,
                 first_doc_id,
-                header_row.max_doc_cardinality,
                 header_row.value_handler_name,
-                header_row.stored_sorted,
+                header_row.max_value_count,
+                header_row.max_scored_value_count,
+                header_row.max_location_count,
+                header_row.range_encodable,
                 len(header_row.docs),
                 header_row.docs,
-                header_row.positions_indexed,
-                group_count,
-                header_row.docs_w_positions,
-                header_row.doc_group_ranges,
+                header_row.total_location_count,
+                passage_count,
+                header_row.docs_w_passages,
+                header_row.doc_passage_ranges,
             ),
         )
 
@@ -563,7 +587,7 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                         ?,
                         sum(doc_count),
                         roaring_union(doc_ids),
-                        sum(position_count)
+                        sum(location_count)
                     from inverted_index_segment
                     group by field, value
                     """,
@@ -572,32 +596,32 @@ def _merge_into(first_doc_id, from_segment, to_segment):
 
             db.execute(
                 """
-                INSERT into merge_segment.inverted_index_segment_weight
+                INSERT into merge_segment.inverted_index_segment_score
                     select
                         field,
                         value,
-                        weight,
+                        score,
                         ?,
                         sum(doc_count),
                         roaring_union(doc_ids)
-                    from inverted_index_segment_weight
-                    group by field, value, weight
+                    from inverted_index_segment_score
+                    group by field, value, score
                     """,
                 [first_doc_id],
             )
 
             db.execute(
                 """
-                INSERT into merge_segment.position_index_segment
+                INSERT into merge_segment.location_index_segment
                     select
                         field,
                         value,
-                        mod_position,
+                        mod_location,
                         ?,
-                        sum(position_count),
-                        roaring_union(group_ids)
-                    from position_index_segment
-                    group by field, value, mod_position
+                        sum(location_count),
+                        roaring_union(passage_ids)
+                    from location_index_segment
+                    group by field, value, mod_location
                     """,
                 [first_doc_id],
             )
@@ -608,23 +632,21 @@ def _merge_into(first_doc_id, from_segment, to_segment):
                     select
                         field,
                         ?,
-                        max(max_doc_cardinality),
                         value_handler_name,
-                        stored_sorted,
+                        max(max_value_count),
+                        max(max_scored_value_count),
+                        max(max_location_count),
+                        min(range_encodable),
                         sum(doc_count),
                         roaring_union(doc_ids),
-                        sum(position_count),
-                        max(group_count),
-                        roaring_union(group_doc_ids),
-                        roaring_union(doc_group_starts)
+                        sum(total_location_count),
+                        max(passage_count),
+                        roaring_union(passage_doc_ids),
+                        roaring_union(doc_passage_starts)
                     from segment_header
                     -- Note that group by value_handler_name is redundant if this is well
                     -- formed, but will generate a primary key error if the invariant
                     -- of only one value_handler_name per field is violated.
-                    -- TODO: might be a better way to do this?
-                    -- TODO: check performance is acceptable for large indexes, it might
-                    -- be preferable to not have a primary key on this table and create
-                    -- an index after.
                     group by field, value_handler_name
                     """,
                 [first_doc_id],
@@ -637,7 +659,7 @@ def _merge_into(first_doc_id, from_segment, to_segment):
             raise
 
 
-def _finalise_into(from_segment, to_final, passage_group_size):
+def _finalise_into(from_segment, to_final, passage_size):
     """
     Merge everything into the final destination index database.
 
@@ -657,7 +679,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
 
             db.execute(
                 "replace into index_setting values(?, ?)",
-                ("passage_group_size", passage_group_size),
+                ("passage_size", passage_size),
             )
 
             # new doc_keys
@@ -681,7 +703,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                 current_shift = 0
                 segment_sizes = db.execute(
                     """
-                    SELECT first_doc_id, group_count 
+                    SELECT first_doc_id, passage_count 
                     from segment_header
                     where field = ?
                     order by first_doc_id
@@ -689,12 +711,12 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                     [field],
                 )
 
-                for first_doc_id, group_count in segment_sizes:
+                for first_doc_id, passage_count in segment_sizes:
                     db.execute(
                         "insert into field_shift values(?, ?, ?)",
                         [field, first_doc_id, current_shift],
                     )
-                    current_shift += group_count
+                    current_shift += passage_count
 
             # First process the field summary, so that we can work out the schema
             db.execute("DELETE from final.field_summary")
@@ -704,20 +726,21 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                     select
                         field, 
                         value_handler_name,
-                        max(max_doc_cardinality),
                         -- These are value summary rows - we'll update them after 
                         -- the next step.
                         null,
                         null,
                         null,
-                        -- This is guaranteed to be the same across the field so we can
-                        -- rely on SQLite behaviour to grab an arbitrary row.
-                        stored_sorted,
+                        min(range_encodable),
+                        max(max_value_count),
+                        max(max_scored_value_count),
+                        max(max_location_count),
+                        sum(total_location_count),
                         sum(doc_count),
                         roaring_union(doc_ids),
-                        sum(position_count),
-                        roaring_union(group_doc_ids),
-                        roaring_shift_union(doc_group_starts, cumulative_shift)
+                        sum(passage_count),
+                        roaring_union(passage_doc_ids),
+                        roaring_shift_union(doc_passage_starts, cumulative_shift)
                     from segment_header
                     inner join field_shift using(field, first_doc_id)
                     group by field, value_handler_name
@@ -731,11 +754,11 @@ def _finalise_into(from_segment, to_final, passage_group_size):
             # all others can be inserted normally.
 
             db.execute("DELETE from final.inverted_index")
-            db.execute("DELETE from final.inverted_index_weight")
-            db.execute("DELETE from final.position_index")
+            db.execute("DELETE from final.inverted_index_score")
+            db.execute("DELETE from final.location_index")
             field_processing = db.execute(
                 """
-                SELECT field, max_doc_cardinality, stored_sorted, position_count
+                SELECT field, max_value_count, range_encodable
                 from field_summary
                 order by field
                 """
@@ -743,14 +766,11 @@ def _finalise_into(from_segment, to_final, passage_group_size):
 
             for (
                 field,
-                max_doc_cardinality,
-                stored_sorted,
-                position_count,
+                max_value_count,
+                range_encodable,
             ) in field_processing:
 
-                # TODO: should probably have a check on the cardinality of the values
-                # in the field - if there's one doc/value then this is a waste of space.
-                if (max_doc_cardinality, stored_sorted, position_count) == (1, 1, 0):
+                if (max_value_count, range_encodable) == (1, 1):
 
                     # Generate the initial merged values
                     merged = db.execute(
@@ -760,7 +780,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                             value,
                             sum(doc_count),
                             roaring_union(doc_ids),
-                            sum(position_count)
+                            sum(location_count)
                         from inverted_index_segment
                         where field = ?
                         group by value
@@ -772,7 +792,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                     # all the values that were lower than this.
                     accumulated_docs = BitMap()
 
-                    for field, value, _, docs, pos_count in merged:
+                    for field, value, _, docs, location_count in merged:
 
                         accumulated_docs |= BitMap.deserialize(docs)
 
@@ -784,7 +804,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                                 value,
                                 len(accumulated_docs),
                                 accumulated_docs,
-                                position_count,
+                                location_count,
                             ),
                         )
 
@@ -798,7 +818,7 @@ def _finalise_into(from_segment, to_final, passage_group_size):
                                 value,
                                 sum(doc_count),
                                 roaring_union(doc_ids),
-                                sum(position_count)
+                                sum(location_count)
                             from inverted_index_segment
                             inner join field_shift using(field, first_doc_id)
                             where field = ?
@@ -810,36 +830,36 @@ def _finalise_into(from_segment, to_final, passage_group_size):
 
                     db.execute(
                         """
-                        INSERT into final.inverted_index_weight 
+                        INSERT into final.inverted_index_score 
                             select
                                 field, 
                                 value,
-                                weight,
+                                score,
                                 sum(doc_count),
                                 roaring_union(doc_ids)
-                            from inverted_index_segment_weight
+                            from inverted_index_segment_score
                             inner join field_shift using(field, first_doc_id)
                             where field = ?
-                            group by value, weight
-                            order by value, weight
+                            group by value, score
+                            order by value, score
                         """,
                         [field],
                     )
 
                     db.execute(
                         """
-                        INSERT into final.position_index 
+                        INSERT into final.location_index 
                             select
                                 field, 
                                 value,
-                                mod_position,
-                                sum(position_count),
-                                roaring_shift_union(group_ids, cumulative_shift)
-                            from position_index_segment
+                                mod_location,
+                                sum(location_count),
+                                roaring_shift_union(passage_ids, cumulative_shift)
+                            from location_index_segment
                             inner join field_shift using(field, first_doc_id)
                             where field = ?
-                            group by value, mod_position
-                            order by value, mod_position
+                            group by value, mod_location
+                            order by value, mod_location
                         """,
                         [field],
                     )

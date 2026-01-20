@@ -57,22 +57,20 @@ core_migration = index_plugin.Migration(
         """
         CREATE table field_summary(
             field text primary key,
-            -- TODO: cardinality is potentially confusing, because we can talk about it
-            -- here as 1:x cardinality, or separately as the cardinality/unique values
-            -- defined on a field. Is there a more precise naming for each?
-            -- TODO: we also want the number of unique values on a field for display
-            -- purposes.
             value_handler_name,
-            max_doc_cardinality,
-            unique_value_count,
             min_value,
             max_value,
-            stored_sorted,
+            unique_value_count,
+            range_encodable,
+            max_value_count,
+            max_scored_value_count,
+            max_location_count,
+            total_location_count,
             doc_count,
             doc_ids roaring_bitmap,
-            position_count,
-            group_doc_ids roaring_bitmap,
-            doc_group_starts roaring_bitmap
+            passage_count,
+            passage_doc_ids roaring_bitmap,
+            doc_passage_starts roaring_bitmap
         )
         """,
         """
@@ -81,35 +79,35 @@ core_migration = index_plugin.Migration(
             value not null,
             doc_count,
             doc_ids roaring_bitmap,
-            position_count,
+            location_count,
             primary key (field, value)
         )
         """,
         """
-        CREATE table inverted_index_weight(
+        CREATE table inverted_index_score(
             field text references field_summary,
             value not null,
-            weight integer not null,
+            score integer not null,
             doc_count,
             doc_ids roaring_bitmap,
-            primary key (field, value, weight),
+            primary key (field, value, score),
             foreign key (field, value) references inverted_index
         )
         """,
         """
-        CREATE table position_index(
+        CREATE table location_index(
             field text references field_summary,
             value not null,
-            mod_position integer not null,
-            position_count,
-            group_ids roaring_bitmap,
-            primary key (field, value, mod_position)
+            mod_location integer not null,
+            location_count,
+            passage_ids roaring_bitmap,
+            primary key (field, value, mod_location)
             foreign key (field, value) references inverted_index
         )
         """,
         """
         CREATE index feature_doc_count on inverted_index(
-            field, doc_count desc, value, position_count
+            field, doc_count desc, value, location_count
         )
         """,
     ],
@@ -187,7 +185,7 @@ class HyperrealIndex:
                 raise
 
         self._field_handlers = None
-        self._passage_group_size = None
+        self._passage_size = None
 
     def __enter__(self):
         self.db.execute("begin")
@@ -263,21 +261,21 @@ class HyperrealIndex:
         return random.Random()
 
     @property
-    def passage_group_size(self) -> int:
-        """The defined passage group size from the indexing run."""
+    def passage_size(self) -> int:
+        """The defined passage size from the indexing run."""
 
-        if self._passage_group_size is None:
+        if self._passage_size is None:
             result = list(
                 self.db.execute(
                     "SELECT value from index_setting where key = ?",
-                    ["passage_group_size"],
+                    ["passage_size"],
                 )
             )
 
             if result:
-                self._passage_group_size = result[0][0]
+                self._passage_size = result[0][0]
 
-        return self._passage_group_size
+        return self._passage_size
 
     @property
     def field_handlers(self) -> dict[str, value_handlers.ValueHandler]:
@@ -292,23 +290,23 @@ class HyperrealIndex:
         if self._field_handlers is None:
             field_details = self.db.execute(
                 """
-                SELECT field, value_handler_name, max_doc_cardinality, position_count
+                SELECT 
+                    field, 
+                    value_handler_name, 
+                    max_value_count, 
+                    range_encodable
                 from field_summary
                 """
             )
 
             _field_handlers = {}
 
-            for field, name, cardinality, position_count in field_details:
+            for field, name, max_value_count, range_encodable in field_details:
                 handler = self.corpus.name_handlers[name]
 
-                range_encoded = (
-                    cardinality,
-                    position_count,
-                    handler.stored_sorted,
-                ) == (1, 0, True)
+                range_encoded = (max_value_count, range_encodable) == (1, 0)
 
-                _field_handlers[field] = (handler, range_encoded, cardinality)
+                _field_handlers[field] = (handler, range_encoded, max_value_count)
 
             self._field_handlers = _field_handlers
 
@@ -524,7 +522,7 @@ class HyperrealIndex:
         self,
         doc_batch_size: int = 1000,
         max_workers: Optional[int] = None,
-        passage_group_size=16,
+        passage_size=16,
     ):
         """(Re)build this index, indexing all documents on the corpus."""
 
@@ -534,7 +532,7 @@ class HyperrealIndex:
             self.pool,
             doc_batch_size=doc_batch_size,
             max_workers=max_workers,
-            passage_group_size=passage_group_size,
+            passage_size=passage_size,
         )
 
         for plugin in self.plugins.values():
@@ -543,7 +541,7 @@ class HyperrealIndex:
         # TODO: call post_index_rebuild on plugins.
         # The schema might have changed, so invalidate if present.
         self._field_handlers = None
-        self._passage_group_size = passage_group_size
+        self._passage_size = passage_size
         if hasattr(self, "indexed_field_summary"):
             del self.indexed_field_summary
 
@@ -553,13 +551,12 @@ class HyperrealIndex:
 
         stats_keys = (
             "Value Type",
-            "cardinality?",
+            "Max Unique Values in Doc",
             "Unique Values",
             "Mininum Value",
             "Maximum Value",
             "Number of Documents",
-            "Number of Positions",
-            "Sortable",
+            "Number of Indexed Locations",
             "Range Encoded",
         )
 
@@ -570,14 +567,13 @@ class HyperrealIndex:
                 SELECT
                     field,
                     value_handler_name,
-                    max_doc_cardinality,
+                    max_value_count,
                     unique_value_count,
                     min_value,
                     max_value,
                     doc_count,
-                    position_count,
-                    stored_sorted,
-                    stored_sorted = 1 and max_doc_cardinality = 1 as range_encoded
+                    total_location_count,
+                    range_encodable = 1 and max_value_count = 1 as range_encoded
                 from field_summary
                 order by field
                 """
@@ -589,7 +585,6 @@ class HyperrealIndex:
 
             stats["Mininum Value"] = handler.from_index(stats["Mininum Value"])
             stats["Maximum Value"] = handler.from_index(stats["Maximum Value"])
-            stats["Sortable"] = bool(stats["Sortable"])
             stats["Range Encoded"] = bool(stats["Range Encoded"])
 
         return indexed_fields
@@ -744,7 +739,7 @@ class HyperrealIndex:
         else:
             rows = self.db.execute(
                 """
-                SELECT value, doc_count, position_count
+                SELECT value, doc_count, location_count
                 from inverted_index
                 where field = ?
                     and doc_count >= ?
@@ -753,11 +748,11 @@ class HyperrealIndex:
                 """,
                 [field, min_docs, top_k_features or 2**62],
             )
-            for value, doc_count, position_count in rows:
+            for value, doc_count, location_count in rows:
                 feature = (field, handler.from_index(value))
                 stats = {
                     "doc_count": doc_count,
-                    "position_count": position_count,
+                    "location_count": location_count,
                     "relative_doc_count": doc_count / total_doc_count,
                 }
 
@@ -788,7 +783,7 @@ class HyperrealIndex:
         for feature in features:
             stats = {}
 
-            docs, doc_count, position_count = self[feature]
+            docs, doc_count, _ = self[feature]
 
             stats["doc_count"] = doc_count
             stats["relative_doc_count"] = doc_count / total_docs
@@ -883,7 +878,7 @@ class HyperrealIndex:
                 SELECT
                     doc_ids, 
                     doc_count, 
-                    position_count
+                    location_count
                 from inverted_index ii
                 where (field, value) = (?1, ?2)
                 """,
@@ -900,15 +895,17 @@ class HyperrealIndex:
         matching_rows = self.db.execute(
             """
             SELECT
-                mod_position,
-                group_ids
-            from position_index
+                mod_location,
+                passage_ids
+            from location_index
             where (field, value) = (?, ?)
             """,
             (field, index_value),
         )
 
-        return {mod_position: group for mod_position, group in matching_rows}
+        return {
+            mod_location: passage_ids for mod_location, passage_ids in matching_rows
+        }
 
     def _match_range_encoded_literal_feature(
         self, field, index_value
@@ -966,7 +963,7 @@ class HyperrealIndex:
         matching = list(
             self.db.execute(
                 f"""
-                SELECT roaring_union(doc_ids), sum(position_count)
+                SELECT roaring_union(doc_ids), sum(location_count)
                 from inverted_index
                 {where_clause}
                 """,
@@ -997,17 +994,17 @@ class HyperrealIndex:
 
         matching = self.db.execute(
             f"""
-            SELECT mod_position, roaring_union(groups)
-            from position_index
+            SELECT mod_location, roaring_union(passage_ids)
+            from location_index
             {where_clause}
-            group by mod_position
+            group by mod_location
             """,
             args,
         )
 
         return {
-            mod_position: BitMap.deserialize(groups)
-            for mod_position, groups in matching
+            mod_location: BitMap.deserialize(passage_ids)
+            for mod_location, passage_ids in matching
         }
 
     def _match_range_encoded_range_feature(
@@ -1153,7 +1150,7 @@ class HyperrealIndex:
 
                 # TODO: index needs to keep track of the group_size when indexing...
                 # This is currently hardcoded.
-                group_shift, test_match = divmod(test_match, self.passage_group_size)
+                group_shift, test_match = divmod(test_match, self.passage_size)
 
                 if group_shift:
                     next_group_match = next_positions.get(test_match, BitMap())
@@ -1163,26 +1160,26 @@ class HyperrealIndex:
 
             # Remove any empty matches so they don't need to be checked.
             matches = {
-                mod_position: group for mod_position, group in matches.items() if group
+                mod_location: group for mod_location, group in matches.items() if group
             }
 
             current_shift += 1
 
         if matches:
-            matching_groups = BitMap.union(*matches.values())
-            return self.groups_to_docs(field, matching_groups)
+            matching_passages = BitMap.union(*matches.values())
+            return self.passages_to_docs(field, matching_passages)
         else:
             return BitMap()
 
-    def groups_to_docs(self, field: str, group_positions) -> BitMap:
-        """Convert a set of positional matches to doc_ids."""
+    def passages_to_docs(self, field: str, passage_ids) -> BitMap:
+        """Convert a set of passage matches to doc_ids."""
 
-        group_docs, doc_group_starts = list(
+        passage_docs, doc_passage_starts = list(
             self.db.execute(
                 """
                 SELECT
-                    group_doc_ids,
-                    doc_group_starts
+                    passage_doc_ids,
+                    doc_passage_starts
                 from field_summary
                 where field = ?
                 """,
@@ -1192,8 +1189,8 @@ class HyperrealIndex:
 
         docs = BitMap()
 
-        for g in group_positions:
-            docs.add(group_docs[doc_group_starts.rank(g) - 1])
+        for passage_id in passage_ids:
+            docs.add(passage_docs[doc_passage_starts.rank(g) - 1])
 
         return docs
 

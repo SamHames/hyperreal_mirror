@@ -43,7 +43,6 @@ class ValueHandler:
 
     """
 
-    stored_sorted: bool
     value_name: str
     supported_types: set
 
@@ -105,11 +104,6 @@ class ValueHandler:
 class StringHandler(ValueHandler):
     """Handles strings, by not doing anything to them anywhere."""
 
-    # Note that strings are lexicographically sorted, but this is not an alphabetical
-    # sort - that would require an appropriate database collation. This level of sorting
-    # is however appropriate for simple things like converting a wildcard like "cat*"
-    # into a range search for "cat":"cat\U0010ffff" (the maximum unicode character).
-    stored_sorted = True
     value_name = "str"
     supported_types = set([str])
 
@@ -126,7 +120,6 @@ class IntegerHandler(ValueHandler):
 
     """
 
-    stored_sorted = True
     value_name = "int"
     supported_types = set([int])
 
@@ -150,7 +143,6 @@ class FloatHandler(IntegerHandler):
 
     """
 
-    stored_sorted = True
     value_name = "float"
     supported_types = set([float])
 
@@ -166,7 +158,6 @@ class DateHandler(ValueHandler):
 
     """
 
-    stored_sorted = True
     value_name = "date"
     supported_types = set([date])
 
@@ -195,7 +186,6 @@ class DatetimeHandler(DateHandler):
 
     """
 
-    stored_sorted = True
     value_name = "datetime"
     supported_types = set([datetime])
 

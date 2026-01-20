@@ -114,7 +114,7 @@ from time import mktime
 
 from tinyhtml import h, raw
 
-from hyperreal import corpus
+from hyperreal import corpus, field_types
 
 
 boundary_regex = re.compile(r"(\b|\s+)")
@@ -322,51 +322,51 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
 
     def doc_to_features(self, doc):
         indexed = {
-            "subject": tokenise(doc["Subject"]),
-            "newsgroup": set(
+            "subject": field_types.ValueSequence(tokenise(doc["Subject"])),
+            "newsgroup": field_types.ValueSet(
                 ng.strip() for ng in doc["Newsgroups"].split(",") if ng.strip()
             ),
-            "from": doc["From"].strip(),
-            "date": doc["Date"],
+            "from": field_types.Value(doc["From"].strip()),
+            "date": field_types.RangeEncodableValue(doc["Date"]),
             # For validating that quoting behaviours are correctly handled.
-            "line_start_character": {
+            "line_start_character": field_types.ValueSet(
                 line[0] for line in doc["body"].splitlines() if line
-            },
+            ),
         }
 
         mark_lines = self.mark_lines_ignore(doc["body"])
 
         # The body text, handling quoting indicators at the start of lines.
-        indexed["body"] = [
-            t for ignore, line in mark_lines if not ignore for t in tokenise(line)
-        ]
+        indexed["body"] = field_types.ValueSequence(
+            [t for ignore, line in mark_lines if not ignore for t in tokenise(line)]
+        )
 
         # Quoted text (inverse selection from the body)
-        indexed["ignore"] = [
+        indexed["ignore"] = field_types.ValueSequence(
             t for ignore, line in mark_lines if ignore for t in tokenise(line)
-        ]
+        )
 
         if doc.get("Distribution", None):
-            indexed["distribution"] = doc["Distribution"].strip()
+            indexed["distribution"] = field_types.Value(doc["Distribution"].strip())
         if doc.get("Organization", None):
-            indexed["organization"] = doc["Organization"].strip()
+            indexed["organization"] = field_types.Value(doc["Organization"].strip())
 
         return indexed
 
     def doc_to_display_features(self, doc):
         indexed = {
-            "subject": display_tokenise(doc["Subject"]),
+            "subject": field_types.ValueSequence(display_tokenise(doc["Subject"])),
         }
 
         mark_lines = self.mark_lines_ignore(doc["body"])
 
         # The body text, handling quoting indicators at the start of lines.
-        indexed["body"] = [
+        indexed["body"] = field_types.ValueSequence(
             t
             for ignore, line in mark_lines
             if not ignore
             for t in display_tokenise(line)
-        ]
+        )
 
         return indexed
 
@@ -478,7 +478,7 @@ index_path = data_path / "twenty_newsgroups.db"
 newsgroups_idx = HyperrealIndex(index_path, newsgroups_corpus, pool)
 
 if not newsgroups_idx.indexed_field_summary:
-    newsgroups_idx.rebuild(max_workers=10, doc_batch_size=2000, passage_group_size=32)
+    newsgroups_idx.rebuild(max_workers=10, doc_batch_size=2000, passage_size=16)
 
 # print(
 #     sum(
