@@ -22,6 +22,8 @@ conversations_path.mkdir(exist_ok=True)
 # %%
 import ipywidgets
 
+uploaded_via_jupyter = False
+
 uploader = ipywidgets.FileUpload(accept=".docx", multiple=True)
 display(uploader)
 
@@ -274,42 +276,52 @@ class TranscriptCorpus(HyperrealCorpus):
         for turn_data in doc:
 
             turn_offset = turn_data["turn_offset"]
-            turn_field = f"t{turn_offset},"
+            turn_field = f"t{turn_offset}"
 
             turn_tokens = tokenise(turn_data["turn"])
 
             if turn_tokens:
-                # The plain index of the current turn - needed to support phrase search etc.
-                if turn_offset == 1:
-                    indexed["turn"] = field_types.ValueSequence(turn_tokens)
                 pos_initial = turn_tokens[0]
                 pos_final = turn_tokens[-1]
                 pos_medial = turn_tokens[1:-1]
 
-                indexed[turn_field + "initial"] = field_types.Value(pos_initial)
-                indexed[turn_field + "final"] = field_types.Value(pos_final)
-                indexed[turn_field + "medial"] = field_types.ValueSequence(pos_medial)
+                indexed[turn_field + ",initial"] = field_types.Value(pos_initial)
+                indexed[turn_field + ",final"] = field_types.Value(pos_final)
+                indexed[turn_field + ",medial"] = field_types.ValueSequence(pos_medial)
+                indexed[turn_field] = field_types.ValueSequence(turn_tokens)
 
-            indexed[turn_field + "speaker"] = field_types.Value(turn_data["speaker"])
+            indexed[turn_field + ",speaker"] = field_types.Value(turn_data["speaker"])
 
         return indexed
 
     def doc_to_display_features(self, doc):
-        display = {"turn": display_tokenise(doc[0]["turn"])}
+
+        # Note we need to be careful here because turn 2/3 will not exist at the last
+        # of the transcript
+        display = {}
+
+        for i, turn in enumerate(doc):
+            display[f"t{i+1}"] = display_tokenise(doc[i]["turn"])
 
         return display
 
-    def render_turn(self, speaker, turn):
+    def features_to_html_concordance(
+        self, doc_features, display_features, highlight_features
+    ):
+        """Do not render concordances: turns are short already."""
+        return None
+
+    def render_turn(self, turn_no, speaker, turn):
         if speaker:
-            return (h("em")(speaker), ":\t", turn)
+            return (turn_no, " ", h("em")(speaker), ":\t", turn)
         else:
-            return turn
+            return (turn_no, turn)
 
     def doc_to_html(self, doc, highlight_features=None):
 
         turn_block = self.db.execute(
             """
-            SELECT speaker, turn
+            SELECT turn_no, speaker, turn, turn_id - ?1 + 1 as relative_turn
             from turn
             where turn_id between ?1 - 2 and ?1 + 2
             order by turn_id
@@ -318,9 +330,18 @@ class TranscriptCorpus(HyperrealCorpus):
         )
 
         return h("div")(
-            h("h2")(doc[0]["path"], " ", doc[0]["file"]),
-            h("ol")(h("li")(self.render_turn(*turn)) for turn in turn_block),
+            h("h3")(doc[0]["path"], " ", doc[0]["file"]),
+            h("ol")(
+                h("li", klass=f"turn{turn[-1]}")(self.render_turn(*turn[:3]))
+                for turn in turn_block
+            ),
         )
+
+    extra_css = """
+        .turn1 {
+            background-color: lightgray;
+        }
+    """
 
     def close(self):
         if hasattr(self, "_db"):
@@ -352,14 +373,10 @@ convo_idx.rebuild()
 # %%
 clustering = convo_idx.plugins["feature_clusters"]
 
-include_fields = []
-
-for i in range(1, 4):
-    for subfield in ("initial", "final", "medial"):
-        include_fields.append(f"t{i},{subfield}")
+include_fields = ["t1", "t2", "t3"]
 
 random_clustering = clustering.initialise_random_clustering(
-    include_fields=include_fields, min_docs=1, n_clusters=64
+    include_fields=include_fields, min_docs=3, n_clusters=64
 )
 clustering.replace_clusters(random_clustering)
 refined = clustering.refine_clustering(iterations=50)
@@ -371,7 +388,11 @@ from hyperreal.web_server import serve_index
 
 print("launching web server")
 
-search_fields = include_fields + ["turn", "speaker"]
+search_fields = include_fields + ["speaker"]
+
+for i in range(1, 4):
+    for subfield in ("initial", "final", "medial"):
+        search_fields.append(f"t{i},{subfield}")
 
 convo_idx.facets = [
     (
@@ -394,16 +415,19 @@ convo_idx.facets = [
 convo_idx.search_fields = {field: tokenise for field in search_fields}
 
 try:
-    loop = asyncio.get_running_loop()
-    task = loop.create_task(serve_index(convo_idx, base_path="/proxy/absolute/9999"))
+    import os
 
-    display()
+    jupyter_hub_service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+    url_base = jupyter_hub_service_prefix + "proxy/absolute/9999"
+
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(serve_index(convo_idx, base_path=url_base))
+
+    display(h("a", href=url_base + "/browse/")("Browse your conversations here"))
 
 except RuntimeError:
     loop = asyncio.new_event_loop()
     task = loop.create_task(serve_index(convo_idx))
     loop.run_until_complete(task)
-
-# %%
 
 # %%
