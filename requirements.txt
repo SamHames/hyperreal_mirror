@@ -6,7 +6,8 @@
 # To update the package dependencies use the pyproject.toml file.
 
 .
-docx
+python-docx
 ipywidgets
 jupytext
+jupyter-server-proxy
 loky
