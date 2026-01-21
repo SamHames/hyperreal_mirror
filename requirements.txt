@@ -1,0 +1,12 @@
+# This requirements.txt file is only for dependencies required for notebooks.
+# 
+# It is used to drive the installation of the binderhub environment from the
+# same repository the package is built, but is otherwise unused.
+#
+# To update the package dependencies use the pyproject.toml file.
+
+.
+docx
+ipywidgets
+jupytext
+loky
