@@ -811,12 +811,10 @@ class FeatureClustering(IndexPlugin):
         sampling_rate: typing.Optional[float] = None,
     ):
         """
-        Refine the current clustering defined on the index.
+        Refine in-place the current clustering defined on the index.
 
-        This is an interface over the refine_clustering function that is specific to the
-        materialised representation of a feature clustering on an index. If you'd like
-        to experiment more see the _refine_clustering which does not save the resulting
-        state.
+        If you'd like to experiment more with different configurations, without updating
+        the underlying index, see the _refine_clustering method.
 
         """
 
