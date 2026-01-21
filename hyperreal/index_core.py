@@ -304,7 +304,7 @@ class HyperrealIndex:
             for field, name, max_value_count, range_encodable in field_details:
                 handler = self.corpus.name_handlers[name]
 
-                range_encoded = (max_value_count, range_encodable) == (1, 0)
+                range_encoded = (max_value_count, range_encodable) == (1, 1)
 
                 _field_handlers[field] = (handler, range_encoded, max_value_count)
 
