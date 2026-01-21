@@ -47,6 +47,7 @@ class HyperrealRequestHandler(tornado.web.RequestHandler):
         search_url = kwargs.get("search_url", self.reverse_url("search"))
 
         return web_rendering.full_page(
+            self.reverse_url,
             *args,
             **kwargs,
             search_url=search_url,

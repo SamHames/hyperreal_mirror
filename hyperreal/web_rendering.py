@@ -363,6 +363,7 @@ def search_results_header(sample_doc_count, matching_doc_count):
 
 
 def full_page(
+    reverse_url,
     page_title,
     body_columns,
     search_url=None,
@@ -379,8 +380,8 @@ def full_page(
         search = generate_search(search_url, search_fields)
 
     nav_links = [
-        ("Index Overview", "/"),
-        ("Browse", "/browse/"),
+        ("Index Overview", reverse_url("home")),
+        ("Browse", reverse_url("browse")),
     ]
     main_nav = generate_nav("Main", nav_links, search=search)
 
