@@ -16,6 +16,8 @@ SI_ABBR = {0: "", 1: "k", 2: "M", 3: "G", -1: "m", -2: "μ", -3: "n"}
 
 def format_si_magnitude(number):
     """Format a number as an SI magnitude with human readable suffix."""
+    if number == 0:
+        return "0"
 
     magnitude = math.log10(number)
     suffix_range = magnitude // 3
