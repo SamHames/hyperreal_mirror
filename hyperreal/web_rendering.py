@@ -258,40 +258,41 @@ def render_feature_edit_forms(
     if current_query is not None:
         query_input = h("input", type="hidden", name="query", value=current_query)
 
+    operations = [
+        ("Selected Features", [("new-cluster", "Create new cluster")]),
+        (
+            "Selected Clusters",
+            [
+                ("merge-clusters", "Merge selected clusters"),
+                ("dissolve-clusters", "Dissolve selected clusters"),
+                ("split-clusters", "Split selected clusters"),
+                ("delete-clusters", "Delete selected clusters"),
+                ("refine-clusters", "Refine selected clusters"),
+            ],
+        ),
+        (
+            "Select Clusters & Features",
+            [
+                ("add-to-search", "Add selected to current query"),
+                ("new-search", "Start new query with selected"),
+            ],
+        ),
+    ]
+
+    operator_select = h("select", name="operation")(
+        h("optgroup", label=label)(
+            h("option", value=operation)(display) for operation, display in ops
+        )
+        for label, ops in operations
+    )
+
     return h(
         "form",
         klass="cluster",
         id="edit-model-form",
         method="post",
-        action=reverse_url("create-cluster"),
-    )(
-        query_input,
-        h("button", type="submit")("Create cluster from selected features"),
-        h("button", type="submit", formaction=reverse_url("merge-clusters"))(
-            "Merge selected clusters"
-        ),
-        h("button", type="submit", formaction=reverse_url("dissolve-clusters"))(
-            "Dissolve selected clusters"
-        ),
-        h("button", type="submit", formaction=reverse_url("delete-clusters"))(
-            "Delete selected clusters"
-        ),
-        h("button", type="submit", formaction=reverse_url("split-clusters"))(
-            "Split selected clusters"
-        ),
-        h("button", type="submit", formaction=reverse_url("refine-clusters"))(
-            "Refine selected clusters"
-        ),
-        h("button", type="submit", formmethod="get", formaction=reverse_url("browse"))(
-            "Create query clause from selected"
-        ),
-        h(
-            "button",
-            type="submit",
-            formmethod="get",
-            formaction=reverse_url("browse-new-query"),
-        )("Start new query with selected"),
-    )
+        action=reverse_url("edit-model"),
+    )(query_input, operator_select, h("button", type="submit")("Apply"))
 
 
 def cluster_navigation(browse_url, cluster_ids, selected=None):
@@ -812,6 +813,8 @@ h2, h3 {
 .underline {
     text-decoration: underline;
 }
+
+#edit-model-form {}
 
 /*************/
 """

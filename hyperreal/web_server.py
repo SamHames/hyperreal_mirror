@@ -658,20 +658,27 @@ class Search(HyperrealRequestHandler):
         self.redirect(self.reverse_url("browse") + "?" + urlencode(search_features))
 
 
-class CreateCluster(HyperrealRequestHandler):
-    def post(self):
-        """
-        Create a new cluster from the given features.
+class EditQueriesAndClusters(HyperrealRequestHandler):
+    """
+    Handles editing queries and clusters given a selection of features and clusters.
 
-        """
+    """
+
+    def post(self):
+
+        # Currently selected features and clusters for editing.
+        operation = self.get_argument("operation")
 
         # Each feature is a bundled url string (double layered, to let us address
-        # arbitrary queries as features
+        # arbitrary queries as features)
         features = [
             self.idx.feature_from_querystring(f) for f in self.get_arguments("f")
         ]
 
-        if features:
+        cluster_ids = [int(c) for c in self.get_arguments("c")]
+
+        if operation == "new-cluster":
+
             new_cluster_id = self.feature_clusters.create_cluster_from_features(
                 features
             )
@@ -680,124 +687,85 @@ class CreateCluster(HyperrealRequestHandler):
                 self.reverse_url("browse") + f"?c={new_cluster_id}",
             )
 
-        else:
-            raise ValueError("no features provided")
-
-    get = post
-
-
-class MergeClusters(HyperrealRequestHandler):
-    def post(self):
-        """
-        Create a new cluster from the given features.
-
-        """
-
-        # Each feature is a bundled url string (double layered, to let us address
-        # arbitrary queries as features
-        clusters = [int(c) for c in self.get_arguments("c")]
-
-        if clusters:
-            merge_cluster_id = self.feature_clusters.merge_clusters(clusters)
+        elif operation == "merge-clusters":
+            merge_cluster_id = self.feature_clusters.merge_clusters(cluster_ids)
 
             self.redirect(
                 self.reverse_url("browse") + f"?c={merge_cluster_id}",
             )
 
-        else:
-            raise ValueError("no clusters provided")
-
-    get = post
-
-
-class DissolveClusters(HyperrealRequestHandler):
-    def post(self):
-        """
-        Create a new cluster from the given features.
-
-        """
-
-        # Each feature is a bundled url string (double layered, to let us address
-        # arbitrary queries as features
-        clusters = [int(c) for c in self.get_arguments("c")]
-
-        if clusters:
-            self.feature_clusters.dissolve_clusters(clusters)
+        elif operation == "dissolve-clusters":
+            self.feature_clusters.dissolve_clusters(cluster_ids)
 
             self.redirect(self.reverse_url("browse"))
 
-        else:
-            raise ValueError("no clusters provided")
+        elif operation == "split-clusters":
 
-    get = post
+            for cluster_id in sorted(cluster_ids):
+                self.feature_clusters.split_cluster_into(cluster_id, 2)
 
+            self.redirect(
+                self.reverse_url("browse") + f"?c={cluster_ids[0]}",
+            )
 
-class SplitClusters(HyperrealRequestHandler):
-    def post(self):
-        """
-        Split each of the given clusters into two new clusters.
+        elif operation == "delete-clusters":
+            self.feature_clusters.delete_clusters(cluster_ids)
 
-        Clusters that don't exist will be ignored.
+            self.redirect(
+                self.reverse_url("browse"),
+            )
 
-        """
-        cluster_ids = [int(value) for value in self.get_arguments("c")]
+        elif operation == "refine-clusters":
 
-        for cluster_id in sorted(cluster_ids):
-            self.feature_clusters.split_cluster_into(cluster_id, 2)
-
-        self.redirect(
-            self.reverse_url("browse") + f"?c={cluster_ids[0]}",
-        )
-
-    get = post
-
-
-class DeleteClusters(HyperrealRequestHandler):
-    def post(self):
-        """
-        Delete the given cluster/s from the clustering.
-
-        Clusters that don't exist will be ignored.
-
-        """
-        cluster_ids = [int(value) for value in self.get_arguments("c")]
-
-        self.feature_clusters.delete_clusters(cluster_ids)
-
-        self.redirect(
-            self.reverse_url("browse"),
-        )
-
-    get = post
-
-
-class RefineClusters(HyperrealRequestHandler):
-    def post(self):
-        """
-        Refine the selected clusters for a certain number of iterations.
-
-        If no clusters are provided, the whole clustering will be refined.
-
-        Clusters that don't exist will be ignored.
-
-        """
-        cluster_ids = [int(value) for value in self.get_arguments("c")]
-
-        if cluster_ids:
-            sampling_rate = 0
-        else:
-            cluster_ids = self.feature_clusters.cluster_ids
             sampling_rate = None
+            return_cluster_id = None
 
-        self.feature_clusters.refine_clustering(
-            cluster_ids, iterations=10, sampling_rate=sampling_rate
-        )
+            if cluster_ids:
+                sampling_rate = 0
+                return_cluster_id = cluster_ids[0]
+            else:
+                cluster_ids = self.feature_clusters.cluster_ids
 
-        self.redirect(
-            self.reverse_url("browse"),
-        )
+            self.feature_clusters.refine_clustering(
+                cluster_ids, iterations=10, sampling_rate=sampling_rate
+            )
 
-    get = post
+            return_url = self.reverse_url("browse")
+            if return_cluster_id is not None:
+                return_url += f"?c={return_cluster_id}"
+
+            self.redirect(return_url)
+
+        elif operation == "new-search":
+            # This is a little fiddly, we're basically pulling out the old query
+            # value, and the operation, creating a query string for just the new stuff.
+            # We could also just recreate this from the features and clusters, but
+            # it's all already there in the arguments...
+            args = self.request.arguments.copy()
+
+            # reset the query and operation to empty
+            args["query"] = [b""]
+            args["operation"] = [b""]
+
+            query_string = urlencode(
+                [(key, val) for key, values in args.items() for val in values]
+            )
+
+            self.redirect(self.reverse_url("browse") + "?" + query_string)
+
+        elif operation == "add-to-search":
+
+            args = self.request.arguments.copy()
+
+            # reset the operation only to empty
+            args["operation"] = [b""]
+
+            # re-encode the query string to pass it through to the browse interface.
+            query_string = urlencode(
+                [(key, val) for key, values in args.items() for val in values]
+            )
+
+            self.redirect(self.reverse_url("browse") + "?" + query_string)
 
 
 def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
@@ -822,34 +790,7 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
                 name="browse-new-query",
             ),
             tornado.web.url(
-                rf"{base_path}/cluster/create/",
-                CreateCluster,
-                name="create-cluster",
-            ),
-            tornado.web.url(
-                rf"{base_path}/cluster/merge/",
-                MergeClusters,
-                name="merge-clusters",
-            ),
-            tornado.web.url(
-                rf"{base_path}/cluster/dissolve/",
-                DissolveClusters,
-                name="dissolve-clusters",
-            ),
-            tornado.web.url(
-                rf"{base_path}/cluster/split/",
-                SplitClusters,
-                name="split-clusters",
-            ),
-            tornado.web.url(
-                rf"{base_path}/cluster/refine/",
-                RefineClusters,
-                name="refine-clusters",
-            ),
-            tornado.web.url(
-                rf"{base_path}/cluster/delete/",
-                DeleteClusters,
-                name="delete-clusters",
+                rf"{base_path}/edit/", EditQueriesAndClusters, name="edit-model"
             ),
         ],
         hyperreal_idx=hyperreal_idx,
