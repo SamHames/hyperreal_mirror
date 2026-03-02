@@ -449,7 +449,12 @@ class FeatureClustering(IndexPlugin):
 
         return {
             field
-            for field, (_, _, cardinality) in self.idx.field_handlers.items()
+            for field, (
+                _,
+                _,
+                cardinality,
+                _,
+            ) in self.idx.field_handlers.items()
             if cardinality > 1
         }
 

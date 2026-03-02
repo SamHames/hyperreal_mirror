@@ -293,7 +293,8 @@ class HyperrealIndex:
                 SELECT 
                     field, 
                     value_handler_name, 
-                    max_value_count, 
+                    max_value_count,
+                    max_location_count, 
                     range_encodable
                 from field_summary
                 """
@@ -301,12 +302,23 @@ class HyperrealIndex:
 
             _field_handlers = {}
 
-            for field, name, max_value_count, range_encodable in field_details:
+            for (
+                field,
+                name,
+                max_value_count,
+                max_location_count,
+                range_encodable,
+            ) in field_details:
                 handler = self.corpus.name_handlers[name]
 
                 range_encoded = (max_value_count, range_encodable) == (1, 1)
 
-                _field_handlers[field] = (handler, range_encoded, max_value_count)
+                _field_handlers[field] = (
+                    handler,
+                    range_encoded,
+                    max_value_count,
+                    max_location_count,
+                )
 
             self._field_handlers = _field_handlers
 
@@ -701,7 +713,7 @@ class HyperrealIndex:
 
         """
 
-        handler, range_encoded, _ = self.field_handlers[field]
+        handler, range_encoded, _, _ = self.field_handlers[field]
 
         features = {}
 
@@ -811,7 +823,7 @@ class HyperrealIndex:
         value_spec = feature[1:]
 
         try:
-            handler, range_encoded, _ = self.field_handlers[field]
+            handler, range_encoded, _, _ = self.field_handlers[field]
         except KeyError:
             raise KeyError(f"Field '{field}' does not exist on this index.")
 
@@ -1084,7 +1096,7 @@ class HyperrealIndex:
         if field not in self.field_handlers:
             raise ValueError(f"Field '{field}' does not exist on this index.")
 
-        handler, _, _ = self.field_handlers[field]
+        handler = self.field_handlers[field][0]
 
         for feature in features:
             if len(feature) == 3:
