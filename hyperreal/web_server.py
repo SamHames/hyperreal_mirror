@@ -619,25 +619,6 @@ class BrowseClusters(HyperrealRequestHandler):
         )
 
 
-class NewQueryBrowseClusters(HyperrealRequestHandler):
-    def get(self):
-        """
-        Redirect back to browse to start a new one without the current query.
-
-        """
-
-        args = self.request.arguments.copy()
-
-        # reset the query to empty
-        args["query"] = [b""]
-
-        query_string = urlencode(
-            [(key, val) for key, values in args.items() for val in values]
-        )
-
-        self.redirect(self.reverse_url("browse") + "?" + query_string)
-
-
 class Search(HyperrealRequestHandler):
     def get(self):
         search_features = []
@@ -784,11 +765,6 @@ def make_index_server(hyperreal_idx: HyperrealIndex, base_path=""):
             ),
             tornado.web.url(rf"{base_path}/browse/", BrowseClusters, name="browse"),
             tornado.web.url(rf"{base_path}/search/", Search, name="search"),
-            tornado.web.url(
-                rf"{base_path}/browse/new",
-                NewQueryBrowseClusters,
-                name="browse-new-query",
-            ),
             tornado.web.url(
                 rf"{base_path}/edit/", EditQueriesAndClusters, name="edit-model"
             ),
