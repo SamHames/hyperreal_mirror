@@ -330,13 +330,36 @@ def cluster_navigation(browse_url, cluster_ids, selected=None):
     )
 
 
-def generate_search(search_url, search_fields):
-    return h("form", method="get", action=search_url)(
-        h("select", name="search-field")(
+def generate_search(search_url, search_fields, current_query=None):
+    q = None
+
+    if current_query:
+        q = (h("input", type="hidden", name="query", value=current_query)(),)
+
+    operators = (
+        h("select", name="operator", id="search-operators")(
+            h("option", value=op)(op) for op in ["disjunction", "conjunction", "phrase"]
+        ),
+    )
+
+    return h("form", method="get", action=search_url, klass="cluster")(
+        q,
+        h("label", for_="search-field")("Search field:"),
+        h("select", name="search-field", id="search-field")(
             h("option", value=field)(field) for field in search_fields
         ),
-        h("input", type="text", name="search-value")(),
+        h("label", for_="search-value")("for:"),
+        h("input", type="text", name="search-value", id="search-value")(),
+        h("label", for_="search-operators")("using operator:"),
+        operators,
         h("button", type="submit")("Search"),
+        h(
+            "input",
+            type="checkbox",
+            name="add-to-current-query",
+            id="add-to-current-query",
+        )(),
+        h("label", for_="add-to-current-query")("Add to currenty query"),
     )
 
 
@@ -371,6 +394,7 @@ def full_page(
     body_columns,
     search_url=None,
     search_fields=None,
+    search_current_query=None,
     body_header=None,
     sub_nav_links=None,
     sub_nav_label=None,
@@ -380,7 +404,9 @@ def full_page(
 
     search = None
     if search_url:
-        search = generate_search(search_url, search_fields)
+        search = generate_search(
+            search_url, search_fields, current_query=search_current_query
+        )
 
     nav_links = [
         ("Index Overview", reverse_url("home")),

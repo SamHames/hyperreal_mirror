@@ -374,9 +374,10 @@ class BrowseClusters(HyperrealRequestHandler):
             current_query = [clause for clause in dedup_query_clauses if clause]
             current_query.append(new_clause[0])
 
+        current_query_string = dnf_query_to_query_string(self.idx, current_query)
         current_query_encode = (
             "query",
-            dnf_query_to_query_string(self.idx, current_query),
+            current_query_string,
         )
 
         # Keep track of current query selections so we can return to this view via
@@ -615,6 +616,7 @@ class BrowseClusters(HyperrealRequestHandler):
                     edit_form,
                     cluster_nav,
                 ),
+                search_current_query=current_query_string,
             )
         )
 
@@ -623,20 +625,51 @@ class Search(HyperrealRequestHandler):
     def get(self):
         search_features = []
 
+        current_query = self.get_argument("query", "", strip=False)
         search_field = self.get_argument("search-field", strip=False)
         search_value = self.get_argument("search-value", strip=False)
+        query_operator = self.get_argument("operator", "disjunction")
+        add_to_current = bool(self.get_argument("add-to-current-query", ""))
 
         tokeniser = self.idx.search_fields[search_field]
         # TODO: tokenise should be optional? Default should be to use the field
         # value handler on the given field.
+
+        # Tokenise this field
         search_tokens = tokeniser(search_value)
 
-        for value in search_tokens:
-            search_features.append(
-                ("f", self.idx.feature_to_querystring((search_field, value)))
-            )
+        # Convert to actual features.
+        search_features = (
+            ("f", self.idx.feature_to_querystring((search_field, value)))
+            for value in search_tokens
+        )
 
-        self.redirect(self.reverse_url("browse") + "?" + urlencode(search_features))
+        # Wipe current query if needed
+        if not add_to_current:
+            current_query = ""
+
+        query_features = [("query", current_query)]
+
+        # Then decide how to construct the based on the options provided
+        if query_operator == "disjunction":
+            query_features.extend(search_features)
+
+        elif query_operator == "conjunction":
+            # Have to modify the current feature, can't just rely on the handling of new
+            # features.
+            new_clause = []
+
+            for f in search_features:
+                new_clause.extend((f, ("g", 1)))
+
+            query_features = [("query", current_query + "&" + urlencode(new_clause))]
+
+        elif query_operator == "phrase":
+            pass
+        else:
+            raise ValueError(f"Unsupported operator {operator}")
+
+        self.redirect(self.reverse_url("browse") + "?" + urlencode(query_features))
 
 
 class EditQueriesAndClusters(HyperrealRequestHandler):
