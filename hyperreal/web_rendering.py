@@ -336,9 +336,19 @@ def generate_search(search_url, search_fields, current_query=None):
     if current_query:
         q = (h("input", type="hidden", name="query", value=current_query)(),)
 
+    all_ops = [
+        (
+            "OR",
+            "disjunction",
+        ),
+        (
+            "AND",
+            "conjunction",
+        ),
+    ]
     operators = (
         h("select", name="operator", id="search-operators")(
-            h("option", value=op)(op) for op in ["disjunction", "conjunction", "phrase"]
+            h("option", value=op)(disp) for disp, op in all_ops
         ),
     )
 

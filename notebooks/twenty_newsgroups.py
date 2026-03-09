@@ -597,7 +597,7 @@ if not clustering.cluster_ids:
     # Refine the clustering for a small number of iterations - we could go for longer,
     # but it usually doesn't matter as you'll spend the same amount of time examining
     # the output either way.
-    clustering.refine_clustering(iterations=50)
+    clustering.refine_clustering(iterations=100)
 
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")
 

@@ -1138,7 +1138,7 @@ class HyperrealIndex:
 
         The set of features must all be on the same field. The features will be
         interpreted as the individual features of a phrase, in the iteration order of
-        a container.
+        the container.
 
         """
 
