@@ -35,7 +35,7 @@ def format_si_magnitude(number):
 def render_feature_group(
     feature_stats,
     footer=None,
-    display_docs=True,
+    display_docs=False,
     display_hits=True,
     select_form_id=None,
     select_form_prefix="",
@@ -145,7 +145,7 @@ def render_feature_group(
 def render_feature_clustering(
     feature_clustering,
     cluster_stats,
-    display_docs=True,
+    display_docs=False,
     display_hits=True,
     select_form_id=None,
     footer=None,
