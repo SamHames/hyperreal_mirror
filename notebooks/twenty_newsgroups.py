@@ -747,31 +747,17 @@ newsgroups_idx.facets = [
 newsgroups_idx.search_fields = {"body": tokenise, "subject": tokenise}
 
 try:
+    import os
+
+    jupyter_hub_service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+    url_base = jupyter_hub_service_prefix + "proxy/absolute/9999"
+
     loop = asyncio.get_running_loop()
-    task = loop.create_task(
-        serve_index(newsgroups_idx, base_path="/proxy/absolute/9999")
-    )
+    task = loop.create_task(serve_index(convo_idx, base_path=url_base))
+
+    display(h("a", href=url_base + "/browse/")("Browse Twenty Newsgroups"))
 
 except RuntimeError:
     loop = asyncio.new_event_loop()
     task = loop.create_task(serve_index(newsgroups_idx))
     loop.run_until_complete(task)
-
-
-# -
-
-# # Launch a Server to Interactively Explore This Model
-#
-# Having seen the basic building blocks of what an index can do, let's explore this
-# collection through the web interface.
-
-# for cluster_id in range(100):
-included_features = {
-    f for cluster_id in clustering.cluster_ids for f in clustering.cluster_features(c)
-}
-to_add = {
-    f for f in newsgroups_idx.field_features("body", min_docs=10)
-} - included_features
-for c, features in clustering._propose_split_using_current_clusters(to_add).items():
-    print(c, " ".join(f[1] for f in features))
-    print()
