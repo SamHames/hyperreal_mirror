@@ -99,12 +99,16 @@ display(
 # %% [markdown]
 # # Overview of the Dataset
 #
-# This dataset is organised as twenty folders, each containing approximately 1000 files. If you look at one of the files in a text editor (as this has no file extension, you may
-# need to right click and open with notepad or similar) you will see that it contains two parts:
+# This dataset is organised as twenty folders, each containing approximately 1000 files.
+# If you look at one of the files in a text editor (as this has no file extension, you
+# may need to right click and open with notepad or similar) you will see that it
+# contains two parts:
 #
-# 1. A set of header lines that contain information about this message, in the format header-name: header-content.
-#    This includes things like the `Subject:` line of the message and the `Date:` it was sent.
-# 2. After a blank line, there is the body of the message. There is no other specification for how this is organised.
+# 1. A set of header lines that contain information about this message, in the format
+#    header-name: header-content. This includes things like the `Subject:` line of the
+#    message and the `Date:` it was sent.
+# 2. After a blank line, there is the body of the message. There is no other
+#    specification for how this is organised.
 #
 # This data format is heavily based on email. The relevant standard (at
 # the time these materials were created) was
@@ -120,6 +124,33 @@ with zipfile.ZipFile(data_loc, "r") as newsgroups_zip:
     # files.
     print(example_post_content.decode("latin1"))
 
+# %% [markdown]
+# # Working Notes for the Following Sections
+#
+# Note that this implementation is a snapshot of the end of a long process and
+# investigation. It didn't start like this: it was built incrementally as decisions
+# were made about how to handle different complexities in the collected materials. The
+# simplest decisions were about how to handle the various headers: the most difficult
+# were how to contend with the body of posts as text-as-digital-media with a wide range
+# of conventions for communication.
+#
+# While this is all a lot of decision making, it's very important to understand that
+# this is not a complete or exact rendering: there are still aspects that haven't been
+# considered here that are represented in the message: this doesn't include, for example
+# the threaded nature of posts in reply to other posts.
+#
+# To make this whole thing more comprehensible, I'll break it down to smaller chunks
+# with a more comprehensible flow, such as:
+#
+# 1. Interpreting the structure of a newsgroup post.
+# 3. Deciding how to render newsgroup messages for reading in the web UI.
+# 2. Working with the text of a message: handling conventionalised communication
+#    structures like quoting, signatures and more. This will also include tokenisation.
+# 4. Putting this together as a HyperrealCorpus
+#    - What to index and how to index it
+#    - What to display and how
+#    - Accessing components of the messages efficiently on demand
+#    - A more instructional overview of the core interface and why it's like that.
 
 # %% [markdown]
 # # Describing the Components of the Twenty Newsgroups
@@ -465,9 +496,10 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
                     for key in display_fields
                     if key in doc
                 ],
-                (h("div")(h("dt")("body"), h("dd")(h('pre')(doc_body)))),
+                (h("div")(h("dt")("body"), h("dd")(h("pre")(doc_body)))),
             ),
         )
+
 
 # Actually initialise this corpus
 newsgroups_corpus = TwentyNewsgroups()
