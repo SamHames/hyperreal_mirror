@@ -1,17 +1,29 @@
-# # Example: Twenty Newsgroups
+# %% [markdown]
+# # Worked Example: The Twenty Newsgroups
 #
-# The twenty newsgroups dataset is a 'classic' dataset, and one of the first examples of
-# a large scale text dataset. This example takes one version of the twenty newsgroups
-# dataset and creates an explorable version of the dataset. Note that this is the final
-# version outline in [the other pedagogical one].
+# The Twenty Newsgroups dataset is a 'classic' machine learning dataset, and an early
+# example of a widely shared large scale text dataset.
+#
+# This notebook:
+#
+# - Downloads the source data
+# - Reorganises how it is stored to make it more accessible for poking around and computational analysis.
+# - Creates a HyperrealCorpus specific for this dataset, including handling all of the
+#   details of working through newsgroup messages (including headers/metadata)
+# - Creates a customised display format specifically for newsgroups messages
+# - Uses the Hyperreal toolkit to create a clustering of words occuring in the body of
+#   messages, and uses the web UI to serve this interface.
 
-# # Preparation I - downloading the data
+# %% [markdown]
+# # Preparation I - Downloading the Data
 #
 # Let's start by downloading the data, if we haven't already.
 
-# +
+# %%
 from pathlib import Path
 from urllib.request import urlretrieve
+
+from IPython.display import HTML
 
 # Where the data is coming from
 data_url = "http://qwone.com/~jason/20Newsgroups/20news-19997.tar.gz"
@@ -28,23 +40,25 @@ else:
     temp_location = tar_loc.with_suffix(".temp")
     urlretrieve(data_url, temp_location)
     temp_location.rename(tar_loc)
-# -
 
 
-# # Preparation II - transforming the data to a more convenient container.
+# %% [markdown]
+# # Preparation II - Transform to a More Convenient Zip File
 #
-# The original format for this data is a [gzipped]() [tar file](). This is a bit
-# inconvenient to use directly, both in general and for our purposes, so we'll first
-# convert it to a [zip file](). We could also have extracted the files from the
-# archive, but even with fast hardware dealing with lots of small files is usually a
-# worst case scenario for performance (plus the zip is much easier to download and poke
-# at than 20,000 individual files).
+# The original format for this data is a [gzipped](https://en.wikipedia.org/wiki/Gzip)
+# [tar file](https://www.loc.gov/preservation/digital/formats/fdd/fdd000531.shtml). This is a bit
+# inefficient to use directly, especially since we want to access single
+# files at a time. We'll therefore convert it to a zip file.
+#
+# We could also have extracted the files from the archive, but even with fast hardware
+# dealing with lots of small files is usually slower than dealing with a few large files
+# (plus the zip is much easier to download and poke at than 20,000 individual files).
 #
 # Note that we're not trying to preserve anything other than the structure and the file
-# content - that is, there is plenty of other metadata present that we're going to
-# ignore.
+# content - that is, there might be other file information present that we're going
+# to ignore and just focus on the content of the files themselves.
 
-# +
+# %%
 import tarfile
 import zipfile
 
@@ -64,17 +78,51 @@ else:
             compression=zipfile.ZIP_DEFLATED,
             compresslevel=9,
         ) as zip_data:
+            # For every every member of the source file
             for member_info in tar_file:
+                # Check if it's a file
                 if member_info.isfile():
+                    # And if it is a file, extract it from the tar
+                    # and write it to the same location in the zip.
                     contents = tar_file.extractfile(member_info).read()
                     path = member_info.name
                     zip_data.writestr(path, contents)
 
     temp_loc.rename(data_loc)
-# -
+
+display(
+    HTML(
+        '<a href="data/twenty_newsgroups/20news-19997.zip" download="20news-19997.zip">Download the prepared zip file</a>'
+    )
+)
+
+# %% [markdown]
+# # Overview of the Dataset
+#
+# This dataset is organised as twenty folders, each containing approximately 1000 files. If you look at one of the files in a text editor (as this has no file extension, you may
+# need to right click and open with notepad or similar) you will see that it contains two parts:
+#
+# 1. A set of header lines that contain information about this message, in the format header-name: header-content.
+#    This includes things like the `Subject:` line of the message and the `Date:` it was sent.
+# 2. After a blank line, there is the body of the message. There is no other specification for how this is organised.
+#
+# This data format is heavily based on email. The relevant standard (at
+# the time these materials were created) was
+# [RFC 1036 - Standard for Interchange of USENET Messages](https://www.rfc-editor.org/rfc/rfc1036)
+
+# %%
+# Let's take a quick look at one of the files in it's entirety.
+with zipfile.ZipFile(data_loc, "r") as newsgroups_zip:
+    example_post_file = "20_newsgroups/misc.forsale/74150"
+    # Read the contents of the file from the zip
+    example_post_content = newsgroups_zip.read(example_post_file)
+    # Display the contents. Note that we need to choose an older text encoding for these
+    # files.
+    print(example_post_content.decode("latin1"))
 
 
-# # Making a Corpus for Twenty Newsgroups: First Pass
+# %% [markdown]
+# # Describing the Components of the Twenty Newsgroups
 #
 # Link to the standard kinds of preprocessing for twenty newsgroups, and why we don't
 # want to use them.
@@ -103,8 +151,16 @@ else:
 # showing the simple starting point, and progressing to a more refined version -
 # typically you'd just modify your existing definition instead of keeping all versions
 # together [signpost version control].
+#
+# This section really needs to be broken down:
+#
+# - Text processing and decision making
+# - Handling all the exceptions with the text documents
+# - Rendering messages nicely for display/reading in the web context.
+#
 
-# +
+
+# %%
 import collections
 import functools
 import re
@@ -409,61 +465,41 @@ class TwentyNewsgroups(corpus.HyperrealCorpus):
                     for key in display_fields
                     if key in doc
                 ],
-                (h("div")(h("dt")("body"), h("dd")(doc_body))),
+                (h("div")(h("dt")("body"), h("dd")(h('pre')(doc_body)))),
             ),
         )
 
-
+# Actually initialise this corpus
 newsgroups_corpus = TwentyNewsgroups()
 
-
-# for line, count in line_counter.items():
-#     if count > 2:
-#         print(line, count)
-
-# print(sum(line_counter.values()))
-# print(sum(c for c in line_counter.values() if c > 2))
-# assert False
-
-
-# repeated lines:
-
-# for doc, lines in newsgroups_corpus.match_all_lines("wrote:$"):
-#     print(doc)
-#     for line in lines:
-#         print(line)
-#     print()
-# -
-
+# %% [markdown]
 # # Using a Corpus
 #
 # Note that defining a corpus doesn't cause anything to happen by itself - it's like
-# we've written a set of instructions, but haven't actually asked that these
-# instructions be run yet. So let's actually create a concrete [instance]() of our
+# we've written a set of instructions, but haven't yet asked that these
+# instructions be run. So let's actually create a concrete [instance]() of our
 # corpus, and use that to do some of the basic things with our corpus.
-#
 
-# +
-# from IPython.display import display_html
+# %%
+from IPython.display import display_html
 
-# newsgroups_corpus = TwentyNewsgroups()
-# keys = list(newsgroups_corpus.all_doc_keys())[:1]
+keys = list(newsgroups_corpus.all_doc_keys())[:5]
 
-# for key, doc in newsgroups_corpus.html_docs(keys):
-#     display_html(doc)
+for key, doc in newsgroups_corpus.docs(keys):
+    display_html(newsgroups_corpus.doc_to_html(doc))
 
-# -
 
+# %% [markdown]
 # # Creating an Index
 #
 # You might have created a corpus, and thought, so what? And you'd be more or less
 # correct - the corpus describes the specifics of your document collection, but doesn't
 # really let you do much with it. Most of the time, instead of using the corpus
-# directly, you'll want to create a corpus and pass it to an Index to actually do
-# something more exciting.
+# directly, you'll want to create a corpus and pass it to a HyperrealIndex to actually
+# do something more interesting with it.
 #
 
-# +
+# %%
 from datetime import date
 
 from loky import get_reusable_executor
@@ -480,100 +516,12 @@ newsgroups_idx = HyperrealIndex(index_path, newsgroups_corpus, pool)
 if not newsgroups_idx.indexed_field_summary:
     newsgroups_idx.rebuild(max_workers=10, doc_batch_size=2000, passage_size=16)
 
-# print(
-#     sum(
-#         len(doc["body"])
-#         for _, _, doc in newsgroups_idx.indexable_docs(newsgroups_idx.all_doc_ids())
-#     )
-# )
 
+# %% [markdown]
+# # Clustering Features for Search and Navigation
+#
 
-# ngs = newsgroups_idx.field_features("newsgroup")
-
-# pivot = newsgroups_idx.facet_features(ngs, newsgroups_idx[("body", "sanctions")][0])
-
-# renderer = FeatureStatsRenderer(
-#     newsgroups_idx,
-#     order_by_stat="doc_count",
-#     display_stats=["jaccard_similarity"],
-#     top_k=40,
-# )
-
-# renderer.to_rows(pivot)
-
-##
-
-# +
-
-
-# assert False
-
-# print(newsgroups_idx.total_doc_count, "doc_count")
-
-# test_features = [
-#     ("body", "banana"),
-#     ("body", "ban", "ban\U0010ffff"),
-#     ("date", date(1993, 5, 1)),
-#     ("date", date(1993, 4, 1), date(1993, 4, 15)),
-# ]
-
-# for feature in test_features:
-#     search_results = newsgroups_idx[feature]
-#     print(feature, len(search_results[0]), search_results[1:])
-
-# phrase = [("body", "to"), ("body", "be")]
-
-# # print(len(newsgroups_idx.match_any(body, dates)))
-# # print(len(newsgroups_idx.match_all(body, dates)))
-
-# phrase_docs = newsgroups_idx.match_phrase(*phrase)
-
-# print(len(phrase_docs))
-
-# for _, _, doc in newsgroups_idx.docs(phrase_docs[:3]):
-#     print(doc["body"])
-
-
-# q = query.MatchAny(test_features)
-
-# ser = list(q.to_index_rows(newsgroups_idx))
-# print(ser)
-
-# newsgroups_idx.defined_queries = {"match_any": query.MatchAny}
-
-# deser = query.deserialize(newsgroups_idx, ser)
-# print(deser)
-
-# print(deser.evaluate(newsgroups_idx))
-
-# assert False
-
-
-# ## TODO: demonstrate querying and faceting framework.
-# # -
-
-# # # Create a Clustering of Features (Words)
-# #
-# # Now let's do something more interesting and create a `clustering` of the features in
-# # this collection of documents.
-
-# # +
-
-# # feature_cluster is a default plugin on the index, we're just giving it a shorter name
-# newsgroups_clusters = newsgroups_idx.p.feature_clusters
-
-# # Select some features from the index that we'll use to make a clustering. We'll choose
-# # from the 'subject' and the 'body'. Since subject and body lines of messages are both
-# # discursively and functionally different we'll choose to create a clustering that
-# # doesn't mix the two groups.
-
-
-# # We're going to
-# # -
-
-
-# # # What can we do with a Clustering?
-# #
+# %%
 import random
 import time
 
@@ -602,14 +550,59 @@ if not clustering.cluster_ids:
     print(f"Clustering took: {time.monotonic() - start_time:.2f}")
 
 
-# +
-# Visualisation: a table of closest clusters and features for each newsgroup.
-#
-#
+# %%
+import asyncio
 
-from tinyhtml import h
 from hyperreal.index_core import TableFilter
+from hyperreal.web_server import serve_index
 
+
+print("launching web server")
+
+newsgroups_idx.facets = [
+    (
+        "Newsgroups",
+        newsgroups_idx.field_features("newsgroup", min_docs=1),
+        TableFilter(order_by="hits", first_k=20, keep_above=0),
+    ),
+    (
+        "Organisations",
+        newsgroups_idx.field_features("organization"),
+        TableFilter(order_by="hits", first_k=20, keep_above=0),
+    ),
+    (
+        "Posters",
+        newsgroups_idx.field_features("from"),
+        TableFilter(order_by="hits", first_k=20, keep_above=0),
+    ),
+]
+
+newsgroups_idx.search_fields = {"body": tokenise, "subject": tokenise}
+
+try:
+    import os
+
+    jupyter_hub_service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+    url_base = jupyter_hub_service_prefix + "proxy/absolute/9999"
+
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(serve_index(newsgroups_idx, base_path=url_base))
+
+    display_link = h("a", href=url_base + "/browse/")("Browse Twenty Newsgroups")
+    display(display_link)
+
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    task = loop.create_task(serve_index(newsgroups_idx))
+    loop.run_until_complete(task)
+
+
+# %% [markdown]
+# # Tabulation: a table of closest clusters and features for each newsgroup.
+#
+#
+
+# %%
 result_path = Path("results")
 result_path.mkdir(exist_ok=True)
 
@@ -668,11 +661,11 @@ with open(result_path / "twenty_newsgroups_top_clusters.html", "w") as table_out
     table_out.write(visualisation_table)
 
 
-# +
-# Comparison table: keywords for each newsgroups.
-#
+# %% [markdown]
+# # Tabulation: comparison keywords for each newsgroups.
 #
 
+# %%
 import heapq
 import math
 
@@ -717,47 +710,3 @@ visualisation_table = h("table")(header, h("tbody")(table_rows)).render()
 
 with open(result_path / "twenty_newsgroups_top_keywords.html", "w") as table_out:
     table_out.write(visualisation_table)
-
-
-# +
-import asyncio
-from hyperreal.web_server import serve_index
-
-
-print("launching web server")
-
-newsgroups_idx.facets = [
-    (
-        "Newsgroups",
-        newsgroups_idx.field_features("newsgroup", min_docs=1),
-        TableFilter(order_by="hits", first_k=20, keep_above=0),
-    ),
-    (
-        "Organisations",
-        newsgroups_idx.field_features("organization"),
-        TableFilter(order_by="hits", first_k=20, keep_above=0),
-    ),
-    (
-        "Posters",
-        newsgroups_idx.field_features("from"),
-        TableFilter(order_by="hits", first_k=20, keep_above=0),
-    ),
-]
-
-newsgroups_idx.search_fields = {"body": tokenise, "subject": tokenise}
-
-try:
-    import os
-
-    jupyter_hub_service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
-    url_base = jupyter_hub_service_prefix + "proxy/absolute/9999"
-
-    loop = asyncio.get_running_loop()
-    task = loop.create_task(serve_index(convo_idx, base_path=url_base))
-
-    display(h("a", href=url_base + "/browse/")("Browse Twenty Newsgroups"))
-
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    task = loop.create_task(serve_index(newsgroups_idx))
-    loop.run_until_complete(task)
