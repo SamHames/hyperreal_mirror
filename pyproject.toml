@@ -3,7 +3,8 @@ name = "hyperreal"
 description = "Hyperreal is a library and tool for intepretive topic modelling."
 readme = "README.md"
 requires-python = ">=3.10.0"
-license = {file = "LICENSE.txt"}
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE.txt"]
 authors = [
   {name = "Sam Hames"},
   {name = "Kateryna Kasianenko"}
@@ -11,7 +12,6 @@ authors = [
 classifiers=[
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
   "pyroaring>=1.0.0",
