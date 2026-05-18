@@ -34,16 +34,17 @@
 
 
 # %% [markdown]
-# ## Upload your transcripts
+# ## Run this notebook and upload your transcripts
 #
-# Run the cell of code below (`# RUN ME`) to create a button to upload your zip file.
+# Run this notebook by hitting the ▶▶ button in the menu above - you'll be asked if you
+# want to restart this notebook - answer 'yes' and the notebook will be run.
 #
-# You can run the cell by placing your cursor inside it by clicking on the text of the cell, then clicking the play button ("▶") in the top menu bar.
-#
-# When the button appears click on it to select your zip file.
+# Upload your transcripts in a zip file with the "click here to upload your transcripts"
+# button, then hit the "Process transcripts" button to run the process. Once the process
+# is complete there will be a link generated which will take you to a separate page with
+# the transcript viewer available.
 
 # %%
-# RUN ME
 from ipywidgets import FileUpload, Layout, Output, Button, VBox
 from process_transcripts import run_process_from_jupyter
 
