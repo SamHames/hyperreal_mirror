@@ -1046,13 +1046,14 @@ def _refine_clustering(
                 total_possible_moves += possible_moves
                 total_applied_moves += applied_moves
 
-            print(
-                iteration,
-                combined_objective,
-                total_possible_moves,
-                total_applied_moves,
-                len(terminated),
-            )
+            # TODO: proper logging so that this is controllable.
+            # print(
+            #     iteration,
+            #     combined_objective,
+            #     total_possible_moves,
+            #     total_applied_moves,
+            #     len(terminated),
+            # )
 
         # Shut down the workers
         for _ in range(len(workers)):
