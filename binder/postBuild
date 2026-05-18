@@ -1,3 +1,6 @@
 # Bake twenty newsgroups data into the image
 mkdir -p notebooks/data/twenty_newsgroups
 curl -o notebooks/data/twenty_newsgroups/20news-19997.tar.gz http://qwone.com/~jason/20Newsgroups/20news-19997.tar.gz
+
+# Make sure to run jupytext config pointing at the actual config directory
+JUPYTER_CONFIG_DIR=jupyter_config/ jupytext-config set-default-viewer
