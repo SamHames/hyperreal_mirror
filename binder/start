@@ -1,0 +1,5 @@
+#!/bin/bash
+
+set -e
+export JUPYTER_CONFIG_DIR=$HOME/jupyter_config/
+exec "$@"
