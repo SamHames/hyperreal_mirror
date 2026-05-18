@@ -369,7 +369,7 @@ def generate_search(search_url, search_fields, current_query=None):
             name="add-to-current-query",
             id="add-to-current-query",
         )(),
-        h("label", for_="add-to-current-query")("Add to currenty query"),
+        h("label", for_="add-to-current-query")("Add to current query"),
     )
 
 
