@@ -44,6 +44,16 @@
 # Upload your spreadsheet (`.xlsx`) file with the "Upload your spreadsheet" button.
 # Follow the prompts to make choices about what to include in your analysis.
 
+
+# Workflow notes:
+# Choose the text table: chooses the granularity of documents
+# Select one or more columns as the main documents
+# Can infer relational properties from column names, or can have some extra syntax
+# for linking together?
+# Choose from relational properties and properties in the main table as the key.
+
+# MVP: Choose a table and text columns.
+
 # %%
 from ipywidgets import FileUpload, Layout, Output, Button, VBox
 from spreadsheet_corpus import SpreadsheetCorpus
@@ -51,7 +61,7 @@ from spreadsheet_corpus import SpreadsheetCorpus
 upload_spreadsheet = FileUpload(
     accept=".xlsx",
     description="Upload your spreadsheet",
-    layout=Layout(width="50%", height="80px"),
+    layout=Layout(width="90%", height="2lh"),
 )
 display_output = Output()
 
