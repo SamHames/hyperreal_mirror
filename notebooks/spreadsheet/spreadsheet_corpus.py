@@ -246,7 +246,9 @@ class XslxTranscriptCorpus(HyperrealCorpus):
             doc = list(self.docs([key]))[0][1]
 
             header_vals = [doc[-2], doc[-1], doc[-3]]
-            header = h("div", klass="cluster")(h("em")(val) for val in header_vals)
+            header = h("div", klass="cluster result-header")(
+                h("em")(val) for val in header_vals
+            )
 
             context_range = range(max(0, key - 1), min(key + 2, len(self.text_docs)))
 
@@ -263,6 +265,12 @@ class XslxTranscriptCorpus(HyperrealCorpus):
         self, doc_features, display_features, highlight_features
     ):
         return None
+
+    extra_css = """
+        .result-header {
+            font-weight: bold;
+        }
+    """
 
 
 def serve_spreadsheet(spreadsheet):
