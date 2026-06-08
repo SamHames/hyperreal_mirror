@@ -201,9 +201,6 @@ class XslxTranscriptCorpus(HyperrealCorpus):
 
             yield key, tuple((*doc_turn, role, interview_type, location))
 
-    def doc_to_html(self, doc, highlight_features=None):
-        return str(doc)
-
     def doc_to_features(self, doc):
         doc_features = {
             col: ValueSequence(self.tokeniser(doc[self.header_idx[col]] or ""))
@@ -216,11 +213,51 @@ class XslxTranscriptCorpus(HyperrealCorpus):
 
         return doc_features
 
-    # def html_search_results(self, doc_keys, highlight_features=None):
-    #     # This will be where all the search display magic happens. We want customisable
-    #     # display of context as well, and we don't want concordances for this initial
-    #     # use case, so we'll do it with this.
-    #     pass
+    def render_turn(self, doc, highlight_features=None):
+
+        if highlight_features:
+            match_features = {
+                value for field, value in highlight_features if field == "transcription"
+            }
+
+            tokens = self.tokeniser(doc[4])
+            display_tokens = self.display_tokeniser(doc[4])
+
+            display_text = h("span")(
+                (
+                    display_token
+                    if token not in match_features
+                    else h("mark")(display_token)
+                )
+                for token, display_token in zip(tokens, display_tokens)
+            )
+
+        else:
+            display_text = h("span")(doc[4])
+
+        return h("div", klass="cluster")(h("em")(doc[3]), display_text)
+
+    def html_search_results(self, doc_keys, highlight_features=None):
+
+        search_hits = []
+
+        for key in doc_keys:
+
+            doc = list(self.docs([key]))[0][1]
+
+            header_vals = [doc[-2], doc[-1], doc[-3]]
+            header = h("div", klass="cluster")(h("em")(val) for val in header_vals)
+
+            context_range = range(max(0, key - 1), min(key + 2, len(self.text_docs)))
+
+            turns = [
+                self.render_turn(doc, highlight_features=highlight_features)
+                for _, doc in self.docs(context_range)
+            ]
+
+            search_hits.append(h("li", klass="search-hit stack")(header, *turns))
+
+        return h("ul", klass="stack search-results")(search_hits)
 
     def features_to_html_concordance(
         self, doc_features, display_features, highlight_features
