@@ -1,6 +1,9 @@
 """
 A corpus example for tabular data in a spreadsheet.
 
+This is currently a minimum viable example, and is specific to a particular kind of
+spreadsheet.
+
 Limitations:
 
 This isn't appropriate for large datasets:
@@ -11,20 +14,25 @@ pressure if you have a large spreadsheet
 3. Access to rows in the spreadsheet can be slower than data formats that are more
    appropriate for high performance analytics.
 
-
-TODO: Shouldn't I just converge this to an SQLite database instead?
-
 """
 
+import asyncio
 import collections
 import dataclasses as dc
+import os
 import pathlib
+import random
+import re
 import typing
 
 from openpyxl import load_workbook
+from loky import get_reusable_executor
+from tinyhtml import h
 
 from hyperreal.corpus import HyperrealCorpus
 from hyperreal.field_types import ValueSequence, Value, RangeEncodableValue
+from hyperreal.index_core import HyperrealIndex, TableFilter
+from hyperreal.web_server import serve_index
 
 
 def extract_header(sheet) -> list[str]:
@@ -86,33 +94,48 @@ def identify_spreadsheet_tables(
     return sheet_columns, join_candidates
 
 
-sheet_columns, join_candidates = identify_spreadsheet_tables(
-    "combined_transcripts_2026-06-05.xlsx"
-)
+boundary_regex = re.compile(r"\b|\s+")
+display_regex = re.compile(r"(\b|\s+)")
 
-print(sheet_columns)
 
-for table, join_columns in join_candidates.items():
-    for join_table, columns in join_columns.items():
-        print(table, join_table, columns)
+def tokenise(text):
+    return [t for t in boundary_regex.split(text.lower()) if t]
+
+
+def display_tokenise(text):
+    boundaries = [t for t in display_regex.split(text) if t]
+
+    token_start = 0
+
+    tokens = []
+
+    for token_idx, part in enumerate(boundaries):
+        # If it doesn't match our token boundary, it's a token and needs to be appended,
+        # along with any previous split boundary tokens.
+        if not display_regex.fullmatch(part):
+            tokens.append("".join(boundaries[token_start : token_idx + 1]))
+            token_start = token_idx + 1
+
+    return tokens
 
 
 @dc.dataclass
-class XslxCorpus(HyperrealCorpus):
+class XslxTranscriptCorpus(HyperrealCorpus):
 
-    spreadsheet_path: pathlib.Path | str
-    text_sheet: str
-    text_columns: list[str]
-    tokeniser: typing.Optional = None
-    display_tokeniser: typing.Optional = None
+    spreadsheet: pathlib.Path | str | bytes
+    text_sheet: str = "turn"
+    text_columns: list[str] = dc.field(default_factory=list)
+    tokeniser: typing.Callable[[str], list[str]] = tokenise
+    display_tokeniser: typing.Callable[[str], list[str]] = display_tokenise
 
-    docs: list[tuple] = dc.field(init=False)
+    text_docs: list[tuple] = dc.field(init=False)
     text_col_idx: list[int] = dc.field(init=False)
     header_idx: list[tuple] = dc.field(init=False)
+    lookup_tables: dict[dict] = dc.field(init=False)
 
     def __post_init__(self):
 
-        wb = load_workbook(self.spreadsheet_path)
+        wb = load_workbook(self.spreadsheet)
 
         sheet = wb[self.text_sheet]
 
@@ -125,48 +148,142 @@ class XslxCorpus(HyperrealCorpus):
 
         for col in self.text_columns:
             if col not in self.header_idx:
-                raise ValueError(f"Text column {col} not found in sheet {text_sheet}")
+                raise ValueError(
+                    f"Text column {col} not found in sheet {self.text_sheet}"
+                )
 
         # We'll store the docs as a simple in memory list for now. There's only so many
         # documents we can fit in a spreadsheet after all.
-        self.docs = []
+        self.text_docs = []
 
         for row in all_rows:
-            self.docs.append(row)
+            self.text_docs.append(row)
 
         # Next step: pull out the other tables as little in memory lookups based on the
-        # selected keys.
+        # selected keys. This is currently hard coded rather configurable while I work
+        # out the interface.
+
+        lookup_table_config = {
+            "speaker_role": ("speaker_code",),
+            "transcript_file": ("source_file",),
+        }
+
+        self.lookup_tables = {sheetname: dict() for sheetname in lookup_table_config}
+
+        for sheetname, key_columns in lookup_table_config.items():
+
+            lookup_table = dict()
+
+            sheet = wb[sheetname]
+            all_rows = sheet.values
+            header = next(all_rows)
+            key_col_idx = [header.index(col) for col in key_columns]
+
+            for row in all_rows:
+                lookup_table[tuple(row[col_idx] for col_idx in key_col_idx)] = row
+
+            self.lookup_tables[sheetname] = lookup_table
 
     def __len__(self):
-        return len(self.docs)
+        return len(self.text_docs)
 
     def all_doc_keys(self):
-        return range(len(self.docs))
+        return range(len(self.text_docs))
 
     def docs(self, doc_keys):
         for key in doc_keys:
-            yield key, self.docs[key]
+
+            doc_turn = self.text_docs[key]
+            role = self.lookup_tables["speaker_role"][(doc_turn[3],)][1]
+            interview_type, location = self.lookup_tables["transcript_file"][
+                (doc_turn[0],)
+            ][-2:]
+
+            yield key, tuple((*doc_turn, role, interview_type, location))
+
+    def doc_to_html(self, doc, highlight_features=None):
+        return str(doc)
 
     def doc_to_features(self, doc):
-        return {
-            col: ValueSequence((doc[self.header_idx[col]] or "").split())
+        doc_features = {
+            col: ValueSequence(self.tokeniser(doc[self.header_idx[col]] or ""))
             for col in self.text_columns
         }
 
-    def html_search_results(self, doc_keys, highlight_features=None):
-        # This will be where all the search display magic happens. We want customisable
-        # display of context as well, and we don't want concordances for this initial
-        # use case, so we'll do it with this.
-        pass
+        doc_features["role"] = Value(doc[-3])
+        doc_features["interview_type"] = Value(doc[-2])
+        doc_features["location"] = Value(doc[-1])
+
+        return doc_features
+
+    # def html_search_results(self, doc_keys, highlight_features=None):
+    #     # This will be where all the search display magic happens. We want customisable
+    #     # display of context as well, and we don't want concordances for this initial
+    #     # use case, so we'll do it with this.
+    #     pass
 
     def features_to_html_concordance(
         self, doc_features, display_features, highlight_features
-    ) -> frag:
+    ):
         return None
 
 
-XslxCorpus(
-    spreadsheet_path="combined_transcripts_2026-06-05.xlsx",
-    text_sheet="turn",
-    text_columns=["transcription"],
-)
+def serve_spreadsheet(spreadsheet):
+
+    pool = get_reusable_executor()
+    spreadsheet_corp = XslxTranscriptCorpus(
+        spreadsheet=spreadsheet, text_sheet="turn", text_columns=["transcription"]
+    )
+    spreadsheet_idx = HyperrealIndex("spreadsheet_index.db", spreadsheet_corp, pool)
+
+    print("Indexing documents")
+    spreadsheet_idx.rebuild()
+
+    spreadsheet_idx.search_fields = {"transcription": tokenise}
+
+    # Configure the interface facets and search
+    spreadsheet_idx.facets = [
+        (
+            "Speaker Role",
+            spreadsheet_idx.field_features("role", min_docs=1),
+            TableFilter(order_by="hits", first_k=20, keep_above=0),
+        ),
+        (
+            "Interview Type",
+            spreadsheet_idx.field_features("interview_type", min_docs=1),
+            TableFilter(order_by="hits", keep_above=0),
+        ),
+        (
+            "Location",
+            spreadsheet_idx.field_features("location", min_docs=1),
+            TableFilter(order_by="hits", keep_above=0),
+        ),
+    ]
+
+    print("Creating feature clusters")
+
+    clustering = spreadsheet_idx.plugins["feature_clusters"]
+
+    # Set the state of the RNG to a consistent point.
+    spreadsheet_idx.random_state = random.Random(42)
+
+    # Initialise with a random clustering
+    random_clustering = clustering.initialise_random_clustering(
+        64, min_docs=3, include_fields=["transcription"]
+    )
+
+    clustering.replace_clusters(random_clustering)
+
+    # Refine the clustering for a small number of iterations - we could go for
+    # longer, but it usually doesn't matter as you'll spend the same amount of time
+    # examining the output either way.
+    clustering.refine_clustering(iterations=50)
+
+    jupyter_hub_service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+    url_base = jupyter_hub_service_prefix + "proxy/absolute/9999"
+
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(serve_index(spreadsheet_idx, base_path=url_base))
+
+    display_link = h("a", href=url_base + "/browse/")("Browse your spreadsheet")
+    display(display_link)

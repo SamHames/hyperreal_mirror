@@ -38,25 +38,27 @@
 # %% [markdown]
 # ## Run this notebook and upload your spreadsheet
 #
-# Run this notebook by hitting the ▶▶ button in the menu above - you'll be asked if you
-# want to restart this notebook - answer 'yes' and the notebook will be run.
+# Run this notebook by hitting the `▶▶` button in the menu above - you'll be asked if
+# you want to restart this notebook - answer 'yes' and the notebook will be run.
 #
 # Upload your spreadsheet (`.xlsx`) file with the "Upload your spreadsheet" button.
 # Follow the prompts to make choices about what to include in your analysis.
-
-
+#
+#
 # Workflow notes:
 # Choose the text table: chooses the granularity of documents
 # Select one or more columns as the main documents
 # Can infer relational properties from column names, or can have some extra syntax
 # for linking together?
 # Choose from relational properties and properties in the main table as the key.
-
+#
 # MVP: Choose a table and text columns.
 
 # %%
+from io import BytesIO
+
 from ipywidgets import FileUpload, Layout, Output, Button, VBox
-from spreadsheet_corpus import SpreadsheetCorpus
+from spreadsheet_corpus import serve_spreadsheet
 
 upload_spreadsheet = FileUpload(
     accept=".xlsx",
@@ -65,7 +67,11 @@ upload_spreadsheet = FileUpload(
 )
 display_output = Output()
 
-run_button = Button(description="Process transcripts")
-run_button.on_click(run_process_from_jupyter(upload_zip, display_output))
+def run_process(clicked_button):
+    with display_output:
+        serve_spreadsheet(BytesIO(upload_spreadsheet.value[0].content))
 
-display(VBox([upload_zip, run_button, display_output]))
+run_button = Button(description="Explore spreadsheet")
+run_button.on_click(run_process)
+
+display(VBox([upload_spreadsheet, run_button, display_output]))

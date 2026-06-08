@@ -22,6 +22,15 @@ version="0.7.3.dev1"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "tox", "requests", "pylint", "isort", "hypothesis", "sphinx", "sphinx_autodoc_typehints"]
+# Specific dependencies for testing the notebooks and binder deploy
+binder = [
+  "python-docx",
+  "openpyxl",
+  "ipywidgets",
+  "jupytext",
+  "jupyter-server-proxy",
+  "loky",
+]
 
 [project.urls]
 Repository = "https://hyperreal.app"
