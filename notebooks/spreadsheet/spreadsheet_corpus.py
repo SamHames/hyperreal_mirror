@@ -195,11 +195,10 @@ class XslxTranscriptCorpus(HyperrealCorpus):
 
             doc_turn = self.text_docs[key]
             role = self.lookup_tables["speaker_role"][(doc_turn[3],)][1]
-            interview_type, location = self.lookup_tables["transcript_file"][
-                (doc_turn[0],)
-            ][-2:]
+            interview_details = self.lookup_tables["transcript_file"][(doc_turn[0],)]
+            filename = os.path.split(interview_details[0])[1]
 
-            yield key, tuple((*doc_turn, role, interview_type, location))
+            yield key, tuple((*doc_turn, role, filename, *interview_details[2:]))
 
     def doc_to_features(self, doc):
         doc_features = {
@@ -207,8 +206,10 @@ class XslxTranscriptCorpus(HyperrealCorpus):
             for col in self.text_columns
         }
 
-        doc_features["role"] = Value(doc[-3])
-        doc_features["interview_type"] = Value(doc[-2])
+        doc_features["role"] = Value(doc[-5])
+        doc_features["filename"] = Value(doc[-4])
+        doc_features["interview_type"] = Value(doc[-3] or "<Not assigned>")
+        doc_features["interviewee_type"] = Value(doc[-2] or "<Not assigned>")
         doc_features["location"] = Value(doc[-1])
 
         return doc_features
@@ -220,8 +221,8 @@ class XslxTranscriptCorpus(HyperrealCorpus):
                 value for field, value in highlight_features if field == "transcription"
             }
 
-            tokens = self.tokeniser(doc[4])
-            display_tokens = self.display_tokeniser(doc[4])
+            tokens = self.tokeniser(doc[4] or "")
+            display_tokens = self.display_tokeniser(doc[4] or "")
 
             display_text = h("span")(
                 (
@@ -235,7 +236,15 @@ class XslxTranscriptCorpus(HyperrealCorpus):
         else:
             display_text = h("span")(doc[4])
 
-        return h("div", klass="cluster")(h("em")(doc[3]), display_text)
+        return h("div")(h("span", klass="speaker")(doc[3]), display_text)
+
+    def render_header(self, doc):
+
+        header_vals = doc[-4:]
+
+        return h("div", klass="cluster result-header")(
+            h("span")(val) for val in header_vals
+        )
 
     def html_search_results(self, doc_keys, highlight_features=None):
 
@@ -245,10 +254,7 @@ class XslxTranscriptCorpus(HyperrealCorpus):
 
             doc = list(self.docs([key]))[0][1]
 
-            header_vals = [doc[-2], doc[-1], doc[-3]]
-            header = h("div", klass="cluster result-header")(
-                h("em")(val) for val in header_vals
-            )
+            header = self.render_header(doc)
 
             context_range = range(max(0, key - 1), min(key + 2, len(self.text_docs)))
 
@@ -269,6 +275,20 @@ class XslxTranscriptCorpus(HyperrealCorpus):
     extra_css = """
         .result-header {
             font-weight: bold;
+        }
+
+        .search-results {
+            font-family: monospace monospace;
+        }
+
+        .speaker {
+            font-style: italic;
+            float: left;
+        }
+
+        .speaker::after {
+            content: ":";
+            margin-right: var(--s-2);
         }
     """
 
@@ -299,9 +319,19 @@ def serve_spreadsheet(spreadsheet):
             TableFilter(order_by="hits", keep_above=0),
         ),
         (
+            "Interviewee Type",
+            spreadsheet_idx.field_features("interviewee_type", min_docs=1),
+            TableFilter(order_by="hits", keep_above=0),
+        ),
+        (
             "Location",
             spreadsheet_idx.field_features("location", min_docs=1),
             TableFilter(order_by="hits", keep_above=0),
+        ),
+        (
+            "filename",
+            spreadsheet_idx.field_features("filename", min_docs=1),
+            TableFilter(order_by="hits", first_k=20, keep_above=0),
         ),
     ]
 
