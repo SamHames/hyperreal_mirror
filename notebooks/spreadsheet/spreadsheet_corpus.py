@@ -278,7 +278,7 @@ class XslxTranscriptCorpus(HyperrealCorpus):
         }
 
         .search-results {
-            font-family: monospace monospace;
+            font-family: monospace, monospace;
         }
 
         .speaker {
