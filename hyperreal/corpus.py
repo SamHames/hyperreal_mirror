@@ -32,9 +32,9 @@ from typing import Any, Hashable, Iterable, Optional, TypeVar
 
 from tinyhtml import frag, h, raw
 
-from . import value_handlers, doc_feature_tools as dft
+from . import doc_feature_tools as dft
+from . import value_handlers
 from .field_types import RangeEncodableValue, ValueSequence
-
 
 DocKey = TypeVar("DocKey")
 Doc = TypeVar("Doc")

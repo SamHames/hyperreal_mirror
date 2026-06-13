@@ -118,8 +118,7 @@ def _init_segment(db_path):
     """Initialise the database with the minimum set of tables for a segment."""
     db = db_utilities.connect_sqlite(db_path)
 
-    db.executescript(
-        """
+    db.executescript("""
         CREATE table if not exists doc_key (
             doc_id integer primary key,
             doc_key unique
@@ -171,8 +170,7 @@ def _init_segment(db_path):
             doc_passage_starts roaring_bitmap,
             primary key (field, first_doc_id)
         );
-        """
-    )
+        """)
 
     return db
 
@@ -569,11 +567,9 @@ def _merge_into(first_doc_id, from_segment, to_segment):
             db.execute("begin")
 
             # Merge the doc keys in
-            db.execute(
-                """
+            db.execute("""
                 INSERT into merge_segment.doc_key select * from doc_key
-                """
-            )
+                """)
 
             # Then merge both the inverted index segments and the associated header.
             # Because the positions don't overlap, this can all be done with a
@@ -688,16 +684,14 @@ def _finalise_into(from_segment, to_final, passage_size):
 
             # Work out how much to shift each positional set for each field/first_doc_id
             # combination.
-            db.execute(
-                """
+            db.execute("""
                 create temporary table field_shift(
                     field,
                     first_doc_id,
                     cumulative_shift,
                     primary key (field, first_doc_id)
                 )
-                """
-            )
+                """)
             for (field,) in db.execute("select distinct field from segment_header"):
 
                 current_shift = 0
@@ -720,8 +714,7 @@ def _finalise_into(from_segment, to_final, passage_size):
 
             # First process the field summary, so that we can work out the schema
             db.execute("DELETE from final.field_summary")
-            db.execute(
-                """
+            db.execute("""
                 INSERT into final.field_summary 
                     select
                         field, 
@@ -744,8 +737,7 @@ def _finalise_into(from_segment, to_final, passage_size):
                     from segment_header
                     inner join field_shift using(field, first_doc_id)
                     group by field, value_handler_name
-                """
-            )
+                """)
 
             ## The new inverted index ##
 
@@ -756,13 +748,11 @@ def _finalise_into(from_segment, to_final, passage_size):
             db.execute("DELETE from final.inverted_index")
             db.execute("DELETE from final.inverted_index_score")
             db.execute("DELETE from final.location_index")
-            field_processing = db.execute(
-                """
+            field_processing = db.execute("""
                 SELECT field, max_value_count, range_encodable
                 from field_summary
                 order by field
-                """
-            )
+                """)
 
             for (
                 field,
@@ -864,8 +854,7 @@ def _finalise_into(from_segment, to_final, passage_size):
                         [field],
                     )
 
-            db.execute(
-                """
+            db.execute("""
                 UPDATE final.field_summary as fs
                     set
                         (unique_value_count, min_value, max_value) = (
@@ -873,8 +862,7 @@ def _finalise_into(from_segment, to_final, passage_size):
                             from inverted_index ii 
                             where ii.field = fs.field
                         )
-                """
-            )
+                """)
 
             db.execute("commit")
 

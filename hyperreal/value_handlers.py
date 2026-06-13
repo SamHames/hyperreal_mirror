@@ -12,7 +12,7 @@ Shouldn't need to think too much when using builtin types: these default handler
 already present on anything subclassed from corpus.
 
 This is also the place for customising the rich display of fields and parts of fields,
-for example for concordances, passages, or snippets. 
+for example for concordances, passages, or snippets.
 
 Note that the protocol assumes that the specific corpus is available on the
 ValueHandler: this enables per corpus control of display and evaluation of types.

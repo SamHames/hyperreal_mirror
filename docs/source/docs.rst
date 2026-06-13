@@ -1,6 +1,7 @@
-
 Getting Started
 ---------------
+
+
 
 
 Overview
@@ -19,15 +20,12 @@ Working Examples
 ----------------
 
 
-
 Working With Your Own Documents
 -------------------------------
 
 
-
-Customised Value Handling
--------------------------
-
+Customisation
+-------------
 
 
 API Documentation

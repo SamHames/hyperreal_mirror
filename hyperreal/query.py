@@ -1,7 +1,7 @@
 """
 Allows creating abstract queries, then evaluating them against a specific index.
 
-In addition to allowing composing complex queries in Python, this also allows for 
+In addition to allowing composing complex queries in Python, this also allows for
 serialising and displaying queries as HTML and in other formats.
 
 """

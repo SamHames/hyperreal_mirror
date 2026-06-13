@@ -163,14 +163,12 @@ class HyperrealIndex:
 
         # This is the minimum necessary to bootstrap everything else - we manage the
         # core db schema state just like any other plugins state.
-        self.db.execute(
-            """
+        self.db.execute("""
             CREATE table if not exists plugin_version (
                 plugin_name text primary key,
                 version
             )
-            """
-        )
+            """)
         self.db.execute("pragma journal_mode=WAL")
         self.db.execute("pragma foreign_keys=ON")
 
@@ -288,8 +286,7 @@ class HyperrealIndex:
         """
 
         if self._field_handlers is None:
-            field_details = self.db.execute(
-                """
+            field_details = self.db.execute("""
                 SELECT 
                     field, 
                     value_handler_name, 
@@ -297,8 +294,7 @@ class HyperrealIndex:
                     max_location_count, 
                     range_encodable
                 from field_summary
-                """
-            )
+                """)
 
             _field_handlers = {}
 
@@ -573,9 +569,7 @@ class HyperrealIndex:
         )
 
         indexed_fields = {
-            row[0]: dict(zip(stats_keys, row[1:]))
-            for row in self.db.execute(
-                """
+            row[0]: dict(zip(stats_keys, row[1:])) for row in self.db.execute("""
                 SELECT
                     field,
                     value_handler_name,
@@ -588,8 +582,7 @@ class HyperrealIndex:
                     range_encodable = 1 and max_value_count = 1 as range_encoded
                 from field_summary
                 order by field
-                """
-            )
+                """)
         }
 
         for field, stats in indexed_fields.items():

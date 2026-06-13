@@ -123,8 +123,7 @@ class FeatureClustering(IndexPlugin):
         self._update_changed_clusters()
 
         # Update feature_cluster statistics
-        self.idx.db.execute(
-            """
+        self.idx.db.execute("""
             UPDATE feature_cluster
                 set doc_count = (
                     select doc_count
@@ -133,8 +132,7 @@ class FeatureClustering(IndexPlugin):
                         (ii.field, ii.value)
                 )
             where doc_count is null
-            """
-        )
+            """)
 
     def post_transaction(self):
         """Update clusters and feature statistics after any transaction."""
@@ -172,8 +170,7 @@ class FeatureClustering(IndexPlugin):
     @property
     def cluster_ids(self) -> dict[int, dict[str, float]]:
         """Return all defined clusters."""
-        rows = self.idx.db.execute(
-            """
+        rows = self.idx.db.execute("""
             WITH cluster_details as (
                 select 
                     cluster_id,
@@ -188,8 +185,7 @@ class FeatureClustering(IndexPlugin):
                 hits
             from cluster
             inner join cluster_details using(cluster_id)
-            """
-        )
+            """)
         total_docs = self.idx.total_doc_count
         return {
             cluster_id: {
@@ -999,7 +995,7 @@ def _refine_clustering(
                 if result == "exception":
                     break
 
-                (clustering_i, cluster_id) = result[0]
+                clustering_i, cluster_id = result[0]
 
                 c = cluster_details[clustering_i]
 
