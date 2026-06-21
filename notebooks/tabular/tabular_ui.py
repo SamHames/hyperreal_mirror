@@ -27,6 +27,7 @@ class UI:
 
         button_layout = Layout(width="90%", height="2lh")
         wide_layout = Layout(width="90%")
+        style = {"description_width": "40%"}
 
         self.upload_file = FileUpload(
             accept=".xlsx", description="Upload your data (.xlsx)", layout=button_layout
@@ -41,9 +42,15 @@ class UI:
         self.table_label = Label(
             value="Table and column configuration", layout=wide_layout
         )
-        self.table_select = Dropdown(description="Select table/sheet to use")
+        self.table_select = Dropdown(
+            description="Select table/sheet to use",
+            layout=wide_layout,
+            style=style,
+        )
         self.text_column_select = SelectMultiple(
-            description="Select the text columns to make searchable"
+            description="Select the text columns to make searchable",
+            layout=wide_layout,
+            style=style,
         )
 
         # Display config components
@@ -52,23 +59,32 @@ class UI:
         )
         self.display_style = Dropdown(
             options=["transcript", "document", "concordance"],
-            description="Style of document display to use when showing search results.",
+            description="Document display style",
+            layout=wide_layout,
+            style=style,
         )
         self.header_columns = SelectMultiple(
-            description="Columns to display in the header of each search result"
+            description="Header columns for search result display",
+            layout=wide_layout,
+            style=style,
         )
         self.inline_columns = SelectMultiple(
-            description="Columns to display inline with each search result"
+            description="Inline columns with text for search result display",
+            layout=wide_layout,
+            style=style,
         )
         self.filter_columns = SelectMultiple(
-            description="Columns to use for filtering results"
+            description="Columns to use for filtering results",
+            layout=wide_layout,
+            style=style,
         )
         self.context_turn_count = BoundedIntText(
-            value=0,
+            value=1,
             min=0,
             step=1,
-            description="Number of context turns to display when using the transcript "
-            "display style",
+            description="Number of context turns to show (transcripts only)",
+            layout=wide_layout,
+            style=style,
         )
 
         # Current uploaded file state

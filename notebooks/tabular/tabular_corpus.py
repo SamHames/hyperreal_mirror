@@ -231,9 +231,8 @@ class TabularCorpus(HyperrealCorpus):
 
     def render_header(self, doc):
 
-        return h("dl", klass="cluster result-header")(
-            (h("dt")(field), (h("dd")(val) for val in doc[field]))
-            for field in self.header_fields
+        return h("ul", klass="cluster result-header")(
+            (h("span")(val) for val in doc[field]) for field in self.header_fields
         )
 
     def html_search_results(self, doc_ids, highlight_features=None):
