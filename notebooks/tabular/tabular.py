@@ -14,12 +14,12 @@
 # ---
 
 # %% [markdown]
-# # Explore and Search A Table of Text Data
+# # Explore and Search a Table of Text Data
 #
 # This notebook takes as input a tabular (or tabular-like) file, and creates a
-# browsable, searchable index view for close reading across the entries in the table.
+# browsable, searchable index view for close reading across the entries in that table.
 #
-# ## Supported Files Formats
+# ## Supported File Formats
 #
 # - An Excel spreadsheet (`.xlsx`) with tabular structure.
 #
@@ -34,18 +34,13 @@
 # Upload your tabular-like data with the "Upload your data" button.
 # Follow the prompts to make choices about what to include in your analysis.
 #
-# Workflow notes:
-# Choose the text table: chooses the granularity of documents
-# Select one or more columns as the main documents
-# Can infer relational properties from column names, or can have some extra syntax
-# for linking together?
-# Choose from relational properties and properties in the main table as the key.
+# There are two main choices to makes:
 #
-# MVP: Choose a table and text columns.
+# 1. Choosing the particular table and columns in that table you want to index as text.
+# 2. Which columns to display when showing search results, and the columns to use for
+#    filtering options.
 
 # %%
 from tabular_ui import UI
 
 ui = UI()
-
-# %%
