@@ -58,8 +58,6 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-hyperreal @ file:///home/sam/programming/hyperreal
-    # via -r requirements.txt
 idna==3.18
     # via
     #   anyio
@@ -189,9 +187,7 @@ pygments==2.20.0
     #   ipython
     #   nbconvert
 pyroaring==1.1.0
-    # via
-    #   hyperreal
-    #   hyperreal (pyproject.toml)
+    # via hyperreal (pyproject.toml)
 python-dateutil==2.9.0.post0
     # via
     #   arrow
@@ -246,14 +242,11 @@ terminado==0.18.1
 tinycss2==1.5.1
     # via bleach
 tinyhtml==1.3.0
-    # via
-    #   hyperreal
-    #   hyperreal (pyproject.toml)
+    # via hyperreal (pyproject.toml)
 tomli==2.4.1
     # via jupytext
 tornado==6.5.7
     # via
-    #   hyperreal
     #   hyperreal (pyproject.toml)
     #   jupyter-client
     #   jupyter-server
