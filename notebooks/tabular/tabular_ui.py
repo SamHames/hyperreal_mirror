@@ -154,7 +154,9 @@ class UI:
             elif self.current_file_type == ".parquet":
                 self.create_corpus_from_parquet()
 
+            self.run_button.disabled = True
             serve_tabular_corpus(self.corpus)
+            print("(Run the note book again `▶▶` if you want to restart)")
 
     def clear(self):
         """Clear all output components and working components."""
