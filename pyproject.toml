@@ -26,6 +26,7 @@ dev = ["pytest", "black>=26.0", "tox", "pylint", "isort", "hypothesis", "sphinx"
 binder = [
   "python-docx",
   "openpyxl",
+  "polars",
   "ipywidgets",
   "jupytext",
   "jupyter-server-proxy",
