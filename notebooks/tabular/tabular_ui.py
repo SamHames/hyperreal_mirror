@@ -3,8 +3,10 @@ User interface for configuring and launching a view of a tabular corpus.
 
 """
 
+import pathlib
 from io import BytesIO
 
+import polars
 from ipywidgets import (
     FileUpload,
     Layout,
@@ -30,7 +32,9 @@ class UI:
         style = {"description_width": "40%"}
 
         self.upload_file = FileUpload(
-            accept=".xlsx", description="Upload your data (.xlsx)", layout=button_layout
+            accept=".xlsx,.parquet",
+            description="Upload your data (.xlsx, .parquet)",
+            layout=button_layout,
         )
 
         # Incremental display components for progressing through a workflow
@@ -133,14 +137,24 @@ class UI:
 
         display(self.display_ui)
 
+        self.corpus = None
+
     def run(self, clicked_button):
+        # Cleanup corpus and any stray index files.
+        for path in ("tabular_corpus.db", "corpus_index.db"):
+            for extension in ("", "-shm", "-wal"):
+                pathlib.Path(path + extension).unlink(missing_ok=True)
+
         with self.process_output:
             print(f"Preparing corpus for {self.upload_file.value[0].name}")
-            if self.current_file_type == ".xlsx":
-                corpus = self.create_corpus_from_excel()
 
-            print(f"Create corpus {corpus}")
-            serve_tabular_corpus(corpus)
+            if self.current_file_type == ".xlsx":
+                self.create_corpus_from_excel()
+
+            elif self.current_file_type == ".parquet":
+                self.create_corpus_from_parquet()
+
+            serve_tabular_corpus(self.corpus)
 
     def clear(self):
         """Clear all output components and working components."""
@@ -158,12 +172,16 @@ class UI:
     def update_columns(self, change):
         self.text_column_select.options = self.table_cols.get(change.new, [])
 
-    def create_corpus_from_excel(self):
-        """Create the actual tabular corpus from the full set of documents."""
+    def create_corpus(self):
+        """Create the corpus with the right config for the current selection."""
+
+        if self.corpus is not None:
+            self.corpus.close()
+
         text_columns = list(self.text_column_select.value)
         filter_columns = list(self.filter_columns.value)
 
-        corpus = TabularCorpus(
+        self.corpus = TabularCorpus(
             "tabular_corpus.db",
             text_fields=text_columns,
             filter_fields=filter_columns,
@@ -173,9 +191,26 @@ class UI:
             display_transcript_context_turns=int(self.context_turn_count.value),
         )
 
-        corpus.replace_rows_from_spreadsheet(self.current_file, self.table_select.value)
+    def create_corpus_from_excel(self):
+        """Create the actual tabular corpus from the full set of documents."""
 
-        return corpus
+        self.create_corpus()
+        self.corpus.replace_rows_from_spreadsheet(
+            self.current_file, self.table_select.value
+        )
+
+    def create_corpus_from_parquet(self):
+        """Create the actual tabular corpus from the full set of documents."""
+
+        self.create_corpus()
+
+        batches = polars.scan_parquet(self.current_file).collect_batches(
+            chunk_size=1000
+        )
+
+        self.corpus.replace_rows(
+            (row.items() for batch in batches for row in batch.iter_rows(named=True))
+        )
 
     def create_excel_config(self):
         """Create the config just for an excel file."""
@@ -196,6 +231,16 @@ class UI:
         if len(sheetnames) == 1:
             self.table_select.value = sheetnames[0]
 
+    def create_parquet_config(self):
+        """Create the config just for a parquet file."""
+
+        columns = list(polars.scan_parquet(self.current_file).collect_schema())
+        self.table_cols = {"": columns}
+
+        self.table_select.options = [""]
+        self.table_select.value = ""
+        self.table_select.disable = True
+
     def create_table_config(self, change):
         """Create the table configuration workflow from the provided file."""
         self.clear()
@@ -203,10 +248,22 @@ class UI:
         with self.table_config_output:
             uploaded = change.new[0]
 
-            if uploaded.name.lower().endswith(".xlsx"):
+            uploaded_name = uploaded.name.lower()
+
+            if uploaded_name.endswith(".xlsx"):
                 self.current_file_type = ".xlsx"
                 self.current_file = load_workbook(filename=BytesIO(uploaded.content))
                 self.create_excel_config()
+
+            elif uploaded_name.endswith(".parquet"):
+                self.current_file_type = ".parquet"
+                # Figure out how to write the content to disk for the next step
+                with open("uploaded.parquet", "wb") as fp:
+                    fp.write(uploaded.content)
+                self.current_file = "uploaded.parquet"
+                self.create_parquet_config()
+
+            self.table_select.disable = False
 
             display(self.table_config_components)
 

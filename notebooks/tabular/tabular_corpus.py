@@ -124,17 +124,6 @@ class TabularCorpus(HyperrealCorpus):
         self.db.execute("CREATE index doc_by_id on doc(doc_id, field)")
         self.db.execute("COMMIT")
 
-    def replace_rows_from_parquet(self, parquet_path):
-
-        worksheet = spreadsheet[sheetname]
-
-        rows = worksheet.values
-        header = next(rows)
-
-        replace_rows = (dict(zip(header, row)) for row in rows)
-
-        self.replace_rows(replace_rows)
-
     def replace_rows_from_spreadsheet(self, spreadsheet, sheetname):
 
         worksheet = spreadsheet[sheetname]
@@ -221,10 +210,20 @@ class TabularCorpus(HyperrealCorpus):
         for text_component in display_text.values():
 
             inline = None
+
             if self.inline_fields:
-                inline = h("span", klass="inline-fields")(
-                    doc.get(inline_field, []) for inline_field in self.inline_fields
+
+                inline_values = [
+                    value
+                    for inline_field in self.inline_fields
+                    for value in doc.get(inline_field, [])
+                    if value
+                ]
+
+                inline = h("div", klass="inline-fields cluster")(
+                    h("span")(value) for value in inline_values
                 )
+
             display.append(h("div")(inline, text_component))
 
         return display
@@ -232,7 +231,7 @@ class TabularCorpus(HyperrealCorpus):
     def render_header(self, doc):
 
         return h("ul", klass="cluster result-header")(
-            (h("span")(val) for val in doc[field]) for field in self.header_fields
+            (h("li")(val) for val in doc[field]) for field in self.header_fields
         )
 
     def html_search_results(self, doc_ids, highlight_features=None):
@@ -287,11 +286,14 @@ class TabularCorpus(HyperrealCorpus):
             float: left;
         }
 
-        .inline-fields::after {
+        .inline-fields > span:last-child::after {
             content: ":";
             margin-right: var(--s-2);
         }
     """
+
+    def close(self):
+        self.db.close()
 
 
 def serve_tabular_corpus(corpus):
@@ -301,7 +303,7 @@ def serve_tabular_corpus(corpus):
     tabular_idx = HyperrealIndex("corpus_index.db", corpus, pool)
 
     print("Indexing documents")
-    tabular_idx.rebuild()
+    tabular_idx.rebuild(doc_batch_size=10000)
 
     tabular_idx.search_fields = {field: tokenise for field in corpus.text_fields}
 
