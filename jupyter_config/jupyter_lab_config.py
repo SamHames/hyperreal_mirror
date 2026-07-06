@@ -7,4 +7,4 @@ c = get_config()  # noqa
 #  Default: {}
 # This is needed for the FileUpload widget to accept files above 10MB (after base 64
 # encoding). This will allow files somewhere over 450MB.
-c.ServerApp.tornado_settings = {"websocket_max_message_size": 500 * 1024 * 1024}
+c.ServerApp.tornado_settings = {"websocket_max_message_size": 1000 * 1024 * 1024}
