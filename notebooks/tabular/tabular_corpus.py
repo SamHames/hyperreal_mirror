@@ -17,12 +17,14 @@ import re
 import sqlite3
 import typing
 
+import polars as pl
+
 from openpyxl import load_workbook
 from loky import get_reusable_executor
 from tinyhtml import h
 
 from hyperreal.corpus import HyperrealCorpus
-from hyperreal.field_types import ValueSequence, ValueSet
+from hyperreal.field_types import ValueSequence, ValueSet, Value
 from hyperreal.index_core import HyperrealIndex, TableFilter
 from hyperreal.web_server import serve_index
 
@@ -294,6 +296,179 @@ class TabularCorpus(HyperrealCorpus):
 
     def close(self):
         self.db.close()
+
+
+@dc.dataclass
+class ParquetCorpus(HyperrealCorpus):
+    """
+    ParquetCorpus serves a flat parquet table as a set of documents.
+
+    It does not require transforming the input parquet and can read directly from the
+    parquet file for documents. Reads are done lazily on demand and the whole table is
+    not loaded into memory.
+
+    """
+
+    parquet_path: pathlib.Path | str
+    text_fields: list[str]
+
+    filter_fields: list[str] = dc.field(default_factory=list)
+
+    header_fields: list[str] = dc.field(default_factory=list)
+    inline_fields: list[str] = dc.field(default_factory=list)
+
+    display_style: str = "document"
+    display_transcript_context_turns: int = 0
+
+    def lazy_df(self):
+        """
+        Return a lazy dataframe that scans the parquet file.
+
+        Adds a row number as document identifier: assumes that rows are deduplicated
+        already.
+
+        """
+        return pl.scan_parquet(self.parquet_path).with_row_index("__doc_id")
+
+    def __len__(self):
+        return self.lazy_df().select(pl.count("__doc_id")).collect()[0, 0]
+
+    def all_doc_keys(self):
+        return range(0, len(self))
+
+    def docs(self, doc_keys):
+
+        keys = list(doc_keys)
+        matching = self.lazy_df().filter(pl.col("__doc_id").is_in(keys))
+
+        for row in matching.collect().iter_rows(named=True):
+
+            yield row["__doc_id"], row
+
+    def doc_to_features(self, doc):
+
+        features = {}
+
+        for field, values in doc.items():
+
+            if field in self.text_fields:
+                features[field] = ValueSequence(tokenise(values))
+            else:
+                # TODO: currently ignoring array/multivalue fields.
+                if values is not None:
+                    features[field] = Value(values)
+
+        return features
+
+    def render_text_with_inline_fields(self, doc, highlight_features=None):
+
+        display_text = {field: doc.get(field, "") for field in self.text_fields}
+
+        if highlight_features:
+            highlight_fields = set(f[0] for f in highlight_features)
+
+            if highlight_fields & set(self.text_fields):
+
+                for field in self.text_fields:
+                    match_features = {
+                        value for f, value in highlight_features if field == f
+                    }
+
+                    tokens = tokenise(doc.get(field, ""))
+                    display_tokens = display_tokenise(doc.get(field, ""))
+
+                    display_text[field] = h("span")(
+                        (
+                            display_token
+                            if token not in match_features
+                            else h("mark")(display_token)
+                        )
+                        for token, display_token in zip(tokens, display_tokens)
+                    )
+
+        display = []
+
+        for text_component in display_text.values():
+
+            inline = None
+
+            if self.inline_fields:
+
+                inline_values = [
+                    doc.get(inline_field, "") for inline_field in self.inline_fields
+                ]
+
+                inline = h("div", klass="inline-fields cluster")(
+                    h("span")(value) for value in inline_values if value
+                )
+
+            display.append(h("div")(inline, text_component))
+
+        return display
+
+    def render_header(self, doc):
+
+        return h("ul", klass="cluster result-header")(
+            (h("li")(doc.get(field, "")) for field in self.header_fields)
+        )
+
+    def html_search_results(self, doc_ids, highlight_features=None):
+
+        search_hits = []
+
+        for doc_id in doc_ids:
+
+            turn_context_range = [doc_id]
+
+            if self.display_style == "transcript":
+                turn_context_range = range(
+                    max(0, doc_id - self.display_transcript_context_turns),
+                    min(doc_id + self.display_transcript_context_turns + 1, len(self)),
+                )
+
+            docs = list(self.docs(turn_context_range))
+
+            for key, doc in docs:
+                if key == doc_id:
+                    break
+
+            header = self.render_header(doc)
+
+            components = [
+                self.render_text_with_inline_fields(
+                    d, highlight_features=highlight_features
+                )
+                for _, d in docs
+            ]
+
+            search_hits.append(h("li", klass="search-hit stack")(header, *components))
+
+        return h("ul", klass="stack search-results")(search_hits)
+
+    def features_to_html_concordance(
+        self, doc_features, display_features, highlight_features
+    ):
+        return None
+
+    extra_css = """
+        .result-header {
+            font-weight: bold;
+        }
+
+        .search-results {
+            font-family: monospace, monospace;
+        }
+
+        .inline-fields {
+            font-style: italic;
+            float: left;
+        }
+
+        .inline-fields > span:last-child::after {
+            content: ":";
+            margin-right: var(--s-2);
+        }
+    """
 
 
 def serve_tabular_corpus(corpus):

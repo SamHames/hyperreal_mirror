@@ -20,7 +20,7 @@ from ipywidgets import (
 )
 from openpyxl import load_workbook
 
-from tabular_corpus import TabularCorpus, serve_tabular_corpus
+from tabular_corpus import TabularCorpus, ParquetCorpus, serve_tabular_corpus
 
 
 class UI:
@@ -174,8 +174,8 @@ class UI:
     def update_columns(self, change):
         self.text_column_select.options = self.table_cols.get(change.new, [])
 
-    def create_corpus(self):
-        """Create the corpus with the right config for the current selection."""
+    def create_corpus_from_excel(self):
+        """Create the actual tabular corpus from the full set of documents."""
 
         if self.corpus is not None:
             self.corpus.close()
@@ -187,16 +187,12 @@ class UI:
             "tabular_corpus.db",
             text_fields=text_columns,
             filter_fields=filter_columns,
-            header_fields=list(self.header_columns.value),
-            inline_fields=list(self.inline_columns.value),
+            header_fields=list(self.header_columns.value or []),
+            inline_fields=list(self.inline_columns.value or []),
             display_style=str(self.display_style.value),
             display_transcript_context_turns=int(self.context_turn_count.value),
         )
 
-    def create_corpus_from_excel(self):
-        """Create the actual tabular corpus from the full set of documents."""
-
-        self.create_corpus()
         self.corpus.replace_rows_from_spreadsheet(
             self.current_file, self.table_select.value
         )
@@ -204,14 +200,20 @@ class UI:
     def create_corpus_from_parquet(self):
         """Create the actual tabular corpus from the full set of documents."""
 
-        self.create_corpus()
+        if self.corpus is not None:
+            self.corpus.close()
 
-        batches = polars.scan_parquet(self.current_file).collect_batches(
-            chunk_size=1000
-        )
+        text_columns = list(self.text_column_select.value)
+        filter_columns = list(self.filter_columns.value)
 
-        self.corpus.replace_rows(
-            (row.items() for batch in batches for row in batch.iter_rows(named=True))
+        self.corpus = ParquetCorpus(
+            "uploaded.parquet",
+            text_fields=text_columns,
+            filter_fields=filter_columns,
+            header_fields=list(self.header_columns.value or []),
+            inline_fields=list(self.inline_columns.value or []),
+            display_style=str(self.display_style.value),
+            display_transcript_context_turns=int(self.context_turn_count.value),
         )
 
     def create_excel_config(self):
