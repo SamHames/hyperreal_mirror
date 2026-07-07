@@ -312,6 +312,7 @@ class ParquetCorpus(HyperrealCorpus):
     parquet_path: pathlib.Path | str
     text_fields: list[str]
 
+    doc_id_column: str = "__doc_id"
     filter_fields: list[str] = dc.field(default_factory=list)
 
     header_fields: list[str] = dc.field(default_factory=list)
@@ -320,18 +321,12 @@ class ParquetCorpus(HyperrealCorpus):
     display_style: str = "document"
     display_transcript_context_turns: int = 0
 
-    def lazy_df(self):
-        """
-        Return a lazy dataframe that scans the parquet file.
-
-        Adds a row number as document identifier: assumes that rows are deduplicated
-        already.
-
-        """
-        return pl.scan_parquet(self.parquet_path).with_row_index("__doc_id")
+    def __post_init__(self):
+        self.df = pl.scan_parquet(self.parquet_path)
+        self.df.set_sorted(self.doc_id_column)
 
     def __len__(self):
-        return self.lazy_df().select(pl.count("__doc_id")).collect()[0, 0]
+        return self.df.select(pl.count(self.doc_id_column)).collect()[0, 0]
 
     def all_doc_keys(self):
         return range(0, len(self))
@@ -339,11 +334,10 @@ class ParquetCorpus(HyperrealCorpus):
     def docs(self, doc_keys):
 
         keys = list(doc_keys)
-        matching = self.lazy_df().filter(pl.col("__doc_id").is_in(keys))
+        matching = self.df.filter(pl.col(self.doc_id_column).is_in(keys))
 
         for row in matching.collect().iter_rows(named=True):
-
-            yield row["__doc_id"], row
+            yield row[self.doc_id_column], row
 
     def doc_to_features(self, doc):
 
@@ -473,7 +467,7 @@ class ParquetCorpus(HyperrealCorpus):
 
 def serve_tabular_corpus(corpus):
 
-    pool = get_reusable_executor()
+    pool = get_reusable_executor(4)
 
     tabular_idx = HyperrealIndex("corpus_index.db", corpus, pool)
 

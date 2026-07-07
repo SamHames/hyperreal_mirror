@@ -238,7 +238,8 @@ class UI:
     def create_parquet_config(self):
         """Create the config just for a parquet file."""
 
-        columns = list(polars.scan_parquet(self.current_file).collect_schema())
+        # Make sure to skip the generated __docid column
+        columns = list(polars.scan_parquet(self.current_file).collect_schema())[1:]
         self.table_cols = {"": columns}
 
         self.table_select.options = [""]
@@ -261,9 +262,12 @@ class UI:
 
             elif uploaded_name.endswith(".parquet"):
                 self.current_file_type = ".parquet"
-                # Figure out how to write the content to disk for the next step
-                with open("uploaded.parquet", "wb") as fp:
-                    fp.write(uploaded.content)
+                # Write out the uploaded parquet file with an additional named and
+                # sorted index column: this is needed for fast lookups by row.
+                df = polars.scan_parquet(BytesIO(uploaded.content)).with_row_index(
+                    "__doc_id"
+                )
+                df.sink_parquet("uploaded.parquet", compression_level=22)
                 self.current_file = "uploaded.parquet"
                 self.create_parquet_config()
 
