@@ -574,7 +574,7 @@ import time
 
 clustering = newsgroups_idx.plugins["feature_clusters"]
 
-# clustering.delete_clusters(clustering.cluster_ids)
+clustering.delete_clusters(clustering.cluster_ids)
 
 if not clustering.cluster_ids:
     # Set the state of the RNG to a consistent point.
@@ -643,33 +643,61 @@ except RuntimeError:
     task = loop.create_task(serve_index(newsgroups_idx))
     loop.run_until_complete(task)
 
+# %% [markdown]
+# # Generating Visualisations
+#
+# The following visualisations generate the tables shown in the paper.
 
 # %% [markdown]
-# # Tabulation: a table of closest clusters and features for each newsgroup.
-#
-#
+# ## Tabulation: summary of the complete clustering.
 
 # %%
+# A simple grid of top words for a stratified sample of ranked clusters.
 result_path = Path("results")
 result_path.mkdir(exist_ok=True)
 
+cluster_summaries = []
+
+all_clusters = TableFilter(order_by="doc_count")(clustering.cluster_ids)
+
+for cluster_id in all_clusters:
+    cluster_summaries.append(" ".join(f[1] for f in clustering.cluster_features(cluster_id, top_k_features=7)))
+
+cells_per_row = 4
+
+table_rows = [
+    h("tr")(
+        h("th")(f"{i+1}-{i+cells_per_row}"),
+        [h("td")(cluster_summaries[j]) for j in range(i, i + cells_per_row)],
+    )
+    for i in range(0, 256, cells_per_row)
+]
+
+header = h('thead')(
+    h('tr')(
+        h('th')("Cluster Rank"),
+        h('th', colspan=4)("Most Frequent Words in Cluster")
+    )
+)
+visualisation_table = h("table")(header, h("tbody")(table_rows[::4])).render()
+
+with open(result_path / "twenty_newsgroups_all_clusters.html", "w") as table_out:
+    table_out.write(visualisation_table)
+
+# %% [markdown]
+# ## Tabulation: a table of closest clusters and features for each newsgroup.
+
+# %%
 newsgroup_categories = newsgroups_idx.field_features("newsgroup", top_k_features=20)
 all_newsgroups = newsgroups_idx.field_features("newsgroup")
-top_clusters = TableFilter(order_by="jaccard_similarity", first_k=3)
-top_features = TableFilter(order_by="jaccard_similarity", first_k=10)
+top_clusters = TableFilter(order_by="jaccard_similarity", first_k=1)
+top_features = TableFilter(order_by="jaccard_similarity", first_k=15)
 top_cross_posted = TableFilter(order_by="hits", first_k=4)
 
 header = h("thead")(
     h("tr")(
-        h("th")(""),
-        h("th", colspan=4)("Most similar clusters and features"),
-    ),
-    h("tr")(
         h("th")("Newsgroup"),
-        h("th")("Top Cross-Posted Groups"),
-        h("th")("Rank 1"),
-        h("th")("Rank 2"),
-        h("th")("Rank 3"),
+        h("th")("Fifteen Most Similar Words from the Most Similar Cluster"),
     ),
 )
 table_rows = []
@@ -687,17 +715,9 @@ for newsgroup in sorted(newsgroup_categories):
     row = []
     row.append(h("th")(newsgroup[1]))
 
-    cross_posted = top_cross_posted(
-        newsgroups_idx.facet_features(newsgroup_docs, all_newsgroups)
-    )
-
-    display_cross_posts = " ".join(f[1] for f in list(cross_posted)[1:]) + " ..."
-    row.append(h("td")(display_cross_posts))
-
     for rank, cluster_id in enumerate(newsgroup_similarity):
-
         feature_stats = top_features(similar_features[cluster_id])
-        display_features = " ".join(f[1] for f in feature_stats) + " ..."
+        display_features = " ".join(f[1] for f in feature_stats)
         row.append(h("td")(display_features))
 
     table_rows.append(h("tr")(row))
@@ -709,8 +729,7 @@ with open(result_path / "twenty_newsgroups_top_clusters.html", "w") as table_out
 
 
 # %% [markdown]
-# # Tabulation: comparison keywords for each newsgroups.
-#
+# ## Tabulation: comparison keywords for each newsgroups.
 
 # %%
 import heapq

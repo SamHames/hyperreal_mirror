@@ -123,7 +123,8 @@ class FeatureClustering(IndexPlugin):
         self._update_changed_clusters()
 
         # Update feature_cluster statistics
-        self.idx.db.execute("""
+        self.idx.db.execute(
+            """
             UPDATE feature_cluster
                 set doc_count = (
                     select doc_count
@@ -132,7 +133,8 @@ class FeatureClustering(IndexPlugin):
                         (ii.field, ii.value)
                 )
             where doc_count is null
-            """)
+            """
+        )
 
     def post_transaction(self):
         """Update clusters and feature statistics after any transaction."""
@@ -170,7 +172,8 @@ class FeatureClustering(IndexPlugin):
     @property
     def cluster_ids(self) -> dict[int, dict[str, float]]:
         """Return all defined clusters."""
-        rows = self.idx.db.execute("""
+        rows = self.idx.db.execute(
+            """
             WITH cluster_details as (
                 select 
                     cluster_id,
@@ -185,7 +188,8 @@ class FeatureClustering(IndexPlugin):
                 hits
             from cluster
             inner join cluster_details using(cluster_id)
-            """)
+            """
+        )
         total_docs = self.idx.total_doc_count
         return {
             cluster_id: {
@@ -573,7 +577,6 @@ class FeatureClustering(IndexPlugin):
         return clusters
 
     def _generate_mmap_from_clustering(self, clustering, mmap_working_file):
-
         # Materialise all the features in this cluster in the mmap file
         feature_bitmaps = (
             (f, self.idx[f][0])
@@ -600,7 +603,6 @@ class FeatureClustering(IndexPlugin):
         iterations,
         sampling_rate=None,
     ):
-
         n_clusters = len(clustering)
 
         # Recursively subdivide the largest clusters until we reach the target.
@@ -611,7 +613,6 @@ class FeatureClustering(IndexPlugin):
         next_cluster_id = max(clustering) + 1
 
         while len(cluster_order) < n_split_clusters:
-
             _, c_id, features = heapq.heappop(cluster_order)
 
             new_features = {f for f in features if self.idx.random_state.random() > 0.5}
@@ -639,19 +640,19 @@ class FeatureClustering(IndexPlugin):
         return split_clustering, cluster_order, cluster_clustering
 
     def _subdivide_clustering(self, clustering, n_splits, iterations):
-
         # Construct the mmap of index features for faster loading/saving
         with tempfile.TemporaryDirectory() as tmpdir, mp.Manager() as manager:
             working_file = os.path.join(tmpdir, "mmap.temp")
 
-            feature_order, offsets, surrogate_clustering = (
-                self._generate_mmap_from_clustering(clustering, working_file)
-            )
+            (
+                feature_order,
+                offsets,
+                surrogate_clustering,
+            ) = self._generate_mmap_from_clustering(clustering, working_file)
 
             split_clusterings = []
 
             for features in surrogate_clustering.values():
-
                 splits = list(features)
                 self.idx.random_state.shuffle(splits)
 
@@ -702,7 +703,6 @@ class FeatureClustering(IndexPlugin):
     def _cluster_clustering(
         self, clustering, n_clusters, iterations, sampling_rate=None
     ):
-
         # Construct the mmap of index features for faster loading/saving
         with tempfile.TemporaryDirectory() as tmpdir:
             working_file = os.path.join(tmpdir, "mmap.temp")
@@ -735,7 +735,6 @@ class FeatureClustering(IndexPlugin):
         clustered = {}
 
         for c_id, subclusters in refined_surrogate.items():
-
             features = set()
 
             for sub_id in subclusters:
@@ -751,7 +750,6 @@ class FeatureClustering(IndexPlugin):
         iterations,
         sampling_rate=None,
     ):
-
         return self._refine_clusterings(
             [clustering], iterations, sampling_rate=sampling_rate
         )[0]
@@ -762,7 +760,6 @@ class FeatureClustering(IndexPlugin):
         iterations,
         sampling_rate=None,
     ):
-
         # Construct the mmap of index features for faster loading/saving
         with tempfile.TemporaryDirectory() as tmpdir:
             mmap_working_file = os.path.join(tmpdir, "mmap.temp")
@@ -900,7 +897,6 @@ def _refine_clustering(
         cluster_details.append(_ClusteringWorkingDetails(clustering))
 
     with mp.Manager() as manager:
-
         work_queue = manager.Queue()
         results_queue = manager.Queue()
 
@@ -921,11 +917,9 @@ def _refine_clustering(
         terminated = set()
 
         for iteration in range(iterations):
-
             waiting_for = 0
 
             for clustering_i, c in enumerate(cluster_details):
-
                 # Don't perform further iterations with a clustering that has
                 # terminated.
                 if clustering_i in terminated:
@@ -956,7 +950,6 @@ def _refine_clustering(
                 )
 
                 for cluster_id, f_ids in c.clustering.items():
-
                     sample_end = sample_start + c.random_feature_checks
 
                     sample_check_feature_ids = set(
@@ -1026,7 +1019,6 @@ def _refine_clustering(
             total_applied_moves = 0
 
             for i, c in enumerate(cluster_details):
-
                 possible_moves, applied_moves = _apply_moves(
                     c.best_clusters,
                     c.feature_check_order,
@@ -1076,9 +1068,7 @@ def _mmap_bitmaps(feature_bitmaps, mmap_path):
     ends = []
 
     with open(mmap_path, "wb") as mm:
-
         for feature, bitmap in feature_bitmaps:
-
             features.append(feature)
 
             bitmap.run_optimize()

@@ -45,14 +45,6 @@
 # Follow the prompts to make choices about what to include in your analysis.
 #
 #
-# Workflow notes:
-# Choose the text table: chooses the granularity of documents
-# Select one or more columns as the main documents
-# Can infer relational properties from column names, or can have some extra syntax
-# for linking together?
-# Choose from relational properties and properties in the main table as the key.
-#
-# MVP: Choose a table and text columns.
 
 # %%
 from io import BytesIO
@@ -67,9 +59,11 @@ upload_spreadsheet = FileUpload(
 )
 display_output = Output()
 
+
 def run_process(clicked_button):
     with display_output:
         serve_spreadsheet(BytesIO(upload_spreadsheet.value[0].content))
+
 
 run_button = Button(description="Explore spreadsheet")
 run_button.on_click(run_process)
